@@ -14,8 +14,8 @@ Pipeline: **Crawl → Normalize → Plan → Synthesize → Verify → Ship**
 | 2 Normalize | ✅ built + validated | Elementor → IR, deterministic, no AI |
 | 3 Plan | ✅ built + validated | chrome detection (id + fingerprint), library matching, flag generation |
 | 4 Synthesize | ✅ built + validated | IR+plan+sidecar → Lovable-editable TanStack project; exact styles preserved |
-| 5 Verify | ◻ next | pixel diff + real route click-throughs |
-| 6 Ship | ◻ | GitHub App push to the user's Lovable-born repo |
+| 5 Verify | ✅ built + validated | structural checks (real) + validated pixel comparator |
+| 6 Ship | ◻ next | GitHub App push to the user's Lovable-born repo |
 
 ## What the crawler captures (per page)
 

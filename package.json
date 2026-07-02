@@ -9,15 +9,19 @@
     "normalize": "tsx src/normalize/cli.ts",
     "typecheck": "tsc --noEmit",
     "plan": "tsx src/plan/cli.ts",
-    "synth": "tsx src/synth/cli.ts"
+    "synth": "tsx src/synth/cli.ts",
+    "verify": "tsx src/verify/cli.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "node-html-parser": "^8.0.4",
-    "playwright-core": "^1.61.1"
+    "pixelmatch": "^7.2.0",
+    "playwright-core": "^1.61.1",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "@types/pngjs": "^6.0.5",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }

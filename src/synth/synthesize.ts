@@ -41,7 +41,18 @@ function sidecar(computed: ComputedEntry[]): Map<string, ComputedEntry> {
 
 // ------------------------------------------------------------ widget → JSX
 
-function widgetJSX(w: WidgetIR, sc: Map<string, ComputedEntry>, matched: Set<string>): string {
+// Resolve an internal href against real routes; external/anchor pass through.
+// Unresolvable internal links collapse to "#" (never emit a dead nav target).
+function resolveHref(href: string, routes: Set<string>): string {
+  if (!href || href === '#') return '#';
+  if (/^(https?:|mailto:|tel:|#)/.test(href)) return href;
+  if (!href.startsWith('/')) return href;
+  const norm = href.replace(/\/$/, '') || '/';
+  if (routes.has(norm) || routes.has(norm + '/')) return href;
+  return '#'; // unresolved internal link — collapsed, not a 404
+}
+
+function widgetJSX(w: WidgetIR, sc: Map<string, ComputedEntry>, matched: Set<string>, routes: Set<string>): string {
   const cls = classesFor(sc.get(w.id));
   const c = cls ? ` className="${cls}"` : '';
   switch (w.type) {
@@ -51,12 +62,15 @@ function widgetJSX(w: WidgetIR, sc: Map<string, ComputedEntry>, matched: Set<str
       return `      <div${c} dangerouslySetInnerHTML={{ __html: ${JSON.stringify(w.html)} }} />`;
     case 'image':
       return `      <img src="${w.src}"${w.alt ? ` alt="${escape(w.alt)}"` : ' alt=""'}${w.width ? ` width={${w.width}}` : ''}${w.height ? ` height={${w.height}}` : ''}${c} />`;
-    case 'button':
-      return `      <a href="${w.href}"${c}>${escape(w.text)}</a>`;
+    case 'button': {
+      const href = resolveHref(w.href, routes);
+      return `      <a href="${href}"${c}>${escape(w.text)}</a>`;
+    }
     case 'gallery':
       matched.add('GalleryWithLightbox');
       return `      <GalleryWithLightbox />  {/* images from ordered manifest — DOM order is authority */}`;
     case 'form':
+      matched.add('MailingListForm');
       return `      <MailingListForm />  {/* TODO(backend): wire real submit */}`;
     case 'embed': {
       const prov = /mixcloud/.test(w.iframe.src) ? 'mixcloud' : 'embed';
@@ -77,12 +91,12 @@ function escape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 }
 
-function sectionJSX(s: SectionIR, sc: Map<string, ComputedEntry>, matched: Set<string>): string {
+function sectionJSX(s: SectionIR, sc: Map<string, ComputedEntry>, matched: Set<string>, routes: Set<string>): string {
   const cls = classesFor(sc.get(s.id));
   const runtime = hasRuntimeTransform(sc.get(s.id));
   const note = runtime ? ` /* runtime transform captured live — see sidecar */` : '';
   const inner = s.columns.flatMap((col) =>
-    col.widgets.map((w) => widgetJSX(w, sc, matched)),
+    col.widgets.map((w) => widgetJSX(w, sc, matched, routes)),
   ).filter(Boolean).join('\n');
   return `    <section data-mid="${s.id}" className="${cls}">${note}\n${inner}\n    </section>`;
 }
@@ -92,6 +106,7 @@ function sectionJSX(s: SectionIR, sc: Map<string, ComputedEntry>, matched: Set<s
 export async function synthesize(input: SynthInput): Promise<{ files: string[]; components: string[] }> {
   const { plan, pages, outDir, projectName = 'migrated-site' } = input;
   const chromeIds = new Set(plan.sharedChrome);
+  const routeSet = new Set(plan.routes.map((r) => r.route));
   const matched = new Set<string>();
   const written: string[] = [];
 
@@ -126,12 +141,12 @@ export async function synthesize(input: SynthInput): Promise<{ files: string[]; 
   const headerSecs = chromeSections.filter((s) => plan.chrome.find((c) => c.id === s.id)?.label === 'header' || plan.chrome.find((c) => c.id === s.id)?.label === 'social-rail' || plan.chrome.find((c) => c.id === s.id)?.label === 'offcanvas');
   const footerSecs = chromeSections.filter((s) => plan.chrome.find((c) => c.id === s.id)?.label === 'footer');
 
-  const headerJSX = headerSecs.map((s) => sectionJSX(s, scChrome, matched)).join('\n');
-  const footerJSX = footerSecs.map((s) => sectionJSX(s, scChrome, matched)).join('\n');
+  const headerJSX = headerSecs.map((s) => sectionJSX(s, scChrome, matched, routeSet)).join('\n');
+  const footerJSX = footerSecs.map((s) => sectionJSX(s, scChrome, matched, routeSet)).join('\n');
 
   await write('src/components/SiteLayout.tsx',
 `import type { ReactNode } from 'react';
-${[...matched].filter((c) => ['HeaderNav', 'OffcanvasPanels', 'SocialIconRow', 'PersistentAudioPlayer', 'MailingListForm'].includes(c)).map((c) => `import { ${c} } from './library/${c}';`).join('\n')}
+${[...matched].map((c) => `import { ${c} } from './library/${c}';`).join('\n')}
 
 /** Shared chrome — emitted ONCE, inherited by every route. */
 export function SiteLayout({ children }: { children: ReactNode }) {
@@ -155,7 +170,7 @@ ${footerJSX || '        {/* footer chrome */}'}
     const comp = routeToComp(p.route);
     const body = p.ir.sections
       .filter((s) => !chromeIds.has(s.id))
-      .map((s) => sectionJSX(s, sc, matched))
+      .map((s) => sectionJSX(s, sc, matched, routeSet))
       .join('\n');
     await write(`src/routes/${routeToFile(p.route)}.tsx`,
 `import { createFileRoute } from '@tanstack/react-router';
