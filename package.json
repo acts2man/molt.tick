@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "plan": "tsx src/plan/cli.ts",
     "synth": "tsx src/synth/cli.ts",
-    "verify": "tsx src/verify/cli.ts"
+    "verify": "tsx src/verify/cli.ts",
+    "run-pipeline": "tsx src/pipeline/cli.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {

@@ -70,6 +70,18 @@ Run on a local reconstruction of the site built from its real captures:
   `woocommerce-loop`, `wpcf7-field`) attributed to the densest page — WP
   loads plugin classes globally, so weak substring checks misattribute.
 
+## Pipeline orchestrator
+
+The whole engine runs as one call — `runPipeline({ siteUrl, workDir })` chains
+crawl → normalize → plan → synthesize → verify and emits a `ProgressEvent` per
+stage. The result is shaped like the platform's tables (migrations / pages /
+flags) so the Supabase worker writes it straight through. `pixel_match` is
+`null` until a render screenshot of the synthesized site exists — the platform
+shows "—" rather than a fabricated number.
+
+Validated end-to-end on the reference capture: 7/7 route checks, 261 assets,
+all 4 flags reproduced, status progresses crawl→…→review with live events.
+
 ## Run it
 
 ```bash
