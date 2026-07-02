@@ -171,11 +171,13 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     };
   } catch (err) {
     const elapsed = Math.round((Date.now() - started) / 1000);
-    await emit({ stage: 'crawl', status: 'error', message: (err as Error).message });
+    const detail = `${(err as Error)?.message ?? String(err)}\n${(err as Error)?.stack ?? ''}`;
+    console.error('[pipeline] FAILED:', detail);
+    await emit({ stage: 'crawl', status: 'error', message: (err as Error)?.message ?? String(err) });
     return {
       status: 'error', site_url: siteUrl, output_repo: outputRepo,
       elapsed_seconds: elapsed, pages: [], flags: [], assets: 0,
-      routeChecks: { passed: 0, total: 0 }, outDir, error: (err as Error).message,
+      routeChecks: { passed: 0, total: 0 }, outDir, error: detail,
     };
   }
 }

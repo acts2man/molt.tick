@@ -121,6 +121,9 @@ export async function processMigration(db: SupabaseClient, row: MigrationRow, cf
   }).eq('id', row.id);
 
   console.log(`[worker] ${row.id} → ${result.status} (${result.elapsed_seconds}s, ${result.pages.length} pages, ${result.flags.length} flags)`);
+  if (result.status === 'error') {
+    console.error(`[worker] ERROR REASON for ${row.id}: ${result.error ?? '(no message captured)'}`);
+  }
 }
 
 /** Main loop: poll, claim, process, repeat. */
