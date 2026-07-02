@@ -126,9 +126,29 @@ export interface FormField {
 // ---------- plan ----------
 
 export interface MigrationPlan {
-  sharedChrome: string[];       // section ids present on every page — build once
+  routes: { route: string; title: string }[];
+  chrome: ChromeGroup[];        // shared structure across pages — build once
+  sharedChrome: string[];       // flat section-id list (all-pages chrome)
   library: LibraryMatch[];      // known plugin widgets matched to proven React impls
   flags: Flag[];                // needs a human call
+  stats: {
+    pages: number;
+    chromeSections: number;     // sections built once instead of per page
+    perPageSectionsSaved: number; // chrome sections × (pages − 1)
+    pluginTypesMatched: number;
+    pluginTypesUnmatched: number;
+  };
+}
+
+export interface ChromeGroup {
+  id: string;                   // section id (or fingerprint for id-less builders)
+  matchedBy: 'id' | 'fingerprint';
+  label: 'header' | 'social-rail' | 'offcanvas' | 'footer' | 'chrome';
+  pages: string[];              // routes it appears on
+  global: boolean;              // on every page
+  instancesPerPage: number;     // >1 = breakpoint variants of the same template
+  styleVariants: boolean;       // same structure, different computed styles per route
+  widgets: string[];            // widget-type summary for the report
 }
 
 export interface LibraryMatch {

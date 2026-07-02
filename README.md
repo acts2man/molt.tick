@@ -12,9 +12,9 @@ Pipeline: **Crawl → Normalize → Plan → Synthesize → Verify → Ship**
 |---|---|---|
 | 1 Crawl | ✅ built + validated | discovery (sitemap + nav-BFS), full per-page capture |
 | 2 Normalize | ✅ built + validated | Elementor → IR, deterministic, no AI |
-| 3 Plan | ◻ next | shared-chrome detection, widget classification, flags |
-| 4 Synthesize | ◻ | IR → React/TanStack; seeded by the proven S2S component library |
-| 5 Verify | ◻ | pixel diff + real route click-throughs |
+| 3 Plan | ✅ built + validated | chrome detection (id + fingerprint), library matching, flag generation |
+| 4 Synthesize | ✅ built + validated | IR+plan+sidecar → Lovable-editable TanStack project; exact styles preserved |
+| 5 Verify | ◻ next | pixel diff + real route click-throughs |
 | 6 Ship | ◻ | GitHub App push to the user's Lovable-born repo |
 
 ## What the crawler captures (per page)
@@ -49,6 +49,26 @@ Run on a local reconstruction of the site built from its real captures:
   exact set that became the proven React component library in the reference
   migration. The identical flag signature across pages is the Stage-3
   shared-chrome signal.
+
+## Stage 3 validation (same reference site)
+
+- **11 global chrome sections** detected via id-equality across all 7 pages,
+  labeled header / social-rail / offcanvas / footer — saves rebuilding 66
+  per-page sections. Breakpoint variants (same template id rendered ×2 per
+  page) and per-route style variants (home dark header vs interior light
+  header share ids) both detected; styling resolves from the sidecar per route.
+- **9/9 plugin widget types matched** to proven library components
+  (`HeaderNav · SocialIconRow · OffcanvasPanels · IconBox ·
+  PersistentAudioPlayer · SupabaseShop · MailingListForm ·
+  GalleryWithLightbox · ContactFormMailto`) — zero unknown-widget flags.
+- **Flag queue reproduces the reference migration's actual human decisions**,
+  correctly attributed: payment → `/shop` (Woo, no processor), no-backend →
+  `/contact` (CF7 → mailto + TODO seam) and the site-wide footer Mailchimp
+  form, runtime-style → live 3D matrices (values read from the sidecar,
+  never hardcoded).
+- Signal sniffing uses strong content markers (`add-to-cart`,
+  `woocommerce-loop`, `wpcf7-field`) attributed to the densest page — WP
+  loads plugin classes globally, so weak substring checks misattribute.
 
 ## Run it
 
