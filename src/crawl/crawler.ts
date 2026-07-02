@@ -44,7 +44,47 @@ export function normalizeStartUrl(raw: string): string {
 
 // ---------------------------------------------------------------- discovery
 
-function normalizeUrl(raw: string, origin: string): string | null {
+// Auto-generated WordPress archive/taxonomy URLs that aren't real content pages.
+// These are the pages that flooded the treetestprep crawl (author/tag/category
+// archives, trashed drafts, individual lesson/CPT items rendered by plugins).
+const JUNK_PATTERNS: RegExp[] = [
+  /\/author\//i,
+  /\/category\//i,
+  /\/tag\//i,
+  /\/course-tag\//i,
+  /\/course-category\//i,
+  /\/product-tag\//i,
+  /\/product-category\//i,
+  /\/lesson\//i,          // individual LearnDash lessons
+  /\/topic\//i,
+  /\/quizzes?\//i,
+  /__trashed/i,
+  /\/\d{4}\/\d{2}\//,     // date archives /2024/06/
+  /\/page\/\d+\/?$/i,     // pagination /page/2/
+  /\/feed\/?$/i,
+];
+
+function isJunk(pathname: string): boolean {
+  return JUNK_PATTERNS.some((re) => re.test(pathname));
+}
+
+// "Real" listing pages worth keeping even though they're indexes.
+const KEEP_LISTINGS = /^\/(blog|shop|store|courses|events|services|portfolio|gallery|news|products?)\/?$/i;
+
+/**
+ * Score a URL by how likely it is to be a page a human considers part of the
+ * site. Lower = more important. Nav-menu pages get the strongest boost (applied
+ * by the caller); this ranks by URL shape.
+ */
+function pageScore(pathname: string): number {
+  if (pathname === '/') return 0;                    // home first
+  const depth = pathname.split('/').filter(Boolean).length;
+  let score = depth * 10;                             // shallower = better
+  if (KEEP_LISTINGS.test(pathname)) score -= 5;       // real listing pages
+  return score;
+}
+
+function normalizeUrl(raw: string, origin: string, allowJunk = false): string | null {
   try {
     const u = new URL(raw, origin);
     if (u.origin !== origin) return null;               // same-origin only
@@ -55,9 +95,34 @@ function normalizeUrl(raw: string, origin: string): string | null {
     if (/\.(jpe?g|png|webp|gif|svg|css|js|pdf|zip|mp3|mp4|ico|woff2?)$/i.test(p)) return null;
     if (/\/(wp-admin|wp-login|wp-json|feed|xmlrpc)\b/.test(p)) return null;
     if (!p.endsWith('/')) p += '/';
+    if (!allowJunk && isJunk(p) && !KEEP_LISTINGS.test(p)) return null; // drop taxonomy/archive junk
     return u.origin + p;
   } catch {
     return null;
+  }
+}
+
+/** Extract the real navigation menu links from the homepage header/nav. */
+async function discoverViaMenu(page: Page, origin: string, startUrl: string): Promise<string[]> {
+  try {
+    const resp = await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    if (resp && resp.status() >= 400) return [];
+    // prefer links inside <nav>/<header>/menu containers — the actual site menu
+    const hrefs: string[] = await page.evaluate(
+      `(() => {
+        const sel = 'header a[href], nav a[href], [class*="menu"] a[href], [class*="nav"] a[href]';
+        const menu = Array.from(document.querySelectorAll(sel)).map(a => a.href);
+        return menu.length ? menu : Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
+      })()`,
+    ) as string[];
+    const out: string[] = [];
+    for (const h of hrefs) {
+      const n = normalizeUrl(h, origin);
+      if (n && !out.includes(n)) out.push(n);
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
 
@@ -90,17 +155,19 @@ async function discoverViaSitemap(page: Page, origin: string): Promise<string[]>
   }
 }
 
-/** BFS over same-origin nav links, collecting new links from each visited page. */
+/** BFS over real (non-junk) same-origin links, seeded from the nav menu. */
 async function discoverViaNav(
   page: Page,
   origin: string,
   startUrl: string,
   maxPages: number,
+  seeds: string[] = [],
 ): Promise<string[]> {
-  const seen = new Set<string>([normalizeUrl(startUrl, origin)!]);
-  const queue = [...seen];
+  const home = normalizeUrl(startUrl, origin)!;
+  const seen = new Set<string>([home, ...seeds]);
+  const queue = [home, ...seeds];
   const found: string[] = [...seen];
-  while (queue.length && found.length < maxPages) {
+  while (queue.length && found.length < maxPages * 2) {
     const url = queue.shift()!;
     try {
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
@@ -115,12 +182,11 @@ async function discoverViaNav(
         `Array.from(document.querySelectorAll('a[href]')).map(a => a.href)`,
       ) as string[];
       for (const h of hrefs) {
-        const n = normalizeUrl(h, origin);
+        const n = normalizeUrl(h, origin); // junk already filtered here
         if (n && !seen.has(n)) {
           seen.add(n);
           queue.push(n);
           found.push(n);
-          if (found.length >= maxPages) break;
         }
       }
     } catch { /* unreachable page — skip */ }
@@ -380,10 +446,14 @@ async function capturePage(
 // ---------------------------------------------------------------- main
 
 export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
-  const { startUrl: rawUrl, outDir, maxPages = 50, settleMs = 600 } = opts;
+  const { startUrl: rawUrl, outDir, maxPages = 25, settleMs = 600 } = opts;
   const startUrl = normalizeStartUrl(rawUrl);
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
+
+  // overall time budget — a large/slow site must never hang the worker forever
+  const budgetMs = Number(process.env.MOLT_CRAWL_BUDGET_MS ?? 240000); // 4 min default
+  const deadline = Date.now() + budgetMs;
 
   const browser = await chromium.launch({
     ...(CHROME ? { executablePath: CHROME } : {}),
@@ -391,19 +461,34 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   });
   const probe = await browser.newPage();
 
-  let discovery: CaptureManifest['discovery'] = 'sitemap';
-  let urls = await discoverViaSitemap(probe, origin);
-  if (urls.length === 0) {
-    discovery = 'nav-bfs';
-    urls = await discoverViaNav(probe, origin, startUrl, maxPages);
-  }
+  // 1) the real navigation menu = the pages a human considers "the site"
+  const menuPages = await discoverViaMenu(probe, origin, startUrl);
+  // 2) BFS one level from those to catch real sub-pages they link to
+  const navPages = await discoverViaNav(probe, origin, startUrl, maxPages, menuPages);
+  // 3) sitemap only to SUPPLEMENT — filtered, and only if we have budget left
+  const sitemapPages = await discoverViaSitemap(probe, origin);
   await probe.close();
-  urls = [...new Set(urls)].slice(0, maxPages);
 
-  console.log(`[molt] discovery: ${discovery} → ${urls.length} page(s)`);
+  // rank: menu/nav pages first (real content), then shallow sitemap pages.
+  // junk was already filtered by normalizeUrl; KEEP_LISTINGS survive.
+  const menuSet = new Set([...menuPages, ...navPages]);
+  const ranked = [
+    ...[...menuSet].sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
+    ...sitemapPages
+      .filter((u) => !menuSet.has(u))
+      .sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
+  ];
+  const discovery: CaptureManifest['discovery'] = menuSet.size > 0 ? 'nav-bfs' : 'sitemap';
+  const urls = [...new Set(ranked)].slice(0, maxPages);
+
+  console.log(`[molt] discovery: ${discovery} · ${menuSet.size} nav + ${sitemapPages.length} sitemap → ${urls.length} page(s) (junk filtered)`);
 
   const pages: PageCapture[] = [];
   for (const url of urls) {
+    if (Date.now() > deadline) {
+      console.log(`[molt] crawl budget reached — stopping at ${pages.length}/${urls.length} pages`);
+      break;
+    }
     process.stdout.write(`[molt] capture ${url} … `);
     try {
       const cap = await capturePage(browser, url, origin, outDir, settleMs);
