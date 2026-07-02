@@ -134,7 +134,9 @@ export async function runWorker(cfg: WorkerConfig, opts: { once?: boolean } = {}
       const row = await claimNext(db);
       if (row) {
         await processMigration(db, row, cfg).catch(async (err) => {
-          console.error(`[worker] migration ${row.id} failed:`, err);
+          const msg = (err as Error)?.message ?? String(err);
+          console.error(`[worker] migration ${row.id} FAILED: ${msg}`);
+          console.error((err as Error)?.stack ?? '(no stack)');
           await db.from('migrations').update({ status: 'error' }).eq('id', row.id);
         });
       } else if (opts.once) {

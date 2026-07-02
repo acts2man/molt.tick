@@ -376,9 +376,10 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
 
-  const browser = await chromium.launch(
-    CHROME ? { executablePath: CHROME } : {},
-  );
+  const browser = await chromium.launch({
+    ...(CHROME ? { executablePath: CHROME } : {}),
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+  });
   const probe = await browser.newPage();
 
   let discovery: CaptureManifest['discovery'] = 'sitemap';
