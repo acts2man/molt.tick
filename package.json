@@ -11,10 +11,12 @@
     "plan": "tsx src/plan/cli.ts",
     "synth": "tsx src/synth/cli.ts",
     "verify": "tsx src/verify/cli.ts",
-    "run-pipeline": "tsx src/pipeline/cli.ts"
+    "run-pipeline": "tsx src/pipeline/cli.ts",
+    "worker": "tsx src/worker/cli.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
     "node-html-parser": "^8.0.4",
     "pixelmatch": "^7.2.0",
     "playwright-core": "^1.61.1",

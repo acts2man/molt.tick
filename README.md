@@ -15,7 +15,8 @@ Pipeline: **Crawl → Normalize → Plan → Synthesize → Verify → Ship**
 | 3 Plan | ✅ built + validated | chrome detection (id + fingerprint), library matching, flag generation |
 | 4 Synthesize | ✅ built + validated | IR+plan+sidecar → Lovable-editable TanStack project; exact styles preserved |
 | 5 Verify | ✅ built + validated | structural checks (real) + validated pixel comparator |
-| 6 Ship | ◻ next | GitHub App push to the user's Lovable-born repo |
+| 6 Ship | ◻ | GitHub App push to the user's Lovable-born repo |
+| Worker | ✅ built + validated | Supabase polling worker — the engine↔platform wire |
 
 ## What the crawler captures (per page)
 
