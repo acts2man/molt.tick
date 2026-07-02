@@ -14,7 +14,7 @@ Pipeline: **Crawl → Normalize → Plan → Synthesize → Verify → Ship**
 | 2 Normalize | ✅ built + validated | Elementor → IR, deterministic, no AI |
 | 3 Plan | ✅ built + validated | chrome detection (id + fingerprint), library matching, flag generation |
 | 4 Synthesize | ✅ built + validated | IR+plan+sidecar → Lovable-editable TanStack project; exact styles preserved |
-| 5 Verify | ✅ built + validated | structural checks (real) + validated pixel comparator |
+| 5 Verify | ✅ built + validated | structural checks + render harness producing REAL pixel numbers |
 | 6 Ship | ◻ | GitHub App push to the user's Lovable-born repo |
 | Worker | ✅ built + validated | Supabase polling worker — the engine↔platform wire |
 
