@@ -19,8 +19,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CaptureManifest, PageCapture } from '../ir/types.js';
 
+// Chrome resolution: explicit MOLT_CHROME wins; otherwise let playwright-core
+// find its own installed browser (the deploy image installs it in the default
+// location). Only fall back to the dev-container path if that path exists.
+import { existsSync } from 'node:fs';
+const DEV_CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const CHROME =
-  process.env.MOLT_CHROME ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+  process.env.MOLT_CHROME ?? (existsSync(DEV_CHROME) ? DEV_CHROME : undefined);
 
 export interface CrawlOptions {
   startUrl: string;
@@ -371,7 +376,9 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
 
-  const browser = await chromium.launch({ executablePath: CHROME });
+  const browser = await chromium.launch(
+    CHROME ? { executablePath: CHROME } : {},
+  );
   const probe = await browser.newPage();
 
   let discovery: CaptureManifest['discovery'] = 'sitemap';
