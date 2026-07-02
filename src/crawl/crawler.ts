@@ -14,7 +14,7 @@
  *   6. full-page screenshot (ground truth for Stage 5 pixel-diff)
  */
 
-import { chromium, type Browser, type Page } from 'playwright-core';
+import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CaptureManifest, PageCapture } from '../ir/types.js';
@@ -324,7 +324,7 @@ const IN_PAGE_EXTRACT = `(() => {
 })()`;
 
 async function capturePage(
-  browser: Browser,
+  context: BrowserContext,
   url: string,
   origin: string,
   pagesRoot: string,
@@ -335,7 +335,7 @@ async function capturePage(
   const dir = join(pagesRoot, slug);
   await mkdir(join(dir, 'styles'), { recursive: true });
 
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
 
   // collect external stylesheets as they arrive
   const sheets: { url: string; body: string }[] = [];
@@ -348,7 +348,14 @@ async function capturePage(
     } catch { /* stream gone — skip */ }
   });
 
-  const resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+  let resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+  // 403/429 are bot-detection / rate-limit blocks — wait and retry a couple times
+  let tries = 0;
+  while (resp && (resp.status() === 403 || resp.status() === 429) && tries < 2) {
+    tries++;
+    await page.waitForTimeout(2500 * tries); // back off
+    resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+  }
   if (resp && resp.status() >= 400) {
     await page.close();
     throw new Error(`HTTP ${resp.status()}`);
@@ -457,9 +464,23 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
 
   const browser = await chromium.launch({
     ...(CHROME ? { executablePath: CHROME } : {}),
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled', // hides navigator.webdriver
+    ],
   });
-  const probe = await browser.newPage();
+  // a context that looks like a real Chrome on macOS — the default headless UA
+  // ("HeadlessChrome") is an instant bot flag that triggers 403s.
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    },
+  });
+  const probe = await context.newPage();
 
   // 1) the real navigation menu = the pages a human considers "the site"
   const menuPages = await discoverViaMenu(probe, origin, startUrl);
@@ -491,7 +512,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
     }
     process.stdout.write(`[molt] capture ${url} … `);
     try {
-      const cap = await capturePage(browser, url, origin, outDir, settleMs);
+      const cap = await capturePage(context, url, origin, outDir, settleMs);
       pages.push(cap);
       console.log(
         `ok · ${cap.stats.elements} el · ${cap.stats.styledElements} styled · ` +
@@ -500,7 +521,9 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
     } catch (e) {
       console.log(`FAILED: ${(e as Error).message}`);
     }
+    await new Promise((r) => setTimeout(r, 800)); // pace requests — avoid tripping rate limits
   }
+  await context.close();
   await browser.close();
 
   const manifest: CaptureManifest = {
