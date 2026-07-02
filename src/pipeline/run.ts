@@ -12,7 +12,7 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { crawl } from '../crawl/crawler.js';
+import { crawl, normalizeStartUrl } from '../crawl/crawler.js';
 import { normalizePage } from '../normalize/elementor.js';
 import { buildPlan, type PlanInput } from '../plan/plan.js';
 import { synthesize } from '../synth/synthesize.js';
@@ -81,9 +81,11 @@ const STATUS_FOR: Record<Stage, MigrationStatus> = {
 
 export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult> {
   const {
-    siteUrl, workDir, outputRepo = deriveRepo(siteUrl),
+    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo,
     maxPages = 50, reuseCaptureDir, onProgress,
   } = opts;
+  const siteUrl = normalizeStartUrl(rawSiteUrl);
+  const outputRepo = rawOutputRepo ?? deriveRepo(siteUrl);
   const started = Date.now();
   const captureDir = reuseCaptureDir ?? join(workDir, 'capture');
   const outDir = join(workDir, 'site');

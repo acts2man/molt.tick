@@ -34,6 +34,14 @@ export interface CrawlOptions {
   settleMs?: number; // extra wait after load for JS-applied styles to land
 }
 
+/** Accept a bare domain or full URL; always return a valid absolute URL. */
+export function normalizeStartUrl(raw: string): string {
+  const t = (raw ?? '').trim();
+  if (!t) throw new Error('empty site URL');
+  const withScheme = /^https?:\/\//i.test(t) ? t : `https://${t.replace(/^\/+/, '')}`;
+  return new URL(withScheme).toString(); // validates + canonicalizes
+}
+
 // ---------------------------------------------------------------- discovery
 
 function normalizeUrl(raw: string, origin: string): string | null {
@@ -372,7 +380,8 @@ async function capturePage(
 // ---------------------------------------------------------------- main
 
 export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
-  const { startUrl, outDir, maxPages = 50, settleMs = 600 } = opts;
+  const { startUrl: rawUrl, outDir, maxPages = 50, settleMs = 600 } = opts;
+  const startUrl = normalizeStartUrl(rawUrl);
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
 
