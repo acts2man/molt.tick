@@ -1,0 +1,22 @@
+{
+  "name": "molt-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Molt — WordPress → React migration engine. Crawl · Normalize · Plan · Synthesize · Verify.",
+  "type": "module",
+  "scripts": {
+    "crawl": "tsx src/crawl/cli.ts",
+    "normalize": "tsx src/normalize/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "node-html-parser": "^8.0.4",
+    "playwright-core": "^1.61.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
