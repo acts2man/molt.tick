@@ -42,6 +42,11 @@ const routeToFile = (route: string) =>
  * TanStack createFileRoute wrapper and import the raw component functions.
  */
 async function scaffoldRunnable(siteDir: string, routes: { route: string; slug: string }[]): Promise<void> {
+  // Faithful output is ALREADY a complete runnable app (src/main.tsx + real
+  // router). Don't rescaffold it — just make sure its entry exists.
+  if (existsSync(join(siteDir, 'src', 'main.tsx'))) {
+    return; // faithful mode — app is runnable as-is
+  }
   // index.html entry
   await writeFile(join(siteDir, 'index.html'),
 `<!doctype html><html><head><meta charset="utf-8"><title>Molt preview</title></head>
@@ -189,12 +194,16 @@ export async function renderAndDiff(
       });
       await mkdir(join(siteDir, 'renders'), { recursive: true });
 
+      const faithful = existsSync(join(siteDir, 'src', 'main.tsx'));
       // shoot one route, fully guarded — any failure → dash for that route only
       const shoot = async (r: { route: string; slug: string }): Promise<RenderResult> => {
         try {
           const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
           try {
-            await page.goto(`http://127.0.0.1:${port}/?route=${r.slug}`, { waitUntil: 'networkidle', timeout: 15000 });
+            const url = faithful
+              ? `http://127.0.0.1:${port}${r.route}`      // faithful: real router path
+              : `http://127.0.0.1:${port}/?route=${r.slug}`; // old preview scaffold
+            await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
             await page.waitForTimeout(400);
             const shot = join(siteDir, 'renders', `${r.slug}.png`);
             await page.screenshot({ path: shot, fullPage: true });

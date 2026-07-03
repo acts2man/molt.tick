@@ -4,7 +4,8 @@
   "description": "Pre-baked dependencies for rendering synthesized sites. Installed once into the Docker image at /opt/molt-render so per-migration rendering needs zero npm install. Versions here MUST match what render.ts writes into each generated project's package.json.",
   "dependencies": {
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.26.2"
   },
   "devDependencies": {
     "vite": "5.4.10",

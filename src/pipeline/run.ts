@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
 import { normalizePage } from '../normalize/elementor.js';
 import { buildPlan, type PlanInput } from '../plan/plan.js';
-import { synthesize } from '../synth/synthesize.js';
+import { synthesizeFaithful } from '../synth/faithful.js';
 import { verifyStructure } from '../verify/structure.js';
 import { renderAndDiff } from '../verify/render.js';
 import { comparePixels } from '../verify/pixel.js';
@@ -140,13 +140,13 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       flags,
     });
 
-    // ---- Stage 4: synthesize ----
-    await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Synthesizing React project…' });
-    const synthPages = manifest.pages.map((p) => ({
-      route: p.route, ir: irByRoute.get(p.route)!, computed: computedByRoute.get(p.route)!, dom: domByRoute.get(p.route),
-    }));
-    await synthesize({ plan, pages: synthPages, outDir, projectName: outputRepo, siteUrl });
-    await emit({ stage: 'synthesize', status: 'synthesizing', message: 'React project emitted' });
+    // ---- Stage 4: synthesize (FAITHFUL visual reproduction) ----
+    // Original DOM + original CSS per page — reproduces what the page LOOKS like,
+    // not what its plugins do. Functionality is added later via Lovable.
+    await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Reproducing pages (original DOM + CSS)…' });
+    const faithfulRoutes = manifest.pages.map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
+    await synthesizeFaithful({ captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes });
+    await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Pages reproduced' });
 
     // ---- Stage 5: verify ----
     await emit({ stage: 'verify', status: 'verifying', message: 'Verifying output…' });
