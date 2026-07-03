@@ -183,8 +183,9 @@ export async function renderAndDiff(
 
       const browser = await chromium.launch({
         ...(CHROME ? { executablePath: CHROME } : {}),
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-               '--single-process', '--no-zygote', '--js-flags=--max-old-space-size=256'],
+        // NOTE: do NOT add --single-process / --no-zygote here — they crash
+        // Chromium in the Railway container ("Target ... has been closed").
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       });
       await mkdir(join(siteDir, 'renders'), { recursive: true });
 
