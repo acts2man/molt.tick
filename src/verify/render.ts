@@ -110,69 +110,109 @@ function run(cmd: string, args: string[], cwd: string, timeoutMs: number): Promi
   });
 }
 
+/** Poll a URL until it responds or times out. */
+async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url);
+      if (res.ok || res.status < 500) return true;
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+/** All-dashes result (used whenever rendering can't run — never fails a migration). */
+function dashes(routes: { route: string; slug: string }[], note: string): RenderResult[] {
+  return routes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note }));
+}
+
 export async function renderAndDiff(
   siteDir: string,
   captureDir: string,
   routes: { route: string; slug: string }[],
+  opts: { budgetMs?: number; concurrency?: number } = {},
 ): Promise<RenderResult[]> {
-  await scaffoldRunnable(siteDir, routes);
+  const budgetMs = opts.budgetMs ?? Number(process.env.MOLT_RENDER_BUDGET_MS ?? 120000); // 2 min default
+  const concurrency = opts.concurrency ?? 4;
+  const deadline = Date.now() + budgetMs;
 
-  // Dependencies: prefer the pre-baked toolchain (zero install). render.ts
-  // symlinks /opt/molt-render/node_modules in; only if that's absent (local
-  // dev) do we fall back to a real npm install.
-  const prebaked = process.env.MOLT_RENDER_DEPS ?? '/opt/molt-render/node_modules';
-  const localNodeModules = join(siteDir, 'node_modules');
-  let viteBin = 'npx';
-  let viteBaseArgs: string[] = ['vite'];
-  if (existsSync(prebaked)) {
-    try {
-      if (!existsSync(localNodeModules)) {
-        await import('node:fs/promises').then((fs) => fs.symlink(prebaked, localNodeModules, 'dir'));
-      }
-      viteBin = join(prebaked, '.bin', 'vite'); // call the pre-baked binary directly
-      viteBaseArgs = [];
-    } catch { /* symlink failed → fall through to npm install below */ }
-  }
-  if (viteBin === 'npx') {
-    const inst = await run('npm', ['install', '--no-audit', '--no-fund'], siteDir, 180000);
-    if (inst.code !== 0) return routes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'npm install failed' }));
-  }
-
-  // build
-  const build = await run(viteBin, [...viteBaseArgs, 'build'], siteDir, 180000);
-  if (build.code !== 0) {
-    return routes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'vite build failed: ' + build.out.slice(-300) }));
-  }
-
-  // serve the built app and screenshot each route
-  const preview = spawn(viteBin, [...viteBaseArgs, 'preview', '--port', '4173', '--strictPort'], { cwd: siteDir, env: process.env });
-  await new Promise((r) => setTimeout(r, 3500)); // let preview boot
-
-  const results: RenderResult[] = [];
+  // Top-level guard: rendering must NEVER throw out of here — worst case it
+  // returns dashes so the migration still completes.
   try {
-    const browser = await chromium.launch({
-      ...(CHROME ? { executablePath: CHROME } : {}),
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
-    await mkdir(join(siteDir, 'renders'), { recursive: true });
-    for (const r of routes) {
+    await scaffoldRunnable(siteDir, routes);
+
+    // Dependencies: pre-baked toolchain (zero install), else install fallback.
+    const prebaked = process.env.MOLT_RENDER_DEPS ?? '/opt/molt-render/node_modules';
+    const localNodeModules = join(siteDir, 'node_modules');
+    let viteBin = 'npx';
+    let viteBaseArgs: string[] = ['vite'];
+    if (existsSync(prebaked)) {
       try {
-        const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-        await page.goto(`http://127.0.0.1:4173/?route=${r.slug}`, { waitUntil: 'networkidle', timeout: 20000 });
-        await page.waitForTimeout(500);
-        const shot = join(siteDir, 'renders', `${r.slug}.png`);
-        await page.screenshot({ path: shot, fullPage: true });
-        await page.close();
-        const original = join(captureDir, r.slug, 'original.png');
-        const pixelMatch = existsSync(original) ? (await comparePixels(original, shot)).matchPct : null;
-        results.push({ ...r, pixelMatch, rendered: true });
-      } catch (e) {
-        results.push({ ...r, pixelMatch: null, rendered: false, note: (e as Error).message });
-      }
+        if (!existsSync(localNodeModules)) {
+          await import('node:fs/promises').then((fs) => fs.symlink(prebaked, localNodeModules, 'dir'));
+        }
+        viteBin = join(prebaked, '.bin', 'vite');
+        viteBaseArgs = [];
+      } catch { /* fall through to install */ }
     }
-    await browser.close();
-  } finally {
-    preview.kill('SIGKILL');
+    if (viteBin === 'npx') {
+      const inst = await run('npm', ['install', '--no-audit', '--no-fund'], siteDir, 120000);
+      if (inst.code !== 0) return dashes(routes, 'npm install failed');
+    }
+
+    // DEV server — no production build. Starts fast; serves routes on demand.
+    const port = 4173 + Math.floor(Math.random() * 400); // avoid collisions across runs
+    const server = spawn(viteBin, [...viteBaseArgs, '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
+      { cwd: siteDir, env: process.env });
+
+    const results: RenderResult[] = [];
+    try {
+      const ready = await waitForServer(`http://127.0.0.1:${port}/`, Math.min(30000, deadline - Date.now()));
+      if (!ready) return dashes(routes, 'dev server did not start in time');
+
+      const browser = await chromium.launch({
+        ...(CHROME ? { executablePath: CHROME } : {}),
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      });
+      await mkdir(join(siteDir, 'renders'), { recursive: true });
+
+      // shoot one route, fully guarded — any failure → dash for that route only
+      const shoot = async (r: { route: string; slug: string }): Promise<RenderResult> => {
+        try {
+          const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+          try {
+            await page.goto(`http://127.0.0.1:${port}/?route=${r.slug}`, { waitUntil: 'networkidle', timeout: 15000 });
+            await page.waitForTimeout(400);
+            const shot = join(siteDir, 'renders', `${r.slug}.png`);
+            await page.screenshot({ path: shot, fullPage: true });
+            const original = join(captureDir, r.slug, 'original.png');
+            const pixelMatch = existsSync(original) ? (await comparePixels(original, shot)).matchPct : null;
+            return { ...r, pixelMatch, rendered: true };
+          } finally {
+            await page.close().catch(() => {});
+          }
+        } catch (e) {
+          return { ...r, pixelMatch: null, rendered: false, note: (e as Error).message };
+        }
+      };
+
+      // parallel in batches; stop starting new batches once the budget is spent
+      for (let i = 0; i < routes.length; i += concurrency) {
+        if (Date.now() > deadline) {
+          for (const r of routes.slice(i)) results.push({ ...r, pixelMatch: null, rendered: false, note: 'render budget reached' });
+          break;
+        }
+        const batch = routes.slice(i, i + concurrency);
+        results.push(...await Promise.all(batch.map(shoot)));
+      }
+      await browser.close().catch(() => {});
+    } finally {
+      server.kill('SIGKILL');
+    }
+    return results;
+  } catch (e) {
+    return dashes(routes, 'render error: ' + (e as Error).message);
   }
-  return results;
 }
