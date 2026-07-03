@@ -89,7 +89,7 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
   await write('package.json', JSON.stringify({
     name: projectName, private: true, type: 'module',
     scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' },
-    dependencies: { react: '18.3.1', 'react-dom': '18.3.1', 'react-router-dom': '6.26.2' },
+    dependencies: { react: '18.3.1', 'react-dom': '18.3.1' },
     devDependencies: { '@vitejs/plugin-react': '4.3.3', vite: '5.4.10' },
   }, null, 2));
   await write('vite.config.ts', `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });\n`);
@@ -138,36 +138,50 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
 
     const comp = routeToComp(r.route);
     const file = routeToFile(r.route);
-    // the page component: apply the original body class to a wrapper, inject markup
+    // Write the (large) HTML to a SEPARATE file imported as a raw string via
+    // Vite's `?raw`. Embedding 300KB+ of live-site HTML directly in the .tsx
+    // source breaks esbuild's transform (500 errors → blank pages). As a raw
+    // import, the markup never goes through the JS parser, so it can't break it.
+    const htmlRel = `html/${slug}.html`;
+    await write(`src/${htmlRel}`, cleanBody);
     await write(`src/pages/${file}.tsx`,
 `import './../${cssRel}';
+import html from './../${htmlRel}?raw';
 
 /** Faithful reproduction of ${r.route} — original markup + original CSS. */
 export default function ${comp}() {
   return (
-    <div className=${JSON.stringify(bodyClass)} dangerouslySetInnerHTML={{ __html: ${JSON.stringify(cleanBody)} }} />
+    <div className=${JSON.stringify(bodyClass)} dangerouslySetInnerHTML={{ __html: html }} />
   );
 }
 `);
     pageMeta.push({ route: r.route, comp, file, bodyClass, cssRel });
   }
 
-  // ---- router entry ----
+  // ---- entry: dependency-free routing ----
+  // We deliberately DON'T use react-router-dom — relying on it being in the
+  // pre-baked image is fragile (a missing module = blank page). Plain React +
+  // a window.location.pathname switch needs only react/react-dom, which are
+  // always present. The render harness navigates real paths; this matches them.
   const imports = pageMeta.map((p) => `import ${p.comp} from './pages/${p.file}';`).join('\n');
-  const routeEls = pageMeta.map((p) => `        <Route path=${JSON.stringify(p.route)} element={<${p.comp} />} />`).join('\n');
+  const routeMap = pageMeta.map((p) => `  ${JSON.stringify(p.route)}: ${p.comp},`).join('\n');
+  const firstComp = pageMeta[0]?.comp ?? 'null';
   await write('src/main.tsx',
 `import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
 ${imports}
 
-createRoot(document.getElementById('root')!).render(
-  <BrowserRouter>
-    <Routes>
-${routeEls}
-    </Routes>
-  </BrowserRouter>
-);
+const routes: Record<string, React.ComponentType> = {
+${routeMap}
+};
+
+function App() {
+  const path = (window.location.pathname.replace(/\\/$/, '') || '/');
+  const Comp = routes[path] ?? routes[window.location.pathname] ?? ${firstComp};
+  return Comp ? <Comp /> : <div>Not found</div>;
+}
+
+createRoot(document.getElementById('root')!).render(<App />);
 `);
 
   await write('MOLT_OUTPUT.json', JSON.stringify({
