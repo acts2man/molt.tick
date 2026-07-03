@@ -32,7 +32,8 @@ export interface CrawlOptions {
   outDir: string;
   maxPages?: number;
   settleMs?: number; // extra wait after load for JS-applied styles to land
-  scope?: CrawlScope; // core | all | posts — which pages to actually capture
+  scope?: CrawlScope; // core | all | posts — which pages to auto-capture
+  urls?: string[];    // EXPLICIT page list — when set, skip discovery, crawl exactly these
 }
 
 /** Accept a bare domain or full URL; always return a valid absolute URL. */
@@ -512,7 +513,7 @@ async function capturePage(
 // ---------------------------------------------------------------- main
 
 export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
-  const { startUrl: rawUrl, outDir, maxPages = 25, settleMs = 600, scope = 'core' } = opts;
+  const { startUrl: rawUrl, outDir, maxPages = 25, settleMs = 600, scope = 'core', urls: explicitUrls } = opts;
   const startUrl = normalizeStartUrl(rawUrl);
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
@@ -541,38 +542,57 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   });
   const probe = await context.newPage();
 
-  // 1) the real navigation menu = the pages a human considers "the site"
-  const menuPages = await discoverViaMenu(probe, origin, startUrl);
-  // 2) BFS one level from those to catch real sub-pages they link to
-  const navPages = await discoverViaNav(probe, origin, startUrl, maxPages, menuPages);
-  // 3) sitemap only to SUPPLEMENT — filtered, and only if we have budget left
-  const sitemapPages = await discoverViaSitemap(probe, origin);
-  await probe.close();
+  let urls: string[];
+  let discovery: CaptureManifest['discovery'];
+  let coreRouteSet = new Set<string>();
 
-  // rank: menu/nav pages first (real content), then shallow sitemap pages.
-  // junk was already filtered by normalizeUrl; KEEP_LISTINGS survive.
-  const menuSet = new Set([...menuPages, ...navPages]);
-  const ranked = [
-    ...[...menuSet].sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
-    ...sitemapPages
-      .filter((u) => !menuSet.has(u))
-      .sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
-  ];
-  const discovery: CaptureManifest['discovery'] = menuSet.size > 0 ? 'nav-bfs' : 'sitemap';
+  if (explicitUrls && explicitUrls.length > 0) {
+    // EXPLICIT LIST: the user told us exactly which pages to migrate. No guessing,
+    // no discovery, no scope filter — resolve each entry against the site and use it.
+    await probe.close();
+    const resolved: string[] = [];
+    for (const raw of explicitUrls) {
+      const t = raw.trim();
+      if (!t) continue;
+      try {
+        // accept full URLs, "/paths", or bare "slug"
+        const u = /^https?:\/\//i.test(t) ? new URL(t) : new URL(t.replace(/^\/+/, '/').startsWith('/') ? t : '/' + t, origin);
+        if (u.origin !== origin) continue;         // same site only
+        u.hash = ''; u.search = '';
+        let p = u.pathname; if (!p.endsWith('/')) p += '/';
+        const full = u.origin + p;
+        if (!resolved.includes(full)) resolved.push(full);
+      } catch { /* skip unparseable entry */ }
+    }
+    urls = resolved.slice(0, maxPages);
+    discovery = 'manual';
+    for (const u of urls) { try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* */ } }
+    console.log(`[molt] discovery: manual · ${urls.length} page(s) chosen by user`);
+  } else {
+    // AUTO: discover pages (menu → nav → sitemap), rank, apply scope.
+    const menuPages = await discoverViaMenu(probe, origin, startUrl);
+    const navPages = await discoverViaNav(probe, origin, startUrl, maxPages, menuPages);
+    const sitemapPages = await discoverViaSitemap(probe, origin);
+    await probe.close();
 
-  // apply SCOPE: core (nav + non-post pages), all (everything), posts (blog only).
-  // Build the core-route set from the nav menu for the filter.
-  const coreRouteSet = new Set<string>();
-  for (const u of menuSet) {
-    try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* skip */ }
+    const menuSet = new Set([...menuPages, ...navPages]);
+    const ranked = [
+      ...[...menuSet].sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
+      ...sitemapPages
+        .filter((u) => !menuSet.has(u))
+        .sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
+    ];
+    discovery = menuSet.size > 0 ? 'nav-bfs' : 'sitemap';
+    for (const u of menuSet) {
+      try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* skip */ }
+    }
+    const scoped = ranked.filter((u) => {
+      try { return inScope(new URL(u).pathname.replace(/\/$/, '') || '/', scope, coreRouteSet, menuSet.size > 0); }
+      catch { return true; }
+    });
+    urls = [...new Set(scoped)].slice(0, maxPages);
+    console.log(`[molt] discovery: ${discovery} · scope=${scope} · ${menuSet.size} nav + ${sitemapPages.length} sitemap → ${urls.length} page(s) after scope+junk filter`);
   }
-  const scoped = ranked.filter((u) => {
-    try { return inScope(new URL(u).pathname.replace(/\/$/, '') || '/', scope, coreRouteSet, menuSet.size > 0); }
-    catch { return true; }
-  });
-  const urls = [...new Set(scoped)].slice(0, maxPages);
-
-  console.log(`[molt] discovery: ${discovery} · scope=${scope} · ${menuSet.size} nav + ${sitemapPages.length} sitemap → ${urls.length} page(s) after scope+junk filter`);
 
   const pages: PageCapture[] = [];
   for (const url of urls) {

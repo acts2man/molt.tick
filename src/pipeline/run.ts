@@ -73,6 +73,7 @@ export interface PipelineOptions {
   /** when set, skip crawl and reuse an existing capture dir (validation/dev) */
   reuseCaptureDir?: string;
   scope?: CrawlScope;   // core | all | posts
+  urls?: string[];      // explicit page list (skips discovery)
   onProgress?: (e: ProgressEvent) => void | Promise<void>;
 }
 
@@ -83,7 +84,7 @@ const STATUS_FOR: Record<Stage, MigrationStatus> = {
 
 export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult> {
   const {
-    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo, scope = 'core',
+    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo, scope = 'core', urls: explicitUrls,
     maxPages = 50, reuseCaptureDir, onProgress,
   } = opts;
   const siteUrl = normalizeStartUrl(rawSiteUrl);
@@ -101,7 +102,7 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       await emit({ stage: 'crawl', status: 'crawling', message: `Reusing capture (${manifest.pages.length} pages)` });
     } else {
       await emit({ stage: 'crawl', status: 'crawling', message: `Crawling ${siteUrl}…` });
-      manifest = await crawl({ startUrl: siteUrl, outDir: captureDir, maxPages, scope });
+      manifest = await crawl({ startUrl: siteUrl, outDir: captureDir, maxPages, scope, urls: explicitUrls });
       await emit({ stage: 'crawl', status: 'crawling', message: `Captured ${manifest.pages.length} pages` });
     }
 
