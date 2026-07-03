@@ -15,6 +15,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { runPipeline, type ProgressEvent, type PageResult, type FlagResult } from '../pipeline/run.js';
 
 export interface WorkerConfig {
@@ -83,12 +84,37 @@ async function applyProgress(db: SupabaseClient, migrationId: string, e: Progres
   // upsert pages when the event carries them (verify stage)
   if (e.pages?.length) {
     await db.from('pages').delete().eq('migration_id', migrationId); // idempotent re-write
-    await db.from('pages').insert(e.pages.map((p: PageResult) => ({
-      migration_id: migrationId,
-      route: p.route, title: p.title,
-      section_count: p.section_count, widget_count: p.widget_count,
-      pixel_match: p.pixel_match, status: p.status,
-    })));
+
+    // upload each page's original screenshot to Supabase Storage, collect URLs
+    const rows = [];
+    for (const p of e.pages as PageResult[]) {
+      let screenshot_url: string | null = null;
+      if (p.screenshot_path) {
+        try {
+          const bytes = await readFile(p.screenshot_path);
+          const key = `${migrationId}/${p.slug ?? p.route.replace(/\W+/g, '_')}.png`;
+          const up = await db.storage.from('screenshots').upload(key, bytes, {
+            contentType: 'image/png', upsert: true,
+          });
+          if (!up.error) {
+            const { data } = db.storage.from('screenshots').getPublicUrl(key);
+            screenshot_url = data.publicUrl;
+          } else {
+            console.error(`[worker] screenshot upload failed for ${p.route}: ${up.error.message}`);
+          }
+        } catch (err) {
+          console.error(`[worker] screenshot read/upload error for ${p.route}: ${(err as Error).message}`);
+        }
+      }
+      rows.push({
+        migration_id: migrationId,
+        route: p.route, title: p.title,
+        section_count: p.section_count, widget_count: p.widget_count,
+        pixel_match: p.pixel_match, status: p.status,
+        screenshot_url,
+      });
+    }
+    await db.from('pages').insert(rows);
   }
 
   // upsert flags when the event carries them (plan stage)

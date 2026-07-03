@@ -10,6 +10,7 @@
  * so the worker just writes it straight through.
  */
 
+import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
@@ -43,6 +44,8 @@ export interface PageResult {
   widget_count: number;
   pixel_match: number | null;
   status: 'pending' | 'verified' | 'flagged';
+  screenshot_path?: string;   // local path to the original capture screenshot (worker uploads it)
+  slug?: string;
 }
 
 export interface FlagResult {
@@ -152,66 +155,15 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     await emit({ stage: 'verify', status: 'verifying', message: 'Verifying output…' });
     const structure = await verifyStructure(outDir, plan);
 
-    // ---- Stage 5b: render + pixel-diff (heavy but resilient; never fails the run) ----
-    // On by default; set MOLT_SKIP_RENDER=1 to disable. renderAndDiff is wrapped
-    // so any failure returns dashes rather than throwing.
-    // TIERING: only pixel-render CORE pages (the site's real nav pages), not
-    // every blog post — faster, focused, and avoids blog posts bogging the build.
-    const pixelBySlug = new Map<string, number | null>();
-    let renderDiagnostic: FlagResult | null = null;
-    if (process.env.MOLT_SKIP_RENDER !== '1') {
-      await emit({ stage: 'verify', status: 'verifying', message: 'Rendering core pages for pixel-diff…' });
-      try {
-        const coreRoutes = new Set(manifest.corePages ?? manifest.pages.map((p) => p.route));
-        const renderRoutes = manifest.pages
-          .filter((p) => coreRoutes.has(p.route))
-          .map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
-        console.log(`[pipeline] pixel-rendering ${renderRoutes.length} core page(s) of ${manifest.pages.length} total`);
-        // HARD wall-clock cap on the whole render step — it can never hang the
-        // migration. If it exceeds this, we take dashes and move on.
-        const RENDER_WALL_MS = Number(process.env.MOLT_RENDER_WALL_MS ?? 180000); // 3 min
-        const timeoutDashes: RenderResult[] = renderRoutes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'render wall-clock timeout' }));
-        const rendered = await Promise.race([
-          renderAndDiff(outDir, captureDir, renderRoutes),
-          new Promise<RenderResult[]>((resolve) => setTimeout(() => resolve(timeoutDashes), RENDER_WALL_MS)),
-        ]);
-        for (const r of rendered) pixelBySlug.set(r.slug, r.pixelMatch);
-        const scored = rendered.filter((r) => r.pixelMatch !== null).length;
-        const reasons = [...new Set(rendered.map((r) => r.note).filter(Boolean))] as string[];
-        if (scored === 0 && rendered.length > 0) {
-          const detail = reasons.length ? reasons.join(' | ') : '(no reason captured)';
-          console.error(`[pipeline] PIXEL RENDER PRODUCED 0 SCORES. reason(s): ${detail}`);
-          // SURFACE TO DASHBOARD: appears in "Needs your call" so the reason is visible in-app.
-          renderDiagnostic = {
-            page_route: '(pixel render)', kind: 'render-diagnostic',
-            summary: `Pixel render produced no scores (${rendered.length} core pages tried)`,
-            detail: `Reason(s): ${detail}`,
-          };
-        } else {
-          console.log(`[pipeline] pixel-diff: ${scored}/${rendered.length} core pages scored`);
-          if (scored < rendered.length && reasons.length) {
-            renderDiagnostic = {
-              page_route: '(pixel render)', kind: 'render-diagnostic',
-              summary: `Pixel render partial: ${scored}/${rendered.length} core pages scored`,
-              detail: `Some pages didn't score. Reason(s): ${reasons.join(' | ')}`,
-            };
-          }
-        }
-        await emit({ stage: 'verify', status: 'verifying', message: `Pixel-diff: ${scored}/${renderRoutes.length} core pages scored` });
-      } catch (e) {
-        const detail = `${(e as Error).message}`;
-        console.error('[pipeline] render step threw (unexpected):', detail, (e as Error).stack);
-        renderDiagnostic = {
-          page_route: '(pixel render)', kind: 'render-diagnostic',
-          summary: 'Pixel render crashed unexpectedly',
-          detail,
-        };
-      }
-    }
-    // fold the diagnostic into the flag list shown on the dashboard
-    if (renderDiagnostic) flags.push(renderDiagnostic);
+    // ---- Stage 5b: preview screenshots ----
+    // We no longer build+render the React output on the server (fragile, and the
+    // reproduction is faithful DOM+CSS anyway). Instead we surface each page's
+    // ORIGINAL captured screenshot as the preview. The worker uploads these to
+    // Supabase Storage. pixel_match stays null (Option B — automated fidelity
+    // scoring via a screenshot service — can be added later without blocking).
+    await emit({ stage: 'verify', status: 'verifying', message: 'Preparing page previews…' });
 
-    // build per-page results; pixel_match from the render step (or null → "—")
+    // build per-page results; screenshot_path points at the original capture
     const flaggedRoutes = new Set(plan.flags.map((f) => f.page.split(' ')[0]));
     const pages: PageResult[] = [];
     for (const p of manifest.pages) {
@@ -219,12 +171,14 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       const slug = p.files.dom.split('/')[0];
       const sectionCount = ir.sections.length;
       const widgetCount = ir.sections.reduce((n, s) => n + s.columns.reduce((m, c) => m + c.widgets.length, 0), 0);
-      const pixel = pixelBySlug.has(slug) ? pixelBySlug.get(slug)! : await tryPixel(captureDir, outDir, slug);
+      const shotPath = join(captureDir, slug, 'original.png');
       pages.push({
         route: p.route, title: ir.title,
         section_count: sectionCount, widget_count: widgetCount,
-        pixel_match: pixel,
+        pixel_match: null,
         status: flaggedRoutes.has(p.route) ? 'flagged' : 'verified',
+        screenshot_path: existsSync(shotPath) ? shotPath : undefined,
+        slug,
       });
     }
     await emit({ stage: 'verify', status: 'verifying', message: `Route checks ${structure.routeChecks.passed}/${structure.routeChecks.total}`, pages });
