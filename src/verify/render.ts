@@ -179,12 +179,31 @@ export async function renderAndDiff(
     const port = 4173 + Math.floor(Math.random() * 400); // avoid collisions across runs
     const server = spawn(viteBin, [...viteBaseArgs, '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
       { cwd: siteDir, env: process.env });
+    // capture Vite's own errors — this is where the 500 transform failure is printed
+    let viteLog = '';
+    server.stdout?.on('data', (d) => { viteLog += d; });
+    server.stderr?.on('data', (d) => { viteLog += d; });
 
     const results: RenderResult[] = [];
     try {
       const ready = await waitForServer(`http://127.0.0.1:${port}/`, Math.min(30000, deadline - Date.now()));
       if (!ready) { console.error('[render] dev server did not become ready in time'); return dashes(routes, 'dev server did not start in time'); }
       console.log(`[render] dev server ready on ${port}`);
+
+      // DIAGNOSTIC: fetch the first page's module directly to see the REAL 500 error.
+      try {
+        const probe = await fetch(`http://127.0.0.1:${port}/src/main.tsx`);
+        if (!probe.ok) {
+          const body = (await probe.text()).slice(0, 600);
+          console.error(`[render] main.tsx transform ${probe.status}: ${body}`);
+        }
+        const firstSlug = routes[0]?.slug;
+        if (firstSlug) {
+          const pf = await fetch(`http://127.0.0.1:${port}/`);
+          if (!pf.ok) console.error(`[render] index ${pf.status}: ${(await pf.text()).slice(0, 400)}`);
+        }
+      } catch (e) { console.error('[render] probe failed:', (e as Error).message); }
+      if (viteLog.trim()) console.error(`[render] VITE LOG: ${viteLog.slice(0, 800)}`);
 
       const browser = await chromium.launch({
         ...(CHROME ? { executablePath: CHROME } : {}),
