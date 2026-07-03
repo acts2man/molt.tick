@@ -15,7 +15,8 @@
 // ---------- capture (crawler output) ----------
 
 export interface CaptureManifest {
-  site: string;                 // origin, e.g. https://soul2soulsjazz.com
+  site: string;
+  corePages?: string[];   // routes that came from the real nav menu (core, not blog posts)                 // origin, e.g. https://soul2soulsjazz.com
   crawledAt: string;            // ISO timestamp
   discovery: 'sitemap' | 'nav-bfs' | 'mixed';
   pages: PageCapture[];

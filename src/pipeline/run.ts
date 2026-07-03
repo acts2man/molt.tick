@@ -150,18 +150,30 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     // ---- Stage 5b: render + pixel-diff (heavy but resilient; never fails the run) ----
     // On by default; set MOLT_SKIP_RENDER=1 to disable. renderAndDiff is wrapped
     // so any failure returns dashes rather than throwing.
+    // TIERING: only pixel-render CORE pages (the site's real nav pages), not
+    // every blog post — faster, focused, and avoids blog posts bogging the build.
     const pixelBySlug = new Map<string, number | null>();
     if (process.env.MOLT_SKIP_RENDER !== '1') {
-      await emit({ stage: 'verify', status: 'verifying', message: 'Rendering pages for pixel-diff…' });
+      await emit({ stage: 'verify', status: 'verifying', message: 'Rendering core pages for pixel-diff…' });
       try {
-        const renderRoutes = manifest.pages.map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
+        const coreRoutes = new Set(manifest.corePages ?? manifest.pages.map((p) => p.route));
+        const renderRoutes = manifest.pages
+          .filter((p) => coreRoutes.has(p.route))
+          .map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
+        console.log(`[pipeline] pixel-rendering ${renderRoutes.length} core page(s) of ${manifest.pages.length} total`);
         const rendered = await renderAndDiff(outDir, captureDir, renderRoutes);
         for (const r of rendered) pixelBySlug.set(r.slug, r.pixelMatch);
         const scored = rendered.filter((r) => r.pixelMatch !== null).length;
-        await emit({ stage: 'verify', status: 'verifying', message: `Pixel-diff: ${scored}/${rendered.length} pages scored` });
+        // VISIBILITY: if nothing scored, log WHY (the render notes) — loudly.
+        if (scored === 0 && rendered.length > 0) {
+          const reasons = [...new Set(rendered.map((r) => r.note).filter(Boolean))];
+          console.error(`[pipeline] PIXEL RENDER PRODUCED 0 SCORES. reason(s): ${reasons.join(' | ') || '(no note)'}`);
+        } else {
+          console.log(`[pipeline] pixel-diff: ${scored}/${rendered.length} core pages scored`);
+        }
+        await emit({ stage: 'verify', status: 'verifying', message: `Pixel-diff: ${scored}/${renderRoutes.length} core pages scored` });
       } catch (e) {
-        // belt-and-suspenders: renderAndDiff already never throws, but guard anyway
-        console.error('[pipeline] render step skipped:', (e as Error).message);
+        console.error('[pipeline] render step threw (unexpected):', (e as Error).message, (e as Error).stack);
       }
     }
 

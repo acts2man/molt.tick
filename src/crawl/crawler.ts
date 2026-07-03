@@ -526,8 +526,16 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   await context.close();
   await browser.close();
 
+  // core = pages that came from the real nav menu (routes normalized).
+  const coreRouteSet = new Set<string>();
+  for (const u of menuSet) {
+    try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* skip */ }
+  }
+  const corePages = pages.map((p) => p.route).filter((r) => coreRouteSet.has(r));
+
   const manifest: CaptureManifest = {
     site: origin,
+    corePages: corePages.length ? corePages : undefined,
     crawledAt: new Date().toISOString(),
     discovery,
     pages,

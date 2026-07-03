@@ -160,11 +160,14 @@ export async function renderAndDiff(
         }
         viteBin = join(prebaked, '.bin', 'vite');
         viteBaseArgs = [];
-      } catch { /* fall through to install */ }
+        console.log(`[render] using pre-baked deps at ${prebaked}`);
+      } catch (e) { console.error('[render] symlink failed, will npm install:', (e as Error).message); }
+    } else {
+      console.log(`[render] no pre-baked deps at ${prebaked} — falling back to npm install`);
     }
     if (viteBin === 'npx') {
       const inst = await run('npm', ['install', '--no-audit', '--no-fund'], siteDir, 120000);
-      if (inst.code !== 0) return dashes(routes, 'npm install failed');
+      if (inst.code !== 0) { console.error('[render] npm install FAILED:', inst.out.slice(-400)); return dashes(routes, 'npm install failed'); }
     }
 
     // DEV server — no production build. Starts fast; serves routes on demand.
@@ -175,7 +178,8 @@ export async function renderAndDiff(
     const results: RenderResult[] = [];
     try {
       const ready = await waitForServer(`http://127.0.0.1:${port}/`, Math.min(30000, deadline - Date.now()));
-      if (!ready) return dashes(routes, 'dev server did not start in time');
+      if (!ready) { console.error('[render] dev server did not become ready in time'); return dashes(routes, 'dev server did not start in time'); }
+      console.log(`[render] dev server ready on ${port}`);
 
       const browser = await chromium.launch({
         ...(CHROME ? { executablePath: CHROME } : {}),
