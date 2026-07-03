@@ -17,6 +17,7 @@ import { normalizePage } from '../normalize/elementor.js';
 import { buildPlan, type PlanInput } from '../plan/plan.js';
 import { synthesize } from '../synth/synthesize.js';
 import { verifyStructure } from '../verify/structure.js';
+import { renderAndDiff } from '../verify/render.js';
 import { comparePixels } from '../verify/pixel.js';
 import type {
   CaptureManifest, ComputedEntry, PageIR, MigrationPlan,
@@ -108,6 +109,7 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     const planInputs: PlanInput[] = [];
     const irByRoute = new Map<string, PageIR>();
     const computedByRoute = new Map<string, ComputedEntry[]>();
+    const domByRoute = new Map<string, string>();
     for (const p of manifest.pages) {
       const slug = p.files.dom.split('/')[0];
       const ir = await normalizePage(join(captureDir, slug, 'page.html'), join(captureDir, slug, 'computed.json'));
@@ -117,6 +119,7 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       planInputs.push({ route: p.route, ir, dom, computed });
       irByRoute.set(p.route, ir);
       computedByRoute.set(p.route, computed);
+      domByRoute.set(p.route, dom);
     }
     await emit({ stage: 'normalize', status: 'normalizing', message: `Normalized ${planInputs.length} pages` });
 
@@ -135,23 +138,42 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     // ---- Stage 4: synthesize ----
     await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Synthesizing React project…' });
     const synthPages = manifest.pages.map((p) => ({
-      route: p.route, ir: irByRoute.get(p.route)!, computed: computedByRoute.get(p.route)!,
+      route: p.route, ir: irByRoute.get(p.route)!, computed: computedByRoute.get(p.route)!, dom: domByRoute.get(p.route),
     }));
-    await synthesize({ plan, pages: synthPages, outDir, projectName: outputRepo });
+    await synthesize({ plan, pages: synthPages, outDir, projectName: outputRepo, siteUrl });
     await emit({ stage: 'synthesize', status: 'synthesizing', message: 'React project emitted' });
 
     // ---- Stage 5: verify ----
     await emit({ stage: 'verify', status: 'verifying', message: 'Verifying output…' });
     const structure = await verifyStructure(outDir, plan);
 
-    // build per-page results; pixel_match filled where a render screenshot exists
+    // ---- Stage 5b: render + pixel-diff (heavy but resilient; never fails the run) ----
+    // On by default; set MOLT_SKIP_RENDER=1 to disable. renderAndDiff is wrapped
+    // so any failure returns dashes rather than throwing.
+    const pixelBySlug = new Map<string, number | null>();
+    if (process.env.MOLT_SKIP_RENDER !== '1') {
+      await emit({ stage: 'verify', status: 'verifying', message: 'Rendering pages for pixel-diff…' });
+      try {
+        const renderRoutes = manifest.pages.map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
+        const rendered = await renderAndDiff(outDir, captureDir, renderRoutes);
+        for (const r of rendered) pixelBySlug.set(r.slug, r.pixelMatch);
+        const scored = rendered.filter((r) => r.pixelMatch !== null).length;
+        await emit({ stage: 'verify', status: 'verifying', message: `Pixel-diff: ${scored}/${rendered.length} pages scored` });
+      } catch (e) {
+        // belt-and-suspenders: renderAndDiff already never throws, but guard anyway
+        console.error('[pipeline] render step skipped:', (e as Error).message);
+      }
+    }
+
+    // build per-page results; pixel_match from the render step (or null → "—")
     const flaggedRoutes = new Set(plan.flags.map((f) => f.page.split(' ')[0]));
     const pages: PageResult[] = [];
     for (const p of manifest.pages) {
       const ir = irByRoute.get(p.route)!;
+      const slug = p.files.dom.split('/')[0];
       const sectionCount = ir.sections.length;
       const widgetCount = ir.sections.reduce((n, s) => n + s.columns.reduce((m, c) => m + c.widgets.length, 0), 0);
-      const pixel = await tryPixel(captureDir, outDir, p.files.dom.split('/')[0]);
+      const pixel = pixelBySlug.has(slug) ? pixelBySlug.get(slug)! : await tryPixel(captureDir, outDir, slug);
       pages.push({
         route: p.route, title: ir.title,
         section_count: sectionCount, widget_count: widgetCount,

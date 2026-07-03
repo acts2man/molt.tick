@@ -12,19 +12,37 @@
  *  - widget/section/route names are stable and human-editable
  */
 
+import { parse } from 'node-html-parser';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   MigrationPlan, PageIR, SectionIR, WidgetIR, ComputedEntry,
 } from '../ir/types.js';
 import { LIBRARY } from '../plan/library.js';
-import { classesFor, hasRuntimeTransform } from './styles.js';
+import { classesFor, hasRuntimeTransform, resolveClassesVsParent } from './styles.js';
 
 export interface SynthInput {
   plan: MigrationPlan;
-  pages: { route: string; ir: PageIR; computed: ComputedEntry[] }[];
+  pages: { route: string; ir: PageIR; computed: ComputedEntry[]; dom?: string }[];
   outDir: string;
   projectName?: string;
+  siteUrl?: string;   // origin for absolutizing relative asset URLs
+}
+
+/** Make a relative asset URL absolute against the site origin so images load. */
+function absolutize(url: string, origin: string | undefined): string {
+  if (!url || !origin) return url;
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:')) return url; // already absolute
+  try { return new URL(url, origin).toString(); } catch { return url; }
+}
+
+/** Rewrite src=/href= asset refs inside a captured-HTML string to absolute URLs. */
+function absolutizeHtml(html: string, origin: string | undefined): string {
+  if (!origin) return html;
+  return html.replace(/(src|href)=("|\\")([^"\\]+)(\2)/g, (m, attr, q, val) => {
+    if (/\.(jpe?g|png|webp|gif|svg|avif)(\?|$)/i.test(val)) return `${attr}=${q}${absolutize(val, origin)}${q}`;
+    return m;
+  });
 }
 
 const routeToFile = (route: string) =>
@@ -37,6 +55,34 @@ function sidecar(computed: ComputedEntry[]): Map<string, ComputedEntry> {
   const m = new Map<string, ComputedEntry>();
   for (const e of computed) if (e.elementorId && !m.has(e.elementorId)) m.set(e.elementorId, e);
   return m;
+}
+
+// path-indexed sidecar: lets us find an element's PARENT (path minus last segment)
+// so inherited styles that match the parent aren't re-emitted (cascade fix).
+function pathIndex(computed: ComputedEntry[]): Map<string, ComputedEntry> {
+  const m = new Map<string, ComputedEntry>();
+  for (const e of computed) if (e.path) m.set(e.path, e);
+  return m;
+}
+
+/** Nearest ancestor style for an entry, walking up the dot-path until one is found. */
+function parentStyleOf(entry: ComputedEntry | undefined, byPath: Map<string, ComputedEntry>): Record<string, string> | undefined {
+  if (!entry?.path) return undefined;
+  const segs = entry.path.split('.');
+  for (let i = segs.length - 1; i > 0; i--) {
+    const p = byPath.get(segs.slice(0, i).join('.'));
+    if (p) return p.style;
+  }
+  return undefined;
+}
+
+/** Classes for an element, diffed against its parent so inherited values don't bleed. */
+function classesForVsParent(
+  entry: ComputedEntry | undefined,
+  byPath: Map<string, ComputedEntry>,
+): string {
+  if (!entry) return '';
+  return resolveClassesVsParent(entry.style, parentStyleOf(entry, byPath)).join(' ');
 }
 
 // ------------------------------------------------------------ widget → JSX
@@ -52,35 +98,46 @@ function resolveHref(href: string, routes: Set<string>): string {
   return '#'; // unresolved internal link — collapsed, not a 404
 }
 
-function widgetJSX(w: WidgetIR, sc: Map<string, ComputedEntry>, matched: Set<string>, routes: Set<string>): string {
-  const cls = classesFor(sc.get(w.id));
+function widgetJSX(
+  w: WidgetIR, sc: Map<string, ComputedEntry>, matched: Set<string>,
+  routes: Set<string>, captured: Map<string, string>, byPath: Map<string, ComputedEntry>,
+): string {
+  const cls = classesForVsParent(sc.get(w.id), byPath);
   const c = cls ? ` className="${cls}"` : '';
+  // faithful passthrough: the widget's actual captured HTML, keyed by elementor id
+  const passthrough = (label: string, comp?: string) => {
+    if (comp) matched.add(comp);
+    const html = captured.get(w.id);
+    if (html) {
+      return `      <div${c} data-molt="${label}" dangerouslySetInnerHTML={{ __html: ${JSON.stringify(absolutizeHtml(html, SITE_ORIGIN))} }} />`;
+    }
+    return comp
+      ? `      <${comp} />  {/* ${label} — captured HTML unavailable, stub */}`
+      : `      {/* ${label} — no captured content */}`;
+  };
   switch (w.type) {
     case 'heading':
       return `      <${w.tag}${c}>${escape(w.text)}</${w.tag}>`;
     case 'text':
       return `      <div${c} dangerouslySetInnerHTML={{ __html: ${JSON.stringify(w.html)} }} />`;
     case 'image':
-      return `      <img src="${w.src}"${w.alt ? ` alt="${escape(w.alt)}"` : ' alt=""'}${w.width ? ` width={${w.width}}` : ''}${w.height ? ` height={${w.height}}` : ''}${c} />`;
+      return `      <img src="${absolutize(w.src, SITE_ORIGIN)}"${w.alt ? ` alt="${escape(w.alt)}"` : ' alt=""'}${w.width ? ` width={${w.width}}` : ''}${w.height ? ` height={${w.height}}` : ''}${c} />`;
     case 'button': {
       const href = resolveHref(w.href, routes);
       return `      <a href="${href}"${c}>${escape(w.text)}</a>`;
     }
     case 'gallery':
-      matched.add('GalleryWithLightbox');
-      return `      <GalleryWithLightbox />  {/* images from ordered manifest — DOM order is authority */}`;
+      return passthrough('gallery', 'GalleryWithLightbox');
     case 'form':
-      matched.add('MailingListForm');
-      return `      <MailingListForm />  {/* TODO(backend): wire real submit */}`;
+      return passthrough('form', 'MailingListForm');
     case 'embed': {
       const prov = /mixcloud/.test(w.iframe.src) ? 'mixcloud' : 'embed';
-      if (prov === 'mixcloud') { matched.add('MixcloudPlayer'); return `      <MixcloudPlayer src="${w.iframe.src}" />`; }
+      if (prov === 'mixcloud') { matched.add('MixcloudPlayer'); }
       return `      <iframe src="${w.iframe.src}" className="w-full" loading="lazy" />`;
     }
     case 'plugin': {
       const lib = LIBRARY[w.widgetType];
-      if (lib) { matched.add(lib.component); return `      <${lib.component} />  {/* ${w.widgetType} → proven library component */}`; }
-      return `      {/* FLAG: unconverted widget "${w.widgetType}" — needs a human call */}`;
+      return passthrough(w.widgetType, lib?.component);
     }
     default:
       return '';
@@ -91,20 +148,40 @@ function escape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 }
 
-function sectionJSX(s: SectionIR, sc: Map<string, ComputedEntry>, matched: Set<string>, routes: Set<string>): string {
-  const cls = classesFor(sc.get(s.id));
+function sectionJSX(
+  s: SectionIR, sc: Map<string, ComputedEntry>, matched: Set<string>,
+  routes: Set<string>, captured: Map<string, string>, byPath: Map<string, ComputedEntry>,
+): string {
+  const cls = classesForVsParent(sc.get(s.id), byPath);
   const runtime = hasRuntimeTransform(sc.get(s.id));
   const note = runtime ? ` /* runtime transform captured live — see sidecar */` : '';
   const inner = s.columns.flatMap((col) =>
-    col.widgets.map((w) => widgetJSX(w, sc, matched, routes)),
+    col.widgets.map((w) => widgetJSX(w, sc, matched, routes, captured, byPath)),
   ).filter(Boolean).join('\n');
   return `    <section data-mid="${s.id}" className="${cls}">${note}\n${inner}\n    </section>`;
 }
 
+/** Build elementorId → outerHTML from a captured page DOM (faithful passthrough source). */
+function capturedHtmlMap(dom: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!dom) return map;
+  try {
+    const root = parse(dom);
+    for (const el of root.querySelectorAll('[data-id]')) {
+      const id = el.getAttribute('data-id');
+      if (id && !map.has(id)) map.set(id, el.innerHTML);
+    }
+  } catch { /* parse failure → empty map, falls back to stubs */ }
+  return map;
+}
+
 // ------------------------------------------------------------ emit
 
+let SITE_ORIGIN: string | undefined;
+
 export async function synthesize(input: SynthInput): Promise<{ files: string[]; components: string[] }> {
-  const { plan, pages, outDir, projectName = 'migrated-site' } = input;
+  const { plan, pages, outDir, projectName = 'migrated-site', siteUrl } = input;
+  SITE_ORIGIN = siteUrl ? (() => { try { return new URL(siteUrl).origin; } catch { return undefined; } })() : undefined;
   const chromeIds = new Set(plan.sharedChrome);
   const routeSet = new Set(plan.routes.map((r) => r.route));
   const matched = new Set<string>();
@@ -137,12 +214,14 @@ export async function synthesize(input: SynthInput): Promise<{ files: string[]; 
   // ---- shared chrome, built ONCE ----
   const chromeSample = pages[0];
   const scChrome = sidecar(chromeSample.computed);
+  const capChromePath = pathIndex(chromeSample.computed);
+  const capChrome = capturedHtmlMap(chromeSample.dom);
   const chromeSections = chromeSample.ir.sections.filter((s) => chromeIds.has(s.id));
   const headerSecs = chromeSections.filter((s) => plan.chrome.find((c) => c.id === s.id)?.label === 'header' || plan.chrome.find((c) => c.id === s.id)?.label === 'social-rail' || plan.chrome.find((c) => c.id === s.id)?.label === 'offcanvas');
   const footerSecs = chromeSections.filter((s) => plan.chrome.find((c) => c.id === s.id)?.label === 'footer');
 
-  const headerJSX = headerSecs.map((s) => sectionJSX(s, scChrome, matched, routeSet)).join('\n');
-  const footerJSX = footerSecs.map((s) => sectionJSX(s, scChrome, matched, routeSet)).join('\n');
+  const headerJSX = headerSecs.map((s) => sectionJSX(s, scChrome, matched, routeSet, capChrome, capChromePath)).join('\n');
+  const footerJSX = footerSecs.map((s) => sectionJSX(s, scChrome, matched, routeSet, capChrome, capChromePath)).join('\n');
 
   await write('src/components/SiteLayout.tsx',
 `import type { ReactNode } from 'react';
@@ -167,10 +246,12 @@ ${footerJSX || '        {/* footer chrome */}'}
   // ---- per-route page components + routes ----
   for (const p of pages) {
     const sc = sidecar(p.computed);
+    const scPath = pathIndex(p.computed);
+    const cap = capturedHtmlMap(p.dom);
     const comp = routeToComp(p.route);
     const body = p.ir.sections
       .filter((s) => !chromeIds.has(s.id))
-      .map((s) => sectionJSX(s, sc, matched, routeSet))
+      .map((s) => sectionJSX(s, sc, matched, routeSet, cap, scPath))
       .join('\n');
     await write(`src/routes/${routeToFile(p.route)}.tsx`,
 `import { createFileRoute } from '@tanstack/react-router';

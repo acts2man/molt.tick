@@ -47,6 +47,32 @@ const TEXT_ALIGN: Record<string, string> = {
   left: 'text-left', center: 'text-center', right: 'text-right', justify: 'text-justify',
 };
 
+/** CSS-inherited properties: only meaningful to emit when they DIFFER from the parent. */
+const INHERITED = new Set([
+  'color', 'font-family', 'font-size', 'font-weight', 'font-style',
+  'line-height', 'letter-spacing', 'text-align', 'text-transform', 'white-space',
+]);
+
+/**
+ * Resolve classes but drop inherited properties whose value equals the parent's —
+ * mirrors the real CSS cascade. Without this, getComputedStyle reports the
+ * inherited color/font on every child, so e.g. a hero's white text bleeds onto
+ * children in later light-background sections (white-on-white). This is the
+ * single biggest fidelity fix.
+ */
+export function resolveClassesVsParent(
+  style: Record<string, string>,
+  parentStyle: Record<string, string> | undefined,
+): string[] {
+  if (!parentStyle) return resolveClasses(style);
+  const effective: Record<string, string> = {};
+  for (const [k, v] of Object.entries(style)) {
+    if (INHERITED.has(k) && parentStyle[k] === v) continue; // same as parent → don't re-emit
+    effective[k] = v;
+  }
+  return resolveClasses(effective);
+}
+
 /** Resolve a computed style object into an ordered, de-duped Tailwind class list. */
 export function resolveClasses(style: Record<string, string>): string[] {
   const cls: string[] = [];

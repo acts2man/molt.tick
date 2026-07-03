@@ -13,12 +13,13 @@ for (const p of manifest.pages) {
   try {
     const ir = JSON.parse(await readFile(join(captureDir, slug, 'page.ir.json'), 'utf-8')) as PageIR;
     const computed = JSON.parse(await readFile(join(captureDir, slug, 'computed.json'), 'utf-8')) as ComputedEntry[];
+    const dom = await readFile(join(captureDir, slug, 'page.html'), 'utf-8');
     ir.route = p.route;
-    pages.push({ route: p.route, ir, computed });
+    pages.push({ route: p.route, ir, computed, dom });
   } catch { /* no IR — skip */ }
 }
 
-const result = await synthesize({ plan, pages, outDir, projectName: 'soul2souls-react' });
+const result = await synthesize({ plan, pages, outDir, projectName: 'soul2souls-react', siteUrl: manifest.site });
 console.log(`[molt] synthesize · ${result.files.length} files → ${outDir}`);
 console.log(`  routes: ${pages.length} · shared chrome: ${plan.sharedChrome.length} sections built once`);
 console.log(`  library components emitted: ${result.components.join(', ')}`);

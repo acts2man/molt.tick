@@ -135,13 +135,18 @@ export async function renderAndDiff(
   opts: { budgetMs?: number; concurrency?: number } = {},
 ): Promise<RenderResult[]> {
   const budgetMs = opts.budgetMs ?? Number(process.env.MOLT_RENDER_BUDGET_MS ?? 120000); // 2 min default
-  const concurrency = opts.concurrency ?? 4;
+  const concurrency = opts.concurrency ?? Number(process.env.MOLT_RENDER_CONCURRENCY ?? 2);
   const deadline = Date.now() + budgetMs;
 
   // Top-level guard: rendering must NEVER throw out of here — worst case it
   // returns dashes so the migration still completes.
+  // memory safety: on large sites, rendering every page can exhaust a small
+  // container. Render up to a cap; the rest get dashes (still a real sample).
+  const maxRender = Number(process.env.MOLT_RENDER_MAX ?? 12);
+  const toRender = routes.slice(0, maxRender);
+  const overflow = routes.slice(maxRender).map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'beyond render cap' }));
   try {
-    await scaffoldRunnable(siteDir, routes);
+    await scaffoldRunnable(siteDir, toRender);
 
     // Dependencies: pre-baked toolchain (zero install), else install fallback.
     const prebaked = process.env.MOLT_RENDER_DEPS ?? '/opt/molt-render/node_modules';
@@ -174,7 +179,8 @@ export async function renderAndDiff(
 
       const browser = await chromium.launch({
         ...(CHROME ? { executablePath: CHROME } : {}),
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+               '--single-process', '--no-zygote', '--js-flags=--max-old-space-size=256'],
       });
       await mkdir(join(siteDir, 'renders'), { recursive: true });
 
@@ -199,19 +205,19 @@ export async function renderAndDiff(
       };
 
       // parallel in batches; stop starting new batches once the budget is spent
-      for (let i = 0; i < routes.length; i += concurrency) {
+      for (let i = 0; i < toRender.length; i += concurrency) {
         if (Date.now() > deadline) {
-          for (const r of routes.slice(i)) results.push({ ...r, pixelMatch: null, rendered: false, note: 'render budget reached' });
+          for (const r of toRender.slice(i)) results.push({ ...r, pixelMatch: null, rendered: false, note: 'render budget reached' });
           break;
         }
-        const batch = routes.slice(i, i + concurrency);
+        const batch = toRender.slice(i, i + concurrency);
         results.push(...await Promise.all(batch.map(shoot)));
       }
       await browser.close().catch(() => {});
     } finally {
       server.kill('SIGKILL');
     }
-    return results;
+    return [...results, ...overflow];
   } catch (e) {
     return dashes(routes, 'render error: ' + (e as Error).message);
   }
