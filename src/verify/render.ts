@@ -204,6 +204,9 @@ export async function renderAndDiff(
       const shoot = async (r: { route: string; slug: string }): Promise<RenderResult> => {
         try {
           const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+          const consoleErrors: string[] = [];
+          page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200)); });
+          page.on('pageerror', (e) => consoleErrors.push('PAGEERROR: ' + e.message.slice(0, 200)));
           try {
             const url = faithful
               ? `http://127.0.0.1:${port}${r.route}`      // faithful: real router path
@@ -240,6 +243,9 @@ export async function renderAndDiff(
             })()`).catch(() => null) as { h: number; textLen: number; textSample: string; imgs: number; sections: number; bg: string } | null;
             if (diag) {
               console.log(`[render] ${r.route} DOM: height=${diag.h}px text=${diag.textLen}chars imgs=${diag.imgs} sections=${diag.sections} bg=${diag.bg} · "${diag.textSample}"`);
+            }
+            if (consoleErrors.length) {
+              console.error(`[render] ${r.route} JS ERRORS: ${consoleErrors.slice(0, 3).join(' || ')}`);
             }
             const shot = join(siteDir, 'renders', `${r.slug}.png`);
             const renderH = await page.evaluate(`document.documentElement.scrollHeight`).catch(() => 900) as number;
