@@ -32,6 +32,7 @@ export interface CrawlOptions {
   outDir: string;
   maxPages?: number;
   settleMs?: number; // extra wait after load for JS-applied styles to land
+  scope?: CrawlScope; // core | all | posts — which pages to actually capture
 }
 
 /** Accept a bare domain or full URL; always return a valid absolute URL. */
@@ -70,6 +71,28 @@ function isJunk(pathname: string): boolean {
 
 // "Real" listing pages worth keeping even though they're indexes.
 const KEEP_LISTINGS = /^\/(blog|shop|store|courses|events|services|portfolio|gallery|news|products?)\/?$/i;
+
+// A page is "post-like" (a blog article) when its slug reads like prose: many
+// hyphenated words. Real pages are short (/about, /contact, /shop); blog posts
+// are long sentence-slugs (/how-to-upgrade-your-old-house-roof-in-time).
+function isPostLike(pathname: string): boolean {
+  const seg = pathname.replace(/^\/|\/$/g, '');
+  if (!seg || seg.includes('/')) return false;      // home or nested → not a top-level post
+  const words = seg.split('-').length;
+  return words >= 4;                                  // 4+ hyphenated words = prose slug = post
+}
+
+export type CrawlScope = 'core' | 'all' | 'posts';
+
+/** Does a route pass the chosen scope filter? (nav-menu pages always count as core.) */
+function inScope(route: string, scope: CrawlScope, coreRoutes: Set<string>): boolean {
+  const isCore = coreRoutes.has(route) || (route === '/') || (!isPostLike(route) && KEEP_LISTINGS.test(route));
+  const post = isPostLike(route);
+  if (scope === 'all') return true;
+  if (scope === 'core') return isCore || (!post);     // core + non-post pages
+  if (scope === 'posts') return post;                 // only blog articles
+  return true;
+}
 
 /**
  * Score a URL by how likely it is to be a page a human considers part of the
@@ -453,7 +476,7 @@ async function capturePage(
 // ---------------------------------------------------------------- main
 
 export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
-  const { startUrl: rawUrl, outDir, maxPages = 25, settleMs = 600 } = opts;
+  const { startUrl: rawUrl, outDir, maxPages = 25, settleMs = 600, scope = 'core' } = opts;
   const startUrl = normalizeStartUrl(rawUrl);
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
@@ -500,9 +523,20 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
       .sort((a, b) => pageScore(new URL(a).pathname) - pageScore(new URL(b).pathname)),
   ];
   const discovery: CaptureManifest['discovery'] = menuSet.size > 0 ? 'nav-bfs' : 'sitemap';
-  const urls = [...new Set(ranked)].slice(0, maxPages);
 
-  console.log(`[molt] discovery: ${discovery} · ${menuSet.size} nav + ${sitemapPages.length} sitemap → ${urls.length} page(s) (junk filtered)`);
+  // apply SCOPE: core (nav + non-post pages), all (everything), posts (blog only).
+  // Build the core-route set from the nav menu for the filter.
+  const coreRouteSet = new Set<string>();
+  for (const u of menuSet) {
+    try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* skip */ }
+  }
+  const scoped = ranked.filter((u) => {
+    try { return inScope(new URL(u).pathname.replace(/\/$/, '') || '/', scope, coreRouteSet); }
+    catch { return true; }
+  });
+  const urls = [...new Set(scoped)].slice(0, maxPages);
+
+  console.log(`[molt] discovery: ${discovery} · scope=${scope} · ${menuSet.size} nav + ${sitemapPages.length} sitemap → ${urls.length} page(s) after scope+junk filter`);
 
   const pages: PageCapture[] = [];
   for (const url of urls) {
@@ -536,11 +570,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   await context.close();
   await browser.close();
 
-  // core = pages that came from the real nav menu (routes normalized).
-  const coreRouteSet = new Set<string>();
-  for (const u of menuSet) {
-    try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* skip */ }
-  }
+  // core = pages that came from the real nav menu (coreRouteSet built above).
   const corePages = pages.map((p) => p.route).filter((r) => coreRouteSet.has(r));
 
   const manifest: CaptureManifest = {

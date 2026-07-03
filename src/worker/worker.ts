@@ -43,6 +43,7 @@ interface MigrationRow {
   site_url: string;
   output_repo: string | null;
   status: string;
+  scope: string | null;   // core | all | posts (from the platform)
 }
 
 /**
@@ -53,7 +54,7 @@ interface MigrationRow {
 async function claimNext(db: SupabaseClient): Promise<MigrationRow | null> {
   const { data: candidates, error } = await db
     .from('migrations')
-    .select('id, site_url, output_repo, status')
+    .select('id, site_url, output_repo, status, scope')
     .eq('status', 'crawling')
     .order('created_at', { ascending: true })
     .limit(1);
@@ -67,7 +68,7 @@ async function claimNext(db: SupabaseClient): Promise<MigrationRow | null> {
     .update({ status: 'normalizing' })
     .eq('id', row.id)
     .eq('status', 'crawling')
-    .select('id, site_url, output_repo, status');
+    .select('id, site_url, output_repo, status, scope');
   if (claimErr) throw claimErr;
   if (!claimed || claimed.length === 0) return null; // another worker won the race
   return row;
@@ -109,6 +110,7 @@ export async function processMigration(db: SupabaseClient, row: MigrationRow, cf
     siteUrl: row.site_url,
     workDir,
     outputRepo: row.output_repo ?? undefined,
+    scope: (row.scope as 'core' | 'all' | 'posts' | null) ?? 'core',
     reuseCaptureDir: process.env.MOLT_REUSE_CAPTURE || undefined,
     onProgress: (e) => applyProgress(db, row.id, e),
   });

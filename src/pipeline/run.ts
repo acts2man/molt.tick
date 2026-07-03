@@ -12,7 +12,7 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { crawl, normalizeStartUrl } from '../crawl/crawler.js';
+import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
 import { normalizePage } from '../normalize/elementor.js';
 import { buildPlan, type PlanInput } from '../plan/plan.js';
 import { synthesize } from '../synth/synthesize.js';
@@ -72,6 +72,7 @@ export interface PipelineOptions {
   maxPages?: number;
   /** when set, skip crawl and reuse an existing capture dir (validation/dev) */
   reuseCaptureDir?: string;
+  scope?: CrawlScope;   // core | all | posts
   onProgress?: (e: ProgressEvent) => void | Promise<void>;
 }
 
@@ -82,7 +83,7 @@ const STATUS_FOR: Record<Stage, MigrationStatus> = {
 
 export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult> {
   const {
-    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo,
+    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo, scope = 'core',
     maxPages = 50, reuseCaptureDir, onProgress,
   } = opts;
   const siteUrl = normalizeStartUrl(rawSiteUrl);
@@ -100,7 +101,7 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       await emit({ stage: 'crawl', status: 'crawling', message: `Reusing capture (${manifest.pages.length} pages)` });
     } else {
       await emit({ stage: 'crawl', status: 'crawling', message: `Crawling ${siteUrl}…` });
-      manifest = await crawl({ startUrl: siteUrl, outDir: captureDir, maxPages });
+      manifest = await crawl({ startUrl: siteUrl, outDir: captureDir, maxPages, scope });
       await emit({ stage: 'crawl', status: 'crawling', message: `Captured ${manifest.pages.length} pages` });
     }
 
