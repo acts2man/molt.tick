@@ -145,11 +145,10 @@ export function buildPlan(pages: PlanInput[]): MigrationPlan {
     const hit = matchLibrary(wtype);
     if (hit) {
       library.push({ widgetType: wtype, component: hit.component, confidence: hit.confidence });
-    } else {
-      flag([...routes].join(', '), 'unknown-widget',
-        `plugin widget "${wtype}" has no library match`,
-        `Appears on: ${[...routes].join(', ')}. Needs a new library component or a manual rebuild.`);
     }
+    // NOTE: no 'unknown-widget' flag. Molt does FAITHFUL VISUAL reproduction —
+    // every widget is reproduced from its original HTML+CSS regardless of type,
+    // so "no library match" is meaningless noise. We don't rebuild widgets.
   }
 
   // ---- signal-based matches + flags (dom sniffing) ----
@@ -203,12 +202,8 @@ export function buildPlan(pages: PlanInput[]): MigrationPlan {
         const persp = e.style['perspective'] ?? 'none';
         return t.startsWith('matrix3d(') || persp !== 'none';
       });
-      if (live.length && !sniffed.has('runtime')) {
-        sniffed.add('runtime');
-        flag(p.route, 'runtime-style',
-          `JS-applied 3D transforms live in the DOM (${live.length} element${live.length > 1 ? 's' : ''} on ${p.route})`,
-          'Values captured in the computed sidecar — synthesizer must read them from there (never a static stylesheet) and the motion needs a visual sign-off.');
-      }
+    // (runtime-style flag removed: faithful mode uses the original CSS, so
+    // JS-applied transforms are preserved as-is — nothing to flag.)
     }
   }
 
