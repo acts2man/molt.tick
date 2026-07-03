@@ -17,7 +17,7 @@ import { normalizePage } from '../normalize/elementor.js';
 import { buildPlan, type PlanInput } from '../plan/plan.js';
 import { synthesizeFaithful } from '../synth/faithful.js';
 import { verifyStructure } from '../verify/structure.js';
-import { renderAndDiff } from '../verify/render.js';
+import { renderAndDiff, type RenderResult } from '../verify/render.js';
 import { comparePixels } from '../verify/pixel.js';
 import type {
   CaptureManifest, ComputedEntry, PageIR, MigrationPlan,
@@ -167,7 +167,14 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
           .filter((p) => coreRoutes.has(p.route))
           .map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
         console.log(`[pipeline] pixel-rendering ${renderRoutes.length} core page(s) of ${manifest.pages.length} total`);
-        const rendered = await renderAndDiff(outDir, captureDir, renderRoutes);
+        // HARD wall-clock cap on the whole render step — it can never hang the
+        // migration. If it exceeds this, we take dashes and move on.
+        const RENDER_WALL_MS = Number(process.env.MOLT_RENDER_WALL_MS ?? 180000); // 3 min
+        const timeoutDashes: RenderResult[] = renderRoutes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'render wall-clock timeout' }));
+        const rendered = await Promise.race([
+          renderAndDiff(outDir, captureDir, renderRoutes),
+          new Promise<RenderResult[]>((resolve) => setTimeout(() => resolve(timeoutDashes), RENDER_WALL_MS)),
+        ]);
         for (const r of rendered) pixelBySlug.set(r.slug, r.pixelMatch);
         const scored = rendered.filter((r) => r.pixelMatch !== null).length;
         const reasons = [...new Set(rendered.map((r) => r.note).filter(Boolean))] as string[];

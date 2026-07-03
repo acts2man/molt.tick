@@ -105,8 +105,12 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
     const rawHtml = await readFile(join(captureDir, cap.files.dom), 'utf-8');
     const doc = parse(rawHtml, { comment: false });
 
-    // strip scripts/noscript (visual only), and the yoast schema blob
-    for (const s of doc.querySelectorAll('script, noscript')) s.remove();
+    // strip nodes that break in-app rendering or trigger external fetches/hangs:
+    // scripts, the original stylesheet <link>s and <style> blocks (CSS is bundled
+    // separately), preloads, and http-equiv metas.
+    for (const s of doc.querySelectorAll(
+      'script, noscript, link[rel="stylesheet"], link[rel="preload"], link[rel="dns-prefetch"], link[rel="preconnect"], style, meta[http-equiv]'
+    )) s.remove();
 
     const body = doc.querySelector('body');
     const bodyClass = body?.getAttribute('class') ?? '';
