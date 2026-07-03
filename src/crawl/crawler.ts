@@ -84,14 +84,30 @@ function isPostLike(pathname: string): boolean {
 
 export type CrawlScope = 'core' | 'all' | 'posts';
 
+// theme demo / layout-variant pages that aren't real content (blog-standard,
+// portfolio-grid, portfolio-metro, typography, elements, etc.)
+const DEMO_PATTERNS = /^\/(blog|portfolio|shop|team|service|about|contact|home)?-?(standard|list|grid|metro|masonry|classic|modern|v\d|variant|layout|full-?width|sidebar|left|right|two|three|four|column|typography|elements?|shortcodes?|icons?|buttons?|popups?|newsletter|subscribe)\b/i;
+
+function isDemoPage(pathname: string): boolean {
+  return DEMO_PATTERNS.test(pathname);
+}
+
 /** Does a route pass the chosen scope filter? (nav-menu pages always count as core.) */
-function inScope(route: string, scope: CrawlScope, coreRoutes: Set<string>): boolean {
-  const isCore = coreRoutes.has(route) || (route === '/') || (!isPostLike(route) && KEEP_LISTINGS.test(route));
+function inScope(route: string, scope: CrawlScope, coreRoutes: Set<string>, haveNav: boolean): boolean {
   const post = isPostLike(route);
+  const demo = isDemoPage(route);
+  // when the real nav menu is known, "core" = exactly those pages.
+  // when nav is unknown (haveNav=false), fall back to a STRICT heuristic:
+  //   home + short real slugs, excluding posts and theme-demo pages.
+  const isCore = coreRoutes.has(route)
+    || route === '/'
+    || (!post && !demo && (KEEP_LISTINGS.test(route) || route.replace(/^\/|\/$/g, '').split('-').length <= 2));
+
   if (scope === 'all') return true;
-  if (scope === 'core') return isCore || (!post);     // core + non-post pages
-  if (scope === 'posts') return post;                 // only blog articles
-  return true;
+  if (scope === 'posts') return post;
+  // scope === 'core'
+  if (haveNav) return coreRoutes.has(route) || route === '/';  // nav known → trust it exactly
+  return isCore && !demo;                                       // no nav → strict heuristic
 }
 
 /**
@@ -128,16 +144,36 @@ function normalizeUrl(raw: string, origin: string, allowJunk = false): string | 
 /** Extract the real navigation menu links from the homepage header/nav. */
 async function discoverViaMenu(page: Page, origin: string, startUrl: string): Promise<string[]> {
   try {
-    const resp = await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    const resp = await page.goto(startUrl, { waitUntil: 'load', timeout: 25000 });
     if (resp && resp.status() >= 400) return [];
-    // prefer links inside <nav>/<header>/menu containers — the actual site menu
+    await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(800); // let menu JS populate
+
+    // Grab links from real menu containers. Covers standard nav, WordPress menu
+    // classes, and off-canvas/hamburger menus (elementskit, etc.) that are in the
+    // DOM even when visually collapsed. Score each container by how "menu-like"
+    // it is and take links from the best one, so we don't grab every page link.
     const hrefs: string[] = await page.evaluate(
       `(() => {
-        const sel = 'header a[href], nav a[href], [class*="menu"] a[href], [class*="nav"] a[href]';
-        const menu = Array.from(document.querySelectorAll(sel)).map(a => a.href);
-        return menu.length ? menu : Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
+        const SELECTORS = [
+          'nav[class*="menu"] a[href]', 'nav a[href]',
+          '[class*="main-menu"] a[href]', '[class*="primary-menu"] a[href]',
+          '[class*="nav-menu"] a[href]', 'ul[class*="menu"] a[href]',
+          '[class*="offcanvas"] a[href]', '[class*="off-canvas"] a[href]',
+          '[id*="menu"] a[href]', 'header nav a[href]', 'header a[href]',
+        ];
+        for (const sel of SELECTORS) {
+          const links = Array.from(document.querySelectorAll(sel))
+            .map(a => a.href)
+            .filter(h => h && !h.startsWith('javascript:') && !h.startsWith('#'));
+          // a real menu has a handful of links, not the whole site and not just one
+          const uniq = Array.from(new Set(links));
+          if (uniq.length >= 2 && uniq.length <= 25) return uniq;
+        }
+        return []; // no clear menu found — caller falls back to sitemap
       })()`,
     ) as string[];
+
     const out: string[] = [];
     for (const h of hrefs) {
       const n = normalizeUrl(h, origin);
@@ -531,7 +567,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
     try { coreRouteSet.add(new URL(u).pathname.replace(/\/$/, '') || '/'); } catch { /* skip */ }
   }
   const scoped = ranked.filter((u) => {
-    try { return inScope(new URL(u).pathname.replace(/\/$/, '') || '/', scope, coreRouteSet); }
+    try { return inScope(new URL(u).pathname.replace(/\/$/, '') || '/', scope, coreRouteSet, menuSet.size > 0); }
     catch { return true; }
   });
   const urls = [...new Set(scoped)].slice(0, maxPages);
