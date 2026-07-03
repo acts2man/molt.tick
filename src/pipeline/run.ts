@@ -153,6 +153,7 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     // TIERING: only pixel-render CORE pages (the site's real nav pages), not
     // every blog post — faster, focused, and avoids blog posts bogging the build.
     const pixelBySlug = new Map<string, number | null>();
+    let renderDiagnostic: FlagResult | null = null;
     if (process.env.MOLT_SKIP_RENDER !== '1') {
       await emit({ stage: 'verify', status: 'verifying', message: 'Rendering core pages for pixel-diff…' });
       try {
@@ -164,18 +165,39 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
         const rendered = await renderAndDiff(outDir, captureDir, renderRoutes);
         for (const r of rendered) pixelBySlug.set(r.slug, r.pixelMatch);
         const scored = rendered.filter((r) => r.pixelMatch !== null).length;
-        // VISIBILITY: if nothing scored, log WHY (the render notes) — loudly.
+        const reasons = [...new Set(rendered.map((r) => r.note).filter(Boolean))] as string[];
         if (scored === 0 && rendered.length > 0) {
-          const reasons = [...new Set(rendered.map((r) => r.note).filter(Boolean))];
-          console.error(`[pipeline] PIXEL RENDER PRODUCED 0 SCORES. reason(s): ${reasons.join(' | ') || '(no note)'}`);
+          const detail = reasons.length ? reasons.join(' | ') : '(no reason captured)';
+          console.error(`[pipeline] PIXEL RENDER PRODUCED 0 SCORES. reason(s): ${detail}`);
+          // SURFACE TO DASHBOARD: appears in "Needs your call" so the reason is visible in-app.
+          renderDiagnostic = {
+            page_route: '(pixel render)', kind: 'render-diagnostic',
+            summary: `Pixel render produced no scores (${rendered.length} core pages tried)`,
+            detail: `Reason(s): ${detail}`,
+          };
         } else {
           console.log(`[pipeline] pixel-diff: ${scored}/${rendered.length} core pages scored`);
+          if (scored < rendered.length && reasons.length) {
+            renderDiagnostic = {
+              page_route: '(pixel render)', kind: 'render-diagnostic',
+              summary: `Pixel render partial: ${scored}/${rendered.length} core pages scored`,
+              detail: `Some pages didn't score. Reason(s): ${reasons.join(' | ')}`,
+            };
+          }
         }
         await emit({ stage: 'verify', status: 'verifying', message: `Pixel-diff: ${scored}/${renderRoutes.length} core pages scored` });
       } catch (e) {
-        console.error('[pipeline] render step threw (unexpected):', (e as Error).message, (e as Error).stack);
+        const detail = `${(e as Error).message}`;
+        console.error('[pipeline] render step threw (unexpected):', detail, (e as Error).stack);
+        renderDiagnostic = {
+          page_route: '(pixel render)', kind: 'render-diagnostic',
+          summary: 'Pixel render crashed unexpectedly',
+          detail,
+        };
       }
     }
+    // fold the diagnostic into the flag list shown on the dashboard
+    if (renderDiagnostic) flags.push(renderDiagnostic);
 
     // build per-page results; pixel_match from the render step (or null → "—")
     const flaggedRoutes = new Set(plan.flags.map((f) => f.page.split(' ')[0]));
