@@ -140,7 +140,7 @@ export async function renderAndDiff(
   opts: { budgetMs?: number; concurrency?: number } = {},
 ): Promise<RenderResult[]> {
   const budgetMs = opts.budgetMs ?? Number(process.env.MOLT_RENDER_BUDGET_MS ?? 120000); // 2 min default
-  const concurrency = opts.concurrency ?? Number(process.env.MOLT_RENDER_CONCURRENCY ?? 2);
+  const concurrency = opts.concurrency ?? Number(process.env.MOLT_RENDER_CONCURRENCY ?? 1);
   const deadline = Date.now() + budgetMs;
 
   // Top-level guard: rendering must NEVER throw out of here — worst case it
@@ -190,7 +190,12 @@ export async function renderAndDiff(
         ...(CHROME ? { executablePath: CHROME } : {}),
         // NOTE: do NOT add --single-process / --no-zygote here — they crash
         // Chromium in the Railway container ("Target ... has been closed").
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        // These give big faithful pages (300KB+ HTML) enough headroom not to crash.
+        args: [
+          '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+          '--disable-gpu', '--disable-software-rasterizer',
+          '--js-flags=--max-old-space-size=512',
+        ],
       });
       await mkdir(join(siteDir, 'renders'), { recursive: true });
 
@@ -203,8 +208,10 @@ export async function renderAndDiff(
             const url = faithful
               ? `http://127.0.0.1:${port}${r.route}`      // faithful: real router path
               : `http://127.0.0.1:${port}/?route=${r.slug}`; // old preview scaffold
-            await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
-            await page.waitForTimeout(400);
+            // domcontentloaded (not networkidle): render what's there without
+            // waiting on network — big pages + stripped external refs crashed on idle.
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.waitForTimeout(1200); // let CSS paint + images begin
             const shot = join(siteDir, 'renders', `${r.slug}.png`);
             await page.screenshot({ path: shot, fullPage: true });
             const original = join(captureDir, r.slug, 'original.png');
