@@ -11,6 +11,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { shipToLovable } from '../ship/ship.js';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
@@ -26,7 +27,7 @@ import type {
 
 export type Stage = 'crawl' | 'normalize' | 'plan' | 'synthesize' | 'verify' | 'ship';
 export type MigrationStatus =
-  | 'crawling' | 'normalizing' | 'planning' | 'synthesizing' | 'verifying' | 'review' | 'shipped' | 'error';
+  | 'crawling' | 'normalizing' | 'planning' | 'synthesizing' | 'verifying' | 'shipping' | 'review' | 'shipped' | 'error';
 
 export interface ProgressEvent {
   stage: Stage;
@@ -77,6 +78,7 @@ export interface PipelineOptions {
   reuseCaptureDir?: string;
   scope?: CrawlScope;   // core | all | posts
   urls?: string[];      // explicit page list (skips discovery)
+  shipRepo?: string;    // owner/name of a Lovable repo to push into
   onProgress?: (e: ProgressEvent) => void | Promise<void>;
 }
 
@@ -87,7 +89,7 @@ const STATUS_FOR: Record<Stage, MigrationStatus> = {
 
 export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult> {
   const {
-    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo, scope = 'core', urls: explicitUrls,
+    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo, scope = 'core', urls: explicitUrls, shipRepo: shipRepoOpt,
     maxPages = 50, reuseCaptureDir, onProgress,
   } = opts;
   const siteUrl = normalizeStartUrl(rawSiteUrl);
@@ -182,6 +184,27 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       });
     }
     await emit({ stage: 'verify', status: 'verifying', message: `Route checks ${structure.routeChecks.passed}/${structure.routeChecks.total}`, pages });
+
+    // ---- Stage 6: ship (push into a Lovable repo, if one is configured) ----
+    const shipRepo = shipRepoOpt ?? process.env.MOLT_SHIP_REPO;
+    if (shipRepo) {
+      await emit({ stage: 'ship', status: 'shipping', message: `Pushing to ${shipRepo}…` });
+      const shipped = await shipToLovable({
+        repo: shipRepo, outDir,
+        commitMessage: `Molt — faithful migration of ${siteUrl}`,
+      });
+      if (shipped.pushed) {
+        console.log(`[pipeline] shipped ${shipped.filesPushed} files to ${shipRepo}@${shipped.branch} (${shipped.commit?.slice(0, 7)})`);
+        await emit({ stage: 'ship', status: 'shipping', message: `Pushed ${shipped.filesPushed} files to ${shipRepo} — Lovable will sync shortly` });
+      } else {
+        console.error(`[pipeline] ship failed: ${shipped.error}`);
+        flags.push({
+          page_route: '(ship)', kind: 'no-backend',
+          summary: `Push to ${shipRepo} failed`,
+          detail: shipped.error ?? 'unknown error',
+        });
+      }
+    }
 
     // ---- done → review ----
     const assets = manifest.pages.reduce((n, p) => n + p.stats.assets, 0);
