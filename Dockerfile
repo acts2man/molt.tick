@@ -3,9 +3,19 @@
 # "just work" on a server instead of fighting missing libs.
 FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 
+# --- pre-baked render toolchain (Step 1) ---------------------------------
+# The pixel-render step builds each synthesized site. Installing React/Vite/
+# Tailwind per migration costs minutes. Instead we install them ONCE here into
+# /opt/molt-render; render.ts symlinks this node_modules into each generated
+# project, so migrations do zero npm install.
+WORKDIR /opt/molt-render
+COPY render-toolchain/package.json ./package.json
+RUN npm install --no-audit --no-fund
+
+# --- the engine ----------------------------------------------------------
 WORKDIR /app
 
-# install deps first (better layer caching)
+# install engine deps first (better layer caching)
 COPY package.json package-lock.json ./
 RUN npm ci
 

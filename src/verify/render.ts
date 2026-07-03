@@ -80,15 +80,17 @@ const slug = new URLSearchParams(location.search).get('route') ?? '${routes[0]?.
 createRoot(document.getElementById('root')!).render(screens[slug] ?? <div>unknown route</div>);
 `);
 
-  // ensure deps present for a build
+  // ensure deps present for a build — versions PINNED to the pre-baked
+  // toolchain (render-toolchain/package.json) so the symlinked node_modules
+  // resolves cleanly with no install.
   const pkgPath = join(siteDir, 'package.json');
   const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
-  pkg.dependencies = { ...pkg.dependencies, react: '^18.3.0', 'react-dom': '^18.3.0' };
+  pkg.dependencies = { ...pkg.dependencies, react: '18.3.1', 'react-dom': '18.3.1' };
   pkg.devDependencies = {
     ...pkg.devDependencies,
-    '@vitejs/plugin-react': '^4.3.0', vite: '^5.4.0',
-    tailwindcss: '^3.4.0', autoprefixer: '^10.4.0', postcss: '^8.4.0',
-    '@types/react': '^18.3.0', '@types/react-dom': '^18.3.0',
+    '@vitejs/plugin-react': '4.3.3', vite: '5.4.10',
+    tailwindcss: '3.4.14', autoprefixer: '10.4.20', postcss: '8.4.47',
+    '@types/react': '18.3.12', '@types/react-dom': '18.3.1',
   };
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
 
@@ -115,16 +117,35 @@ export async function renderAndDiff(
 ): Promise<RenderResult[]> {
   await scaffoldRunnable(siteDir, routes);
 
-  // install + build
-  const inst = await run('npm', ['install', '--no-audit', '--no-fund'], siteDir, 180000);
-  if (inst.code !== 0) return routes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'npm install failed' }));
-  const build = await run('npx', ['vite', 'build'], siteDir, 180000);
+  // Dependencies: prefer the pre-baked toolchain (zero install). render.ts
+  // symlinks /opt/molt-render/node_modules in; only if that's absent (local
+  // dev) do we fall back to a real npm install.
+  const prebaked = process.env.MOLT_RENDER_DEPS ?? '/opt/molt-render/node_modules';
+  const localNodeModules = join(siteDir, 'node_modules');
+  let viteBin = 'npx';
+  let viteBaseArgs: string[] = ['vite'];
+  if (existsSync(prebaked)) {
+    try {
+      if (!existsSync(localNodeModules)) {
+        await import('node:fs/promises').then((fs) => fs.symlink(prebaked, localNodeModules, 'dir'));
+      }
+      viteBin = join(prebaked, '.bin', 'vite'); // call the pre-baked binary directly
+      viteBaseArgs = [];
+    } catch { /* symlink failed → fall through to npm install below */ }
+  }
+  if (viteBin === 'npx') {
+    const inst = await run('npm', ['install', '--no-audit', '--no-fund'], siteDir, 180000);
+    if (inst.code !== 0) return routes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'npm install failed' }));
+  }
+
+  // build
+  const build = await run(viteBin, [...viteBaseArgs, 'build'], siteDir, 180000);
   if (build.code !== 0) {
     return routes.map((r) => ({ ...r, pixelMatch: null, rendered: false, note: 'vite build failed: ' + build.out.slice(-300) }));
   }
 
   // serve the built app and screenshot each route
-  const preview = spawn('npx', ['vite', 'preview', '--port', '4173', '--strictPort'], { cwd: siteDir, env: process.env });
+  const preview = spawn(viteBin, [...viteBaseArgs, 'preview', '--port', '4173', '--strictPort'], { cwd: siteDir, env: process.env });
   await new Promise((r) => setTimeout(r, 3500)); // let preview boot
 
   const results: RenderResult[] = [];
