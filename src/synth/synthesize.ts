@@ -212,6 +212,9 @@ export async function synthesize(input: SynthInput): Promise<{ files: string[]; 
   await write('vite.config.ts', `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });\n`);
 
   // ---- shared chrome, built ONCE ----
+  if (pages.length === 0) {
+    throw new Error('synthesize: no pages to build from (empty capture)');
+  }
   const chromeSample = pages[0];
   const scChrome = sidecar(chromeSample.computed);
   const capChromePath = pathIndex(chromeSample.computed);

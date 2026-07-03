@@ -105,6 +105,9 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     }
 
     // ---- Stage 2: normalize ----
+    if (manifest.pages.length === 0) {
+      throw new Error('No pages could be captured — the site may have blocked the crawler, or the page crashed during capture. Try again, or check that the URL loads in a browser.');
+    }
     await emit({ stage: 'normalize', status: 'normalizing', message: 'Normalizing pages to IR…' });
     const planInputs: PlanInput[] = [];
     const irByRoute = new Map<string, PageIR>();

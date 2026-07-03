@@ -511,15 +511,25 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
       break;
     }
     process.stdout.write(`[molt] capture ${url} … `);
-    try {
-      const cap = await capturePage(context, url, origin, outDir, settleMs);
-      pages.push(cap);
-      console.log(
-        `ok · ${cap.stats.elements} el · ${cap.stats.styledElements} styled · ` +
-        `${cap.stats.assets} assets · ${cap.stats.iframes} iframes`,
-      );
-    } catch (e) {
-      console.log(`FAILED: ${(e as Error).message}`);
+    let captured = false;
+    for (let attempt = 1; attempt <= 2 && !captured; attempt++) {
+      try {
+        const cap = await capturePage(context, url, origin, outDir, settleMs);
+        pages.push(cap);
+        captured = true;
+        console.log(
+          `ok · ${cap.stats.elements} el · ${cap.stats.styledElements} styled · ` +
+          `${cap.stats.assets} assets · ${cap.stats.iframes} iframes`,
+        );
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (attempt === 1 && /crash|Target closed|detached/i.test(msg)) {
+          process.stdout.write(`(retry after crash) `);
+          await new Promise((r) => setTimeout(r, 1500));
+          continue; // one more try with a fresh page
+        }
+        console.log(`FAILED: ${msg}`);
+      }
     }
     await new Promise((r) => setTimeout(r, 800)); // pace requests — avoid tripping rate limits
   }
