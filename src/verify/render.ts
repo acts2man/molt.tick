@@ -208,10 +208,20 @@ export async function renderAndDiff(
             const url = faithful
               ? `http://127.0.0.1:${port}${r.route}`      // faithful: real router path
               : `http://127.0.0.1:${port}/?route=${r.slug}`; // old preview scaffold
-            // domcontentloaded (not networkidle): render what's there without
-            // waiting on network — big pages + stripped external refs crashed on idle.
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.waitForTimeout(1200); // let CSS paint + images begin
+            // 'load' waits for stylesheets/images too (not just DOM). Big CSS on
+            // a container parses slowly — screenshotting too early = blank page
+            // = the low pixel scores. Wait for real load + fonts + a settle.
+            await page.goto(url, { waitUntil: 'load', timeout: 45000 }).catch(async () => {
+              // if full load stalls, fall back to domcontentloaded so we still shoot
+              await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+            });
+            // wait for webfonts to be ready and for stylesheets to have applied
+            await page.evaluate(`(async () => {
+              try { await (document).fonts.ready; } catch (e) {}
+              // force layout so background-images/CSS are computed
+              document.body && document.body.getBoundingClientRect();
+            })()`).catch(() => {});
+            await page.waitForTimeout(2500); // settle: CSS paint, lazy backgrounds
             const shot = join(siteDir, 'renders', `${r.slug}.png`);
             await page.screenshot({ path: shot, fullPage: true });
             const original = join(captureDir, r.slug, 'original.png');
