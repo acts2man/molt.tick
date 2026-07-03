@@ -485,7 +485,13 @@ async function capturePage(
   await writeFile(join(dir, 'computed.json'), JSON.stringify(extract.computed, null, 1));
   await writeFile(join(dir, 'assets.json'), JSON.stringify(extract.assets, null, 1));
   await writeFile(join(dir, 'iframes.json'), JSON.stringify(extract.iframes, null, 1));
-  await page.screenshot({ path: join(dir, 'original.png'), fullPage: true });
+  // Screenshot at a LOCKED width. fullPage can expand to the widest element,
+  // producing inconsistent widths per page — which wrecks the pixel comparison
+  // (misaligned images score near-zero). Force width=1440 to match the render.
+  const fullH = await page.evaluate(`document.documentElement.scrollHeight`).catch(() => 900) as number;
+  await page.setViewportSize({ width: 1440, height: Math.min(fullH || 900, 20000) });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(dir, 'original.png'), clip: { x: 0, y: 0, width: 1440, height: Math.min(fullH || 900, 20000) } });
   await page.close();
 
   return {
@@ -522,7 +528,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   const budgetMs = Number(process.env.MOLT_CRAWL_BUDGET_MS ?? 240000); // 4 min default
   const deadline = Date.now() + budgetMs;
 
-  const browser = await chromium.launch({
+  let browser = await chromium.launch({
     ...(CHROME ? { executablePath: CHROME } : {}),
     args: [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
@@ -531,7 +537,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   });
   // a context that looks like a real Chrome on macOS — the default headless UA
   // ("HeadlessChrome") is an instant bot flag that triggers 403s.
-  const context = await browser.newContext({
+  let context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     viewport: { width: 1440, height: 900 },
     locale: 'en-US',
@@ -595,6 +601,28 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   }
 
   const pages: PageCapture[] = [];
+  // launch helper so we can RELAUNCH the whole browser if it crashes (a dead
+  // context makes every subsequent newPage() fail — the cascade we kept seeing).
+  const launchArgs = [
+    '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+    '--disable-blink-features=AutomationControlled',
+  ];
+  const ctxOpts = {
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    },
+  };
+  const relaunch = async () => {
+    try { await context.close(); } catch { /* already dead */ }
+    try { await browser.close(); } catch { /* already dead */ }
+    browser = await chromium.launch({ ...(CHROME ? { executablePath: CHROME } : {}), args: launchArgs });
+    context = await browser.newContext(ctxOpts);
+  };
+
   for (const url of urls) {
     if (Date.now() > deadline) {
       console.log(`[molt] crawl budget reached — stopping at ${pages.length}/${urls.length} pages`);
@@ -613,18 +641,19 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
         );
       } catch (e) {
         const msg = (e as Error).message;
-        if (attempt === 1 && /crash|Target closed|detached/i.test(msg)) {
-          process.stdout.write(`(retry after crash) `);
+        if (attempt === 1 && /crash|Target.*closed|context.*closed|detached|browser has been closed/i.test(msg)) {
+          process.stdout.write(`(browser crashed — relaunching) `);
+          await relaunch();                       // RELAUNCH, not just a new page
           await new Promise((r) => setTimeout(r, 1500));
-          continue; // one more try with a fresh page
+          continue;
         }
         console.log(`FAILED: ${msg}`);
       }
     }
-    await new Promise((r) => setTimeout(r, 800)); // pace requests — avoid tripping rate limits
+    await new Promise((r) => setTimeout(r, 800)); // pace requests
   }
-  await context.close();
-  await browser.close();
+  await context.close().catch(() => {});
+  await browser.close().catch(() => {});
 
   // core = pages that came from the real nav menu (coreRouteSet built above).
   const corePages = pages.map((p) => p.route).filter((r) => coreRouteSet.has(r));

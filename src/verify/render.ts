@@ -222,10 +222,33 @@ export async function renderAndDiff(
               document.body && document.body.getBoundingClientRect();
             })()`).catch(() => {});
             await page.waitForTimeout(2500); // settle: CSS paint, lazy backgrounds
+            // DIAGNOSTIC: capture what the rendered DOM actually contains, so we
+            // can see (in logs) whether it's blank/broken vs real. This ends the
+            // guessing about why scores are low.
+            const diag = await page.evaluate(`(() => {
+              const b = document.body;
+              const text = (b?.innerText || '').replace(/\\s+/g,' ').trim();
+              const bg = getComputedStyle(b).backgroundColor;
+              return {
+                h: document.documentElement.scrollHeight,
+                textLen: text.length,
+                textSample: text.slice(0, 80),
+                imgs: document.querySelectorAll('img').length,
+                sections: document.querySelectorAll('section, [class*="elementor"], [class*="section"]').length,
+                bg,
+              };
+            })()`).catch(() => null) as { h: number; textLen: number; textSample: string; imgs: number; sections: number; bg: string } | null;
+            if (diag) {
+              console.log(`[render] ${r.route} DOM: height=${diag.h}px text=${diag.textLen}chars imgs=${diag.imgs} sections=${diag.sections} bg=${diag.bg} · "${diag.textSample}"`);
+            }
             const shot = join(siteDir, 'renders', `${r.slug}.png`);
-            await page.screenshot({ path: shot, fullPage: true });
+            const renderH = await page.evaluate(`document.documentElement.scrollHeight`).catch(() => 900) as number;
+            await page.setViewportSize({ width: 1440, height: Math.min(renderH || 900, 20000) });
+            await page.waitForTimeout(200);
+            await page.screenshot({ path: shot, clip: { x: 0, y: 0, width: 1440, height: Math.min(renderH || 900, 20000) } });
             const original = join(captureDir, r.slug, 'original.png');
             const pixelMatch = existsSync(original) ? (await comparePixels(original, shot)).matchPct : null;
+            console.log(`[render] ${r.route} → pixel ${pixelMatch}% (render ${diag?.h ?? '?'}px)`);
             return { ...r, pixelMatch, rendered: true };
           } finally {
             await page.close().catch(() => {});
