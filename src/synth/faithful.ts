@@ -81,6 +81,10 @@ function rewriteInternalLinks(root: HTMLElement, origin: string, routeSet: Set<s
  * no visual change — and small enough that Lovable won't truncate it.
  */
 function trimCssToUsed(css: string, dom: HTMLElement): string {
+  // strip CSS comments first — a comment right before an @font-face rule confused
+  // the at-rule parser and caused whole @font-face blocks (icon/web fonts!) to be
+  // dropped, so icons rendered as blank boxes.
+  css = css.replace(/\/\*[\s\S]*?\*\//g, '');
   // gather the page's tokens
   const classes = new Set<string>();
   const ids = new Set<string>();
@@ -118,6 +122,11 @@ function trimCssToUsed(css: string, dom: HTMLElement): string {
   let i = 0;
   const n = css.length;
   while (i < n) {
+    // skip whitespace/newlines between rules — otherwise the parser lands on a
+    // newline before '@font-face' and misreads the at-rule as a normal selector,
+    // dropping the whole rule (this silently killed all icon/web @font-face).
+    while (i < n && /\s/.test(css[i])) i++;
+    if (i >= n) break;
     // at-rule
     if (css[i] === '@') {
       const blockStart = css.indexOf('{', i);

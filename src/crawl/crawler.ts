@@ -470,41 +470,63 @@ async function capturePage(
   })()`).catch(() => {});
   await page.waitForTimeout(400); // let the forced styles settle
 
-  // REVOLUTION SLIDER extraction: revslider is JS-driven, so its slides are
-  // inert markup after we strip scripts. Drive the slider through every slide
-  // via its jQuery API, capture each slide's content, so we can bake all slides
-  // in statically + write a rebuild spec. (No-op if the page has no revslider.)
+  // SLIDER extraction: JS-driven sliders are inert markup after we strip scripts.
+  // Detect a broad range (Revolution Slider v5/v6, Swiper, Slick, Elementor
+  // carousels, generic sliders), capture each slide's content, and log the
+  // markup we find so we can refine. Baked in statically + specced in REBUILD.md.
   const sliderSpec = await page.evaluate(`(async () => {
     const results = [];
-    const sliders = document.querySelectorAll('rs-module, .rev_slider, .tp-revslider-mainul, [id*="rev_slider"]');
-    for (const container of sliders) {
-      const root = container.closest('rs-module-wrap, .rev_slider_wrapper, .rev_slider') || container;
-      const id = root.id || root.querySelector('[id]')?.id || 'slider';
-      // find slide elements (revslider uses <rs-slide> in v6, <li> in v5)
-      let slideEls = root.querySelectorAll('rs-slide');
-      if (!slideEls.length) slideEls = root.querySelectorAll('.tp-revslider-mainul > li, ul > li[data-index]');
+    // 1. DIAGNOSTIC: what slider-ish markup exists on this page?
+    const seen = new Set();
+    document.querySelectorAll('[class*="slider"],[class*="slide"],[class*="swiper"],[class*="carousel"],[class*="revslider"],[id*="rev_slider"],rs-module,rs-slide,[class*="tp-"]').forEach(el => {
+      const cls = (el.className && typeof el.className === 'string') ? el.className.split(/\\s+/)[0] : el.tagName.toLowerCase();
+      if (cls) seen.add(cls);
+    });
+    const diagnostic = [...seen].slice(0, 30);
+
+    // 2. try each known slider container pattern
+    const CONTAINERS = [
+      'sr7-module', 'rs-module', '.rev_slider', '.tp-revslider-mainul', '[id*="rev_slider"]',
+      '[id^="SR7_"]', '.wp-block-themepunch-revslider', '.elementor-widget-slider_revolution',
+      '.swiper', '.swiper-container', '.slick-slider', '.elementor-carousel',
+      '[class*="carousel"]', '[data-slider]', '.owl-carousel',
+    ];
+    const containers = new Set();
+    for (const sel of CONTAINERS) document.querySelectorAll(sel).forEach(el => containers.add(el));
+
+    for (const container of containers) {
+      const id = container.getAttribute?.('data-alias') || container.id || container.className?.toString().split(/\\s+/)[0] || 'slider';
+      // slide element patterns across libraries (sr7-slide = Revolution Slider v6.7)
+      let slideEls = container.querySelectorAll('sr7-slide, rs-slide, .swiper-slide, .slick-slide, .owl-item, .elementor-carousel-item, li[data-index], .tp-revslider-mainul > li');
+      if (!slideEls.length) slideEls = container.querySelectorAll(':scope > ul > li, :scope > div > div');
       const slides = [];
       for (const s of slideEls) {
-        // main background image
-        const bgEl = s.querySelector('rs-sbg, img.rev-slidebg, .tp-bgimg, img');
-        const bg = bgEl ? (bgEl.getAttribute('src') || bgEl.getAttribute('data-lazyload') || bgEl.getAttribute('data-src') || '') : '';
-        // text layers (headings, paragraphs, buttons)
+        // Revolution Slider v6.7 uses sr7-sbg-wrap / sr7-bgvideo / img for backgrounds
+        const bgEl = s.querySelector('sr7-sbg img, rs-sbg, img.rev-slidebg, .tp-bgimg, sr7-layer img, img');
+        let bg = bgEl ? (bgEl.getAttribute('src') || bgEl.getAttribute('data-lazyload') || bgEl.getAttribute('data-src') || bgEl.getAttribute('data-bg') || '') : '';
+        if (!bg) { const bi = getComputedStyle(s).backgroundImage; const mm = bi && bi.match(/url\\(["']?([^"')]+)/); if (mm) bg = mm[1]; }
         const layers = [];
-        for (const layer of s.querySelectorAll('rs-layer, .tp-caption, [class*="rs-layer"]')) {
+        for (const layer of s.querySelectorAll('sr7-layer, rs-layer, .tp-caption, [class*="layer"], h1, h2, h3, h4, p')) {
           const text = (layer.textContent || '').replace(/\\s+/g, ' ').trim();
-          if (text) layers.push({ text: text.slice(0, 300), tag: layer.tagName.toLowerCase() });
+          if (text && text.length > 1) layers.push({ text: text.slice(0, 300), tag: layer.tagName.toLowerCase() });
         }
         const links = [];
         for (const a of s.querySelectorAll('a')) { const h = a.getAttribute('href'); if (h) links.push({ text: (a.textContent||'').trim().slice(0,80), href: h }); }
-        slides.push({ bg, layers, links });
+        if (bg || layers.length || links.length) slides.push({ bg, layers, links });
       }
-      if (slides.length) results.push({ id, slideCount: slides.length, slides });
+      if (slides.length >= 1) results.push({ id, slideCount: slides.length, slides });
     }
-    return results;
-  })()`).catch(() => []) as any[];
-  if (sliderSpec.length) {
-    const totalSlides = sliderSpec.reduce((n: number, s: any) => n + s.slideCount, 0);
-    console.log(`[molt]   ↳ captured ${sliderSpec.length} slider(s), ${totalSlides} slide(s) total`);
+    return { sliders: results, diagnostic };
+  })()`).catch(() => ({ sliders: [], diagnostic: [] })) as { sliders: any[]; diagnostic: string[] };
+
+  if (sliderSpec.diagnostic?.length) {
+    console.log(`[molt]   ↳ slider-ish markup found: ${sliderSpec.diagnostic.join(', ')}`);
+  }
+  if (sliderSpec.sliders?.length) {
+    const totalSlides = sliderSpec.sliders.reduce((n: number, s: any) => n + s.slideCount, 0);
+    console.log(`[molt]   ↳ captured ${sliderSpec.sliders.length} slider(s), ${totalSlides} slide(s) total`);
+  } else {
+    console.log(`[molt]   ↳ no sliders extracted (diagnostic markup logged above)`);
   }
 
   const extract = await page.evaluate(IN_PAGE_EXTRACT) as {
@@ -597,7 +619,7 @@ async function capturePage(
   await writeFile(join(dir, 'computed.json'), JSON.stringify(extract.computed, null, 1));
   await writeFile(join(dir, 'assets.json'), JSON.stringify(extract.assets, null, 1));
   await writeFile(join(dir, 'iframes.json'), JSON.stringify(extract.iframes, null, 1));
-  await writeFile(join(dir, 'sliders.json'), JSON.stringify(sliderSpec, null, 2));
+  await writeFile(join(dir, 'sliders.json'), JSON.stringify(sliderSpec.sliders ?? [], null, 2));
   // Screenshot at a LOCKED width. fullPage can expand to the widest element,
   // producing inconsistent widths per page — which wrecks the pixel comparison
   // (misaligned images score near-zero). Force width=1440 to match the render.
