@@ -423,18 +423,51 @@ async function capturePage(
   await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(settleMs); // let JS-applied styles land
 
-  // scroll the full page so lazy content loads, then return to top
+  // scroll the full page so lazy content loads AND scroll-triggered animations fire
   // (string-form evaluate — see __name note in discoverViaNav)
   await page.evaluate(`new Promise(done => {
     let y = 0;
     const step = () => {
-      y += 900;
+      y += 700;
       window.scrollTo(0, y);
-      if (y < document.body.scrollHeight) setTimeout(step, 80);
-      else { window.scrollTo(0, 0); setTimeout(done, 200); }
+      if (y < document.body.scrollHeight) setTimeout(step, 90);
+      else { window.scrollTo(0, 0); setTimeout(done, 300); }
     };
     step();
   })`);
+
+  // FINALIZE ANIMATIONS: Elementor & similar start elements hidden (opacity:0,
+  // translated, clipped) and reveal them via JS on scroll. If we capture before
+  // that completes, text/sections render frozen-hidden. Force everything to its
+  // FINAL visible state so the reproduction looks like the finished page.
+  await page.evaluate(`(() => {
+    // 1. mark Elementor entrance animations as done (their CSS reveals on this class)
+    document.querySelectorAll('.elementor-invisible').forEach(el => {
+      el.classList.remove('elementor-invisible');
+    });
+    document.querySelectorAll('[class*="animated"], [data-settings*="animation"]').forEach(el => {
+      el.classList.add('animated');
+      el.style.opacity = '1';
+      el.style.visibility = 'visible';
+    });
+    // 2. neutralize inline animation-hiding on ANY element left invisible
+    document.querySelectorAll('*').forEach(el => {
+      const cs = getComputedStyle(el);
+      // only touch elements that are hidden BY animation (not intentionally display:none)
+      if (cs.display !== 'none') {
+        if (parseFloat(cs.opacity) === 0) el.style.opacity = '1';
+        if (cs.visibility === 'hidden' && !el.hasAttribute('hidden')) el.style.visibility = 'visible';
+        // undo common entrance transforms that leave content off-screen/clipped
+        if (/translate|scale\(0|matrix/.test(cs.transform) && cs.transform !== 'none') {
+          el.style.transform = 'none';
+        }
+        if (cs.clipPath && cs.clipPath !== 'none') el.style.clipPath = 'none';
+      }
+    });
+    // 3. finish any running CSS animations at their end state
+    document.getAnimations?.().forEach(a => { try { a.finish(); } catch(e) {} });
+  })()`).catch(() => {});
+  await page.waitForTimeout(400); // let the forced styles settle
 
   const extract = await page.evaluate(IN_PAGE_EXTRACT) as {
     title: string;
