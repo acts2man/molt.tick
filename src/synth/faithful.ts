@@ -176,7 +176,7 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
   await write('vite.config.ts', `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });\n`);
   await write('index.html', `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>`);
 
-  const pageMeta: { route: string; comp: string; file: string; bodyClass: string; cssRel: string }[] = [];
+  const pageMeta: { route: string; comp: string; file: string; bodyClass: string; cssRel: string; slug: string }[] = [];
 
   // ---- per page: original DOM + original CSS ----
   for (const r of routes) {
@@ -239,7 +239,7 @@ export default function ${comp}() {
   );
 }
 `);
-    pageMeta.push({ route: r.route, comp, file, bodyClass, cssRel });
+    pageMeta.push({ route: r.route, comp, file, bodyClass, cssRel, slug });
   }
 
   // ---- entry: dependency-free routing ----
@@ -271,6 +271,8 @@ createRoot(document.getElementById('root')!).render(<App />);
   await write('MOLT_OUTPUT.json', JSON.stringify({
     project: projectName, mode: 'faithful-visual',
     routes: pageMeta.map((p) => p.route),
+    // per-page metadata the ship step uses to generate TanStack Router files
+    pages: pageMeta.map((p) => ({ route: p.route, slug: p.slug, bodyClass: p.bodyClass })),
     note: 'Faithful visual reproduction: original DOM + original CSS per page. Scripts stripped; add functionality via Lovable.',
   }, null, 2));
 
