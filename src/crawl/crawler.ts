@@ -389,6 +389,7 @@ async function capturePage(
   origin: string,
   pagesRoot: string,
   settleMs: number,
+  fontCache: Map<string, string>,   // shared across pages: original url → shared local path
 ): Promise<PageCapture> {
   const route = new URL(url).pathname.replace(/\/$/, '') || '/';
   const slug = route === '/' ? 'home' : route.slice(1).replace(/\//g, '__');
@@ -551,13 +552,13 @@ async function capturePage(
     styleBytes += css.length;
   });
 
-  // DOWNLOAD FONTS: the CSS references icon fonts (Fontello, trx_addons, etc.)
-  // and web fonts by URL on the original server. If we only bundle the CSS, the
-  // font files are missing → icons show as blank boxes. Download each font file
-  // and rewrite the CSS to point at the local copy, so icons/fonts render.
-  await mkdir(join(dir, 'fonts'), { recursive: true });
-  const fontUrlMap = new Map<string, string>(); // original url → local path
-  let fontIdx = 0;
+  // DOWNLOAD FONTS (cached across pages): the CSS references icon/web fonts by
+  // URL on the original server. We download each once into a SHARED fonts dir
+  // (../_fonts at the capture root) and reuse across all pages — the same 45
+  // theme fonts were being re-downloaded per page, which blew the time budget.
+  const sharedFontsDir = join(pagesRoot, '_fonts');
+  await mkdir(sharedFontsDir, { recursive: true });
+  let newFonts = 0, reusedFonts = 0;
   for (const f of styleFiles) {
     const cssPath = join(dir, f);
     let css = await readFile(cssPath, 'utf-8');
@@ -568,26 +569,29 @@ async function capturePage(
     for (const rawUrl of urls) {
       try {
         const abs = new URL(rawUrl, origin).toString();
-        if (!fontUrlMap.has(abs)) {
+        if (!fontCache.has(abs)) {
           const resp = await page.request.get(abs, { timeout: 12000 });
           if (resp.ok()) {
             const buf = await resp.body();
             const ext = (abs.split('?')[0].match(/\.(woff2?|ttf|otf|eot)$/i)?.[1]) ?? 'woff2';
-            const local = `fonts/font-${fontIdx++}.${ext}`;
-            await writeFile(join(dir, local), buf);
-            fontUrlMap.set(abs, local);
+            const fileName = `font-${fontCache.size}.${ext}`;
+            await writeFile(join(sharedFontsDir, fileName), buf);
+            fontCache.set(abs, fileName);
+            newFonts++;
           }
+        } else {
+          reusedFonts++;
         }
-        const local = fontUrlMap.get(abs);
-        if (local) {
-          // rewrite every occurrence of this url in the css to the local path
-          css = css.split(rawUrl).join('./' + local.replace('fonts/', '../fonts/'));
+        const fileName = fontCache.get(abs);
+        if (fileName) {
+          // CSS lives at <slug>/styles/x.css; shared fonts at _fonts/ → ../../_fonts/
+          css = css.split(rawUrl).join(`../../_fonts/${fileName}`);
         }
       } catch { /* font unreachable — leave original url */ }
     }
     await writeFile(cssPath, css);
   }
-  if (fontIdx > 0) console.log(`[molt]   ↳ bundled ${fontIdx} font file(s)`);
+  if (newFonts || reusedFonts) console.log(`[molt]   ↳ fonts: ${newFonts} new, ${reusedFonts} reused (cached)`);
 
   await writeFile(join(dir, 'page.html'), dom);
   await writeFile(join(dir, 'computed.json'), JSON.stringify(extract.computed, null, 1));
@@ -634,8 +638,9 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   const origin = new URL(startUrl).origin;
   await mkdir(outDir, { recursive: true });
 
-  // overall time budget — a large/slow site must never hang the worker forever
-  const budgetMs = Number(process.env.MOLT_CRAWL_BUDGET_MS ?? 240000); // 4 min default
+  // overall time budget — a large/slow site must never hang the worker forever.
+  // 10 min default: font downloading adds time, and the hard render cap is gone.
+  const budgetMs = Number(process.env.MOLT_CRAWL_BUDGET_MS ?? 600000); // 10 min default
   const deadline = Date.now() + budgetMs;
 
   let browser = await chromium.launch({
@@ -711,6 +716,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
   }
 
   const pages: PageCapture[] = [];
+  const fontCache = new Map<string, string>(); // shared across all pages: font url → shared filename
   // launch helper so we can RELAUNCH the whole browser if it crashes (a dead
   // context makes every subsequent newPage() fail — the cascade we kept seeing).
   const launchArgs = [
@@ -742,7 +748,7 @@ export async function crawl(opts: CrawlOptions): Promise<CaptureManifest> {
     let captured = false;
     for (let attempt = 1; attempt <= 2 && !captured; attempt++) {
       try {
-        const cap = await capturePage(context, url, origin, outDir, settleMs);
+        const cap = await capturePage(context, url, origin, outDir, settleMs, fontCache);
         pages.push(cap);
         captured = true;
         console.log(
