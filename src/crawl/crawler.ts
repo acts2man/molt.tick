@@ -620,6 +620,48 @@ async function capturePage(
   await writeFile(join(dir, 'assets.json'), JSON.stringify(extract.assets, null, 1));
   await writeFile(join(dir, 'iframes.json'), JSON.stringify(extract.iframes, null, 1));
   await writeFile(join(dir, 'sliders.json'), JSON.stringify(sliderSpec.sliders ?? [], null, 2));
+
+  // DYNAMIC COMPONENT DETECTION: find interactive/animated features whose JS we
+  // strip, so REBUILD.md can tell the AI editor exactly what to rebuild (Wistia
+  // videos, typewriter text, counters, Ken Burns/parallax, sticky headers).
+  const components = await page.evaluate(`(() => {
+    const found = [];
+    const near = (el) => {
+      // a short locator: nearest heading text or section id
+      const sec = el.closest('section, [data-id], .elementor-section');
+      const h = sec?.querySelector('h1,h2,h3,h4');
+      return (h?.textContent || sec?.getAttribute('data-id') || el.className || '').toString().replace(/\\s+/g,' ').trim().slice(0, 60);
+    };
+    // videos
+    document.querySelectorAll('[class*="wistia"], .wistia_embed, wistia-player, [id*="wistia"]').forEach(el => {
+      const idMatch = (el.className + ' ' + el.id).match(/wistia[_-]?([a-z0-9]{8,})/i);
+      found.push({ type: 'video-wistia', locator: near(el), detail: 'Wistia video' + (idMatch ? ' (id ' + idMatch[1] + ')' : '') + ' — reload the Wistia embed (autoplay/muted as on original).' });
+    });
+    document.querySelectorAll('iframe[src*="youtube"], iframe[src*="youtu.be"]').forEach(el => found.push({ type: 'video-youtube', locator: near(el), detail: 'YouTube video: ' + el.getAttribute('src') }));
+    document.querySelectorAll('iframe[src*="vimeo"], [data-vimeo-url]').forEach(el => found.push({ type: 'video-vimeo', locator: near(el), detail: 'Vimeo video: ' + (el.getAttribute('src') || el.getAttribute('data-vimeo-url')) }));
+    document.querySelectorAll('video').forEach(el => { const src = el.querySelector('source')?.getAttribute('src') || el.getAttribute('src'); if (src) found.push({ type: 'video-html5', locator: near(el), detail: 'Background/HTML5 video: ' + src }); });
+    // typewriter / typed text
+    document.querySelectorAll('.typed, [data-typed], [class*="typewriter"], [class*="typed-"], .elementor-headline-dynamic-wrapper').forEach(el => {
+      const phrases = el.getAttribute('data-typed') || el.getAttribute('data-strings') || (el.textContent||'').trim().slice(0,120);
+      found.push({ type: 'typewriter', locator: near(el), detail: 'Animated/typewriter text cycling: "' + phrases + '"' });
+    });
+    // counters
+    document.querySelectorAll('[data-counter], .elementor-counter, .odometer, [class*="counter"]').forEach(el => found.push({ type: 'counter', locator: near(el), detail: 'Animated number counter (count-up on scroll): ' + (el.textContent||'').trim().slice(0,40) }));
+    // Ken Burns / parallax / motion
+    if (document.querySelector('[class*="kenburns"], [data-ken-burns], .elementor-motion-effects, [class*="parallax"], [class*="trx_addons_parallax"]')) {
+      found.push({ type: 'motion', locator: 'various sections', detail: 'Ken Burns / parallax / scroll-motion effects on images and sections — add slow zoom (Ken Burns) to hero images and parallax scroll where present.' });
+    }
+    // sticky header
+    if (document.querySelector('[class*="sticky"], .sc_layouts_sticky, .elementor-sticky')) {
+      found.push({ type: 'sticky-header', locator: 'header', detail: 'Sticky header that pins/condenses on scroll.' });
+    }
+    // dedupe by type+locator
+    const seen = new Set(); const uniq = [];
+    for (const f of found) { const k = f.type + '|' + f.locator; if (!seen.has(k)) { seen.add(k); uniq.push(f); } }
+    return uniq;
+  })()`).catch(() => []) as any[];
+  await writeFile(join(dir, 'components.json'), JSON.stringify(components, null, 2));
+  if (components.length) console.log(`[molt]   ↳ detected ${components.length} dynamic component(s): ${[...new Set(components.map((c: any) => c.type))].join(', ')}`);
   // Screenshot at a LOCKED width. fullPage can expand to the widest element,
   // producing inconsistent widths per page — which wrecks the pixel comparison
   // (misaligned images score near-zero). Force width=1440 to match the render.
@@ -641,6 +683,7 @@ async function capturePage(
       iframes: `${slug}/iframes.json`,
       screenshot: `${slug}/original.png`,
       sliders: `${slug}/sliders.json`,
+      components: `${slug}/components.json`,
     },
     stats: {
       elements: extract.totalElements,

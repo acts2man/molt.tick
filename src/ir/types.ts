@@ -34,6 +34,7 @@ export interface PageCapture {
     iframes: string;            // iframe manifest JSON
     screenshot: string;         // full-page PNG for later pixel-diff
     sliders?: string;           // slider spec JSON (Revolution Slider etc.)
+    components?: string;        // dynamic components JSON (videos, typewriter, etc.)
   };
   stats: {
     elements: number;

@@ -314,44 +314,72 @@ createRoot(document.getElementById('root')!).render(<App />);
     note: 'Faithful visual reproduction: original DOM + original CSS per page. Scripts stripped; add functionality via Lovable.',
   }, null, 2));
 
-  // ---- REBUILD.md: rebuild spec for interactive components (sliders) ----
-  // Molt strips JS, so JS-driven sliders (Revolution Slider) are inert. We
-  // captured each slide's content during crawl; write a machine-readable spec
-  // so an AI (Replit/Lovable) can rebuild them precisely instead of guessing.
-  const rebuildSections: string[] = [];
+  // ---- REBUILD.md: comprehensive rebuild blueprint ----
+  // Molt strips JS, so dynamic features (sliders, videos, typewriter, counters,
+  // Ken Burns, parallax) are inert. We detect each one and write a spec so the AI
+  // editor can rebuild precisely — plus the LIVE URL and an instruction to
+  // compare the migrated site against it and fix any differences.
+  const sliderSections: string[] = [];
+  const componentSections: string[] = [];
   for (const r of routes) {
     const cap = manifest.pages.find((p) => p.route === r.route);
-    if (!cap?.files.sliders) continue;
-    try {
-      const sliders = JSON.parse(await readFile(join(captureDir, cap.files.sliders), 'utf-8'));
-      if (!Array.isArray(sliders) || sliders.length === 0) continue;
-      for (const sl of sliders) {
-        rebuildSections.push(`### Slider on \`${r.route}\` (id: ${sl.id}, ${sl.slideCount} slides)\n`);
-        rebuildSections.push(`Original: Revolution Slider (JS-driven — reproduced here as static content; rebuild as an auto-advancing React carousel).\n`);
-        sl.slides.forEach((slide: any, i: number) => {
-          rebuildSections.push(`**Slide ${i + 1}:**`);
-          if (slide.bg) rebuildSections.push(`- Background image: ${slide.bg}`);
-          for (const layer of slide.layers ?? []) rebuildSections.push(`- Text (${layer.tag}): "${layer.text}"`);
-          for (const link of slide.links ?? []) rebuildSections.push(`- Button: "${link.text}" → ${link.href}`);
-          rebuildSections.push('');
-        });
-      }
-    } catch { /* skip */ }
+    if (!cap) continue;
+    // sliders
+    if (cap.files.sliders) {
+      try {
+        const sliders = JSON.parse(await readFile(join(captureDir, cap.files.sliders), 'utf-8'));
+        for (const sl of (Array.isArray(sliders) ? sliders : [])) {
+          sliderSections.push(`### Slider on \`${r.route}\` (id: ${sl.id}, ${sl.slideCount} slides)`);
+          sliderSections.push(`Original: Revolution Slider (JS-driven). Rebuild as an auto-advancing React carousel (~5s/slide) with the slides below. Content is already baked in statically — upgrade it to rotate/animate.\n`);
+          sl.slides.forEach((slide: any, i: number) => {
+            sliderSections.push(`**Slide ${i + 1}:**`);
+            if (slide.bg) sliderSections.push(`- Background image: ${slide.bg}`);
+            for (const layer of slide.layers ?? []) sliderSections.push(`- Text (${layer.tag}): "${layer.text}"`);
+            for (const link of slide.links ?? []) sliderSections.push(`- Button: "${link.text}" → ${link.href}`);
+            sliderSections.push('');
+          });
+        }
+      } catch { /* skip */ }
+    }
+    // dynamic components
+    if (cap.files.components) {
+      try {
+        const comps = JSON.parse(await readFile(join(captureDir, cap.files.components), 'utf-8'));
+        if (Array.isArray(comps) && comps.length) {
+          componentSections.push(`### Dynamic components on \`${r.route}\``);
+          for (const c of comps) componentSections.push(`- **${c.type}** (near "${c.locator}"): ${c.detail}`);
+          componentSections.push('');
+        }
+      } catch { /* skip */ }
+    }
   }
-  const hasRebuild = rebuildSections.length > 0;
+  const hasRebuild = sliderSections.length > 0 || componentSections.length > 0;
   if (hasRebuild) {
-    await write('REBUILD.md', `# Molt — Rebuild Spec for Interactive Components
+    await write('REBUILD.md', `# Molt — Rebuild Blueprint
 
-This site had JS-driven components (sliders) that can't be captured statically.
-Molt baked in each slide's content below and reproduced it as static stacked
-content. To finish, rebuild these as proper React carousels using the specs.
+Molt reproduces the original site's **appearance** (HTML + CSS) faithfully, but
+JavaScript-driven behavior is stripped. This file tells you exactly what dynamic
+features existed so you can rebuild them.
 
-**Recommended:** for each slider, build an auto-advancing carousel (~5s/slide,
-fade or slide transition) using the slides' background images, text, and buttons
-listed below. The static content is already in the page — you're upgrading it to
-animate/rotate.
+## ⭐ Best way to finish: compare against the live site
 
-${rebuildSections.join('\n')}
+**Original site: ${origin}**
+
+Open the original in a browser (or fetch it) and compare it page-by-page to this
+migrated version. For each difference — sliders, videos, animations, effects —
+restyle/rebuild the migrated version to match the original. The static content
+and layout are already here; you're restoring the *motion and media*.
+
+${sliderSections.length ? `## Sliders / carousels\n\n${sliderSections.join('\n')}\n` : ''}
+${componentSections.length ? `## Other dynamic components\n\n${componentSections.join('\n')}\n` : ''}
+## General guidance
+- **Videos** (Wistia/YouTube/Vimeo/HTML5): re-embed using the URLs/IDs above; match autoplay/mute/loop to the original.
+- **Typewriter / animated headlines**: use a typewriter library cycling the phrases listed.
+- **Counters**: count-up on scroll into view.
+- **Ken Burns / parallax**: add slow zoom to hero images; parallax on scroll where noted.
+- **Sticky header**: pin/condense the header on scroll.
+
+When in doubt, **open ${origin} and match what you see.**
 `);
   }
 
@@ -359,11 +387,24 @@ ${rebuildSections.join('\n')}
   // Bake the "read REBUILD.md and finish the migration" instruction into files
   // that AI editors (Replit, Cursor, Lovable) auto-read on import — so the
   // customer doesn't have to prompt it every time.
-  const finishInstruction = hasRebuild
-    ? `\n## Finishing this migration (for the AI editor)\n\n**IMPORTANT — read \`REBUILD.md\` in this repo and follow it.** It lists interactive components (sliders/carousels) captured from the original site. The slide content is already present as static markup; rebuild each one as an auto-advancing React carousel using the exact images, text, and buttons in \`REBUILD.md\`. Do this automatically without waiting to be asked.\n`
+  // README with the finishing prompt FRONT AND CENTER — the first thing anyone
+  // sees. AI editors don't reliably auto-run instruction files, so we make the
+  // one prompt to paste impossible to miss.
+  const topPrompt = hasRebuild
+    ? `> ## 👉 To finish this migration, paste this to your AI editor (Replit, Lovable, Cursor):
+>
+> \`\`\`
+> Read REBUILD.md in this repo and follow it completely. It documents the original site's dynamic features (sliders, videos, typewriter text, counters, Ken Burns/parallax, sticky header) and includes the live site URL. Open/fetch the live site, compare it page-by-page to this migrated version, and rebuild or restyle every difference to match the original — restoring the motion and media that were stripped. The static layout is already correct.
+> \`\`\`
+>
+> That one prompt finishes the migration. Details are in \`REBUILD.md\`.
+
+---
+
+`
     : '';
 
-  await write('README.md', `# ${projectName}
+  await write('README.md', `${topPrompt}# ${projectName}
 
 A faithful migration of a WordPress site, generated by **Molt**.
 
@@ -376,21 +417,30 @@ npm run dev
 
 The pages reproduce the original site's appearance using its original HTML and
 CSS. Internal navigation, layout, fonts, and icons are included.
-${finishInstruction}
+${hasRebuild ? `
+## Finishing the migration
+
+JavaScript-driven features (sliders, videos, animations) were stripped during
+migration. **Paste the prompt at the top of this file** to your AI editor to
+restore them automatically — it reads \`REBUILD.md\` (which includes the live
+site URL) and rebuilds each feature to match the original.
+` : ''}
 ## Notes
 - \`MOLT_OUTPUT.json\` — what Molt produced (routes, mode).
-${hasRebuild ? '- `REBUILD.md` — specs for interactive components that need rebuilding.\n' : ''}- Static visual reproduction; add any remaining interactivity by prompting your AI editor.
+${hasRebuild ? '- `REBUILD.md` — full rebuild blueprint (dynamic features + live URL to compare against).\n' : ''}- Static visual reproduction; the prompt above restores the interactive parts.
 `);
 
   if (hasRebuild) {
     // AGENTS.md + .cursorrules: standing instructions AI editors auto-load.
     const agentInstruction = `# Agent instructions for this repo
 
-This is a Molt migration of a WordPress site. On first load, **read \`REBUILD.md\`
-and rebuild the interactive components (sliders/carousels) it describes** as
-auto-advancing React carousels, using the exact slide content listed there. The
-static slide content already exists in the pages — upgrade it to animate/rotate.
-Do this proactively as the first task.
+This is a Molt migration of a WordPress site (${origin}). On first load, **read
+\`REBUILD.md\` and follow it.** It documents the original site's dynamic features
+(sliders, videos, typewriter text, counters, Ken Burns/parallax, sticky header)
+and includes the live URL. Best approach: open/fetch ${origin}, compare it
+page-by-page to this migrated version, and rebuild/restyle any differences to
+match — restoring the motion and media that were stripped. The static layout is
+already correct. Do this proactively as the first task.
 `;
     await write('AGENTS.md', agentInstruction);
     await write('.cursorrules', agentInstruction);
