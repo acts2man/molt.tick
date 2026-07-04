@@ -33,6 +33,7 @@ export interface PageCapture {
     assets: string;             // ordered asset manifest JSON
     iframes: string;            // iframe manifest JSON
     screenshot: string;         // full-page PNG for later pixel-diff
+    sliders?: string;           // slider spec JSON (Revolution Slider etc.)
   };
   stats: {
     elements: number;

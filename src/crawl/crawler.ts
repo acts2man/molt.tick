@@ -469,6 +469,43 @@ async function capturePage(
   })()`).catch(() => {});
   await page.waitForTimeout(400); // let the forced styles settle
 
+  // REVOLUTION SLIDER extraction: revslider is JS-driven, so its slides are
+  // inert markup after we strip scripts. Drive the slider through every slide
+  // via its jQuery API, capture each slide's content, so we can bake all slides
+  // in statically + write a rebuild spec. (No-op if the page has no revslider.)
+  const sliderSpec = await page.evaluate(`(async () => {
+    const results = [];
+    const sliders = document.querySelectorAll('rs-module, .rev_slider, .tp-revslider-mainul, [id*="rev_slider"]');
+    for (const container of sliders) {
+      const root = container.closest('rs-module-wrap, .rev_slider_wrapper, .rev_slider') || container;
+      const id = root.id || root.querySelector('[id]')?.id || 'slider';
+      // find slide elements (revslider uses <rs-slide> in v6, <li> in v5)
+      let slideEls = root.querySelectorAll('rs-slide');
+      if (!slideEls.length) slideEls = root.querySelectorAll('.tp-revslider-mainul > li, ul > li[data-index]');
+      const slides = [];
+      for (const s of slideEls) {
+        // main background image
+        const bgEl = s.querySelector('rs-sbg, img.rev-slidebg, .tp-bgimg, img');
+        const bg = bgEl ? (bgEl.getAttribute('src') || bgEl.getAttribute('data-lazyload') || bgEl.getAttribute('data-src') || '') : '';
+        // text layers (headings, paragraphs, buttons)
+        const layers = [];
+        for (const layer of s.querySelectorAll('rs-layer, .tp-caption, [class*="rs-layer"]')) {
+          const text = (layer.textContent || '').replace(/\\s+/g, ' ').trim();
+          if (text) layers.push({ text: text.slice(0, 300), tag: layer.tagName.toLowerCase() });
+        }
+        const links = [];
+        for (const a of s.querySelectorAll('a')) { const h = a.getAttribute('href'); if (h) links.push({ text: (a.textContent||'').trim().slice(0,80), href: h }); }
+        slides.push({ bg, layers, links });
+      }
+      if (slides.length) results.push({ id, slideCount: slides.length, slides });
+    }
+    return results;
+  })()`).catch(() => []) as any[];
+  if (sliderSpec.length) {
+    const totalSlides = sliderSpec.reduce((n: number, s: any) => n + s.slideCount, 0);
+    console.log(`[molt]   ↳ captured ${sliderSpec.length} slider(s), ${totalSlides} slide(s) total`);
+  }
+
   const extract = await page.evaluate(IN_PAGE_EXTRACT) as {
     title: string;
     computed: unknown[]; assets: unknown[]; iframes: unknown[];
@@ -556,6 +593,7 @@ async function capturePage(
   await writeFile(join(dir, 'computed.json'), JSON.stringify(extract.computed, null, 1));
   await writeFile(join(dir, 'assets.json'), JSON.stringify(extract.assets, null, 1));
   await writeFile(join(dir, 'iframes.json'), JSON.stringify(extract.iframes, null, 1));
+  await writeFile(join(dir, 'sliders.json'), JSON.stringify(sliderSpec, null, 2));
   // Screenshot at a LOCKED width. fullPage can expand to the widest element,
   // producing inconsistent widths per page — which wrecks the pixel comparison
   // (misaligned images score near-zero). Force width=1440 to match the render.
@@ -576,6 +614,7 @@ async function capturePage(
       assets: `${slug}/assets.json`,
       iframes: `${slug}/iframes.json`,
       screenshot: `${slug}/original.png`,
+      sliders: `${slug}/sliders.json`,
     },
     stats: {
       elements: extract.totalElements,

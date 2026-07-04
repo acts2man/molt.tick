@@ -301,5 +301,45 @@ createRoot(document.getElementById('root')!).render(<App />);
     note: 'Faithful visual reproduction: original DOM + original CSS per page. Scripts stripped; add functionality via Lovable.',
   }, null, 2));
 
+  // ---- REBUILD.md: rebuild spec for interactive components (sliders) ----
+  // Molt strips JS, so JS-driven sliders (Revolution Slider) are inert. We
+  // captured each slide's content during crawl; write a machine-readable spec
+  // so an AI (Replit/Lovable) can rebuild them precisely instead of guessing.
+  const rebuildSections: string[] = [];
+  for (const r of routes) {
+    const cap = manifest.pages.find((p) => p.route === r.route);
+    if (!cap?.files.sliders) continue;
+    try {
+      const sliders = JSON.parse(await readFile(join(captureDir, cap.files.sliders), 'utf-8'));
+      if (!Array.isArray(sliders) || sliders.length === 0) continue;
+      for (const sl of sliders) {
+        rebuildSections.push(`### Slider on \`${r.route}\` (id: ${sl.id}, ${sl.slideCount} slides)\n`);
+        rebuildSections.push(`Original: Revolution Slider (JS-driven — reproduced here as static content; rebuild as an auto-advancing React carousel).\n`);
+        sl.slides.forEach((slide: any, i: number) => {
+          rebuildSections.push(`**Slide ${i + 1}:**`);
+          if (slide.bg) rebuildSections.push(`- Background image: ${slide.bg}`);
+          for (const layer of slide.layers ?? []) rebuildSections.push(`- Text (${layer.tag}): "${layer.text}"`);
+          for (const link of slide.links ?? []) rebuildSections.push(`- Button: "${link.text}" → ${link.href}`);
+          rebuildSections.push('');
+        });
+      }
+    } catch { /* skip */ }
+  }
+  if (rebuildSections.length) {
+    await write('REBUILD.md', `# Molt — Rebuild Spec for Interactive Components
+
+This site had JS-driven components (sliders) that can't be captured statically.
+Molt baked in each slide's content below and reproduced it as static stacked
+content. To finish, rebuild these as proper React carousels using the specs.
+
+**Recommended:** for each slider, build an auto-advancing carousel (~5s/slide,
+fade or slide transition) using the slides' background images, text, and buttons
+listed below. The static content is already in the page — you're upgrading it to
+animate/rotate.
+
+${rebuildSections.join('\n')}
+`);
+  }
+
   return { files: written };
 }
