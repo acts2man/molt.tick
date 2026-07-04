@@ -73,6 +73,87 @@ function rewriteInternalLinks(root: HTMLElement, origin: string, routeSet: Set<s
   }
 }
 
+/**
+ * Trim CSS to only the rules a page actually uses. Collects every class, id and
+ * tag present in the page DOM, then drops rules whose selectors reference none
+ * of them. Always keeps at-rules (@font-face, @media wrappers, keyframes),
+ * :root, and html/body rules. Cuts a 480KB theme sheet to a small fraction with
+ * no visual change — and small enough that Lovable won't truncate it.
+ */
+function trimCssToUsed(css: string, dom: HTMLElement): string {
+  // gather the page's tokens
+  const classes = new Set<string>();
+  const ids = new Set<string>();
+  const tags = new Set<string>();
+  for (const el of dom.querySelectorAll('*')) {
+    tags.add(el.rawTagName?.toLowerCase() ?? '');
+    const c = el.getAttribute('class');
+    if (c) for (const cls of c.split(/\s+/)) if (cls) classes.add(cls);
+    const id = el.getAttribute('id');
+    if (id) ids.add(id);
+  }
+  const ALWAYS_TAGS = new Set(['html', 'body', ':root', '*', 'a', 'p', 'div', 'span', 'img', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'section', 'header', 'footer', 'button', 'input', 'form']);
+
+  // does a selector reference anything the page has?
+  const selectorUsed = (sel: string): boolean => {
+    const s = sel.trim();
+    if (!s) return false;
+    if (/^(:root|html|body|\*)/.test(s)) return true;
+    // class tokens
+    for (const m of s.matchAll(/\.([A-Za-z0-9_-]+)/g)) if (classes.has(m[1])) return true;
+    // id tokens
+    for (const m of s.matchAll(/#([A-Za-z0-9_-]+)/g)) if (ids.has(m[1])) return true;
+    // bare tag selectors (no . or #) — keep if the tag is present or common
+    if (!s.includes('.') && !s.includes('#')) {
+      for (const m of s.matchAll(/\b([a-z][a-z0-9]*)\b/g)) {
+        if (tags.has(m[1]) || ALWAYS_TAGS.has(m[1])) return true;
+      }
+    }
+    return false;
+  };
+
+  // walk the CSS, keeping used rules and all at-rules. Simple brace matcher that
+  // preserves @media/@supports/@font-face/@keyframes blocks intact.
+  let out = '';
+  let i = 0;
+  const n = css.length;
+  while (i < n) {
+    // at-rule
+    if (css[i] === '@') {
+      const blockStart = css.indexOf('{', i);
+      const semi = css.indexOf(';', i);
+      if (blockStart === -1 || (semi !== -1 && semi < blockStart)) {
+        // statement at-rule (@import, @charset) — keep
+        const end = semi === -1 ? n : semi + 1;
+        out += css.slice(i, end); i = end; continue;
+      }
+      // block at-rule — capture balanced braces
+      let depth = 0, j = blockStart;
+      for (; j < n; j++) { if (css[j] === '{') depth++; else if (css[j] === '}') { depth--; if (depth === 0) { j++; break; } } }
+      const atHeader = css.slice(i, blockStart).trim();
+      if (/@font-face|@keyframes|@import|@charset|:root/i.test(atHeader)) {
+        out += css.slice(i, j) + '\n';                 // always keep
+      } else {
+        // @media / @supports — recurse into inner rules, keep used ones
+        const inner = css.slice(blockStart + 1, j - 1);
+        const trimmedInner = trimCssToUsed(inner, dom);
+        if (trimmedInner.trim()) out += `${atHeader} {\n${trimmedInner}\n}\n`;
+      }
+      i = j; continue;
+    }
+    // normal rule: selector { ... }
+    const brace = css.indexOf('{', i);
+    if (brace === -1) break;
+    let depth = 0, j = brace;
+    for (; j < n; j++) { if (css[j] === '{') depth++; else if (css[j] === '}') { depth--; if (depth === 0) { j++; break; } } }
+    const selectors = css.slice(i, brace);
+    const keep = selectors.split(',').some((sel) => selectorUsed(sel));
+    if (keep) out += css.slice(i, j) + '\n';
+    i = j;
+  }
+  return out;
+}
+
 export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files: string[] }> {
   const { captureDir, manifest, outDir, projectName = 'migrated-site', routes } = input;
   const origin = manifest.site;
@@ -122,17 +203,20 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
     rewriteInternalLinks(frag, origin, routeSet);
     const cleanBody = frag.toString();
 
-    // bundle this page's captured stylesheets into one CSS file
+    // bundle this page's captured stylesheets, then TRIM to only rules the page
+    // actually uses. The full theme CSS is ~480KB (mostly unused) which Lovable
+    // truncates/chokes on. Trimming to used rules drops it to a fraction and
+    // keeps the visual result identical.
     let css = '';
     for (const sheet of cap.files.stylesheets) {
       try {
         let s = await readFile(join(captureDir, sheet), 'utf-8');
-        // absolutize url(...) refs inside CSS (fonts, background images)
         s = s.replace(/url\((['"]?)([^'")]+)\1\)/gi, (_m, q, u) =>
           /^(https?:|data:|#)/i.test(u) ? `url(${q}${u}${q})` : `url(${q}${absolutize(u, origin)}${q})`);
         css += `\n/* ${sheet} */\n` + s;
       } catch { /* skip missing sheet */ }
     }
+    css = trimCssToUsed(css, frag);
     const cssRel = `styles/${slug}.css`;
     await write(`src/${cssRel}`, css);
 
