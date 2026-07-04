@@ -14,7 +14,7 @@
  */
 
 import { parse, type HTMLElement } from 'node-html-parser';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CaptureManifest, PageCapture } from '../ir/types.js';
 
@@ -211,14 +211,29 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
     for (const sheet of cap.files.stylesheets) {
       try {
         let s = await readFile(join(captureDir, sheet), 'utf-8');
-        s = s.replace(/url\((['"]?)([^'")]+)\1\)/gi, (_m, q, u) =>
-          /^(https?:|data:|#)/i.test(u) ? `url(${q}${u}${q})` : `url(${q}${absolutize(u, origin)}${q})`);
+        s = s.replace(/url\((['"]?)([^'")]+)\1\)/gi, (_m, q, u) => {
+          // leave already-local font paths (crawler rewrote fonts to ../fonts/…)
+          if (u.startsWith('../fonts/') || u.startsWith('./')) return `url(${q}${u}${q})`;
+          return /^(https?:|data:|#)/i.test(u) ? `url(${q}${u}${q})` : `url(${q}${absolutize(u, origin)}${q})`;
+        });
         css += `\n/* ${sheet} */\n` + s;
       } catch { /* skip missing sheet */ }
     }
     css = trimCssToUsed(css, frag);
     const cssRel = `styles/${slug}.css`;
     await write(`src/${cssRel}`, css);
+
+    // copy this page's downloaded font files into src/fonts/ so the CSS
+    // ../fonts/… paths resolve in the built app.
+    try {
+      const fontsDir = join(captureDir, slug, 'fonts');
+      const fontNames = await readdir(fontsDir).catch(() => [] as string[]);
+      for (const fn of fontNames) {
+        const buf = await readFile(join(fontsDir, fn));
+        await mkdir(join(outDir, 'src', 'fonts'), { recursive: true });
+        await writeFile(join(outDir, 'src', 'fonts', fn), buf);
+      }
+    } catch { /* no fonts for this page */ }
 
     const comp = routeToComp(r.route);
     const file = routeToFile(r.route);
@@ -229,14 +244,24 @@ export async function synthesizeFaithful(input: FaithfulInput): Promise<{ files:
     const htmlRel = `html/${slug}.html`;
     await write(`src/${htmlRel}`, cleanBody);
     await write(`src/pages/${file}.tsx`,
-`import './../${cssRel}';
+`import { useEffect } from 'react';
+import './../${cssRel}';
 import html from './../${htmlRel}?raw';
 
-/** Faithful reproduction of ${r.route} — original markup + original CSS. */
+/**
+ * Faithful reproduction of ${r.route}. The original page's <body> classes are
+ * applied to document.body (not a wrapper div) because the theme CSS targets
+ * them as \`body.<class> .something\` — putting them on a div would silently
+ * break hundreds of layout rules.
+ */
+const BODY_CLASSES = ${JSON.stringify(bodyClass)}.split(/\\s+/).filter(Boolean);
+
 export default function ${comp}() {
-  return (
-    <div className=${JSON.stringify(bodyClass)} dangerouslySetInnerHTML={{ __html: html }} />
-  );
+  useEffect(() => {
+    document.body.classList.add(...BODY_CLASSES);
+    return () => document.body.classList.remove(...BODY_CLASSES);
+  }, []);
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
 `);
     pageMeta.push({ route: r.route, comp, file, bodyClass, cssRel, slug });

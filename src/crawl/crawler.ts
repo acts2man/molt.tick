@@ -15,7 +15,7 @@
  */
 
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CaptureManifest, PageCapture } from '../ir/types.js';
 
@@ -513,6 +513,44 @@ async function capturePage(
     styleFiles.push(f);
     styleBytes += css.length;
   });
+
+  // DOWNLOAD FONTS: the CSS references icon fonts (Fontello, trx_addons, etc.)
+  // and web fonts by URL on the original server. If we only bundle the CSS, the
+  // font files are missing → icons show as blank boxes. Download each font file
+  // and rewrite the CSS to point at the local copy, so icons/fonts render.
+  await mkdir(join(dir, 'fonts'), { recursive: true });
+  const fontUrlMap = new Map<string, string>(); // original url → local path
+  let fontIdx = 0;
+  for (const f of styleFiles) {
+    const cssPath = join(dir, f);
+    let css = await readFile(cssPath, 'utf-8');
+    const urls = new Set<string>();
+    for (const m of css.matchAll(/url\((['"]?)([^'")]+\.(?:woff2?|ttf|otf|eot))(\?[^'")]*)?\1\)/gi)) {
+      urls.add(m[2] + (m[3] ?? ''));
+    }
+    for (const rawUrl of urls) {
+      try {
+        const abs = new URL(rawUrl, origin).toString();
+        if (!fontUrlMap.has(abs)) {
+          const resp = await page.request.get(abs, { timeout: 12000 });
+          if (resp.ok()) {
+            const buf = await resp.body();
+            const ext = (abs.split('?')[0].match(/\.(woff2?|ttf|otf|eot)$/i)?.[1]) ?? 'woff2';
+            const local = `fonts/font-${fontIdx++}.${ext}`;
+            await writeFile(join(dir, local), buf);
+            fontUrlMap.set(abs, local);
+          }
+        }
+        const local = fontUrlMap.get(abs);
+        if (local) {
+          // rewrite every occurrence of this url in the css to the local path
+          css = css.split(rawUrl).join('./' + local.replace('fonts/', '../fonts/'));
+        }
+      } catch { /* font unreachable — leave original url */ }
+    }
+    await writeFile(cssPath, css);
+  }
+  if (fontIdx > 0) console.log(`[molt]   ↳ bundled ${fontIdx} font file(s)`);
 
   await writeFile(join(dir, 'page.html'), dom);
   await writeFile(join(dir, 'computed.json'), JSON.stringify(extract.computed, null, 1));
