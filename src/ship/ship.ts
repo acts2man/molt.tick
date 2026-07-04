@@ -44,7 +44,11 @@ async function gh(token: string, path: string, init?: RequestInit): Promise<any>
     },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`GitHub ${res.status} on ${path}: ${body.message ?? JSON.stringify(body)}`);
+  if (!res.ok) {
+    // GitHub 422s include an `errors` array with the real reason — surface it.
+    const detail = body.errors ? ` — ${JSON.stringify(body.errors)}` : '';
+    throw new Error(`GitHub ${res.status} on ${path}: ${body.message ?? JSON.stringify(body)}${detail}`);
+  }
   return body;
 }
 
@@ -73,12 +77,14 @@ export async function shipToNewRepo(opts: ShipOptions): Promise<ShipResult> {
   try {
     const me = await gh(token, '/user');
     const owner = me.login;
-    let repoName = sanitizeRepoName(opts.repoName);
+    const baseName = sanitizeRepoName(opts.repoName);
 
-    // create the repo — if the name is taken, append a short suffix and retry
+    // create the repo — always append a short unique suffix so we never collide
+    // with a repo from a previous run (the #1 cause of 422 on creation).
     let repo: any = null;
     for (let attempt = 0; attempt < 3 && !repo; attempt++) {
-      const tryName = attempt === 0 ? repoName : `${repoName}-${Math.random().toString(36).slice(2, 6)}`;
+      const suffix = Math.random().toString(36).slice(2, 7);
+      const tryName = `${baseName}-${suffix}`.slice(0, 95);
       try {
         repo = await gh(token, '/user/repos', {
           method: 'POST',
@@ -89,12 +95,12 @@ export async function shipToNewRepo(opts: ShipOptions): Promise<ShipResult> {
             description: 'Faithful migration by Molt — connect to Replit/Vercel/local to run.',
           }),
         });
-        repoName = tryName;
       } catch (e) {
-        if (!/name already exists/i.test((e as Error).message) || attempt === 2) throw e;
+        if (attempt === 2) throw e; // out of retries — surface the real error
       }
     }
-    if (!repo) return { pushed: false, filesPushed: 0, error: 'could not create repo' };
+    if (!repo) return { pushed: false, filesPushed: 0, error: 'could not create repo after retries' };
+    const repoName = repo.name;
 
     const branch = repo.default_branch || 'main';
     await new Promise((r) => setTimeout(r, 1200)); // let auto_init settle
