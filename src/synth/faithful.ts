@@ -62,13 +62,19 @@ function absolutizeAssets(root: HTMLElement, origin: string): void {
 
 /** Rewrite same-origin internal page links to the React routes we emitted. */
 function rewriteInternalLinks(root: HTMLElement, origin: string, routeSet: Set<string>): void {
+  const originHost = (() => { try { return new URL(origin).host; } catch { return ''; } })();
   for (const a of root.querySelectorAll('a[href]')) {
     const href = a.getAttribute('href'); if (!href) continue;
+    if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
     try {
       const u = new URL(href, origin);
-      if (u.origin !== origin) continue; // external — leave
-      const path = u.pathname.replace(/\/$/, '') || '/';
-      if (routeSet.has(path)) a.setAttribute('href', path); // point at the SPA route
+      // rewrite ANY same-origin link to a relative SPA path — even pages not in
+      // this migration — so internal navigation never bounces to the original
+      // WordPress site. External links (different host) are left alone.
+      if (u.host === originHost) {
+        const path = (u.pathname.replace(/\/$/, '') || '/') + u.search + u.hash;
+        a.setAttribute('href', path);
+      }
     } catch { /* leave */ }
   }
 }
