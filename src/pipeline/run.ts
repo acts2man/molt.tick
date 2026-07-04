@@ -11,7 +11,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { shipToLovable } from '../ship/ship.js';
+import { shipToNewRepo } from '../ship/ship.js';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
@@ -185,22 +185,31 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     }
     await emit({ stage: 'verify', status: 'verifying', message: `Route checks ${structure.routeChecks.passed}/${structure.routeChecks.total}`, pages });
 
-    // ---- Stage 6: ship (push into a Lovable repo, if one is configured) ----
-    const shipRepo = shipRepoOpt ?? process.env.MOLT_SHIP_REPO;
-    if (shipRepo) {
-      await emit({ stage: 'ship', status: 'shipping', message: `Pushing to ${shipRepo}…` });
-      const shipped = await shipToLovable({
-        repo: shipRepo, outDir,
+    // ---- Stage 6: ship (create a fresh standalone repo, push the complete app) ----
+    const shouldShip = shipRepoOpt ?? process.env.MOLT_SHIP_REPO;
+    if (shouldShip) {
+      const repoName = typeof shouldShip === 'string' && shouldShip !== '1'
+        ? shouldShip
+        : `${outputRepo}`; // derive a name from the migration's output repo name
+      await emit({ stage: 'ship', status: 'shipping', message: `Creating repo and pushing…` });
+      const shipped = await shipToNewRepo({
+        outDir, repoName,
         commitMessage: `Molt — faithful migration of ${siteUrl}`,
       });
       if (shipped.pushed) {
-        console.log(`[pipeline] shipped ${shipped.filesPushed} files to ${shipRepo}@${shipped.branch} (${shipped.commit?.slice(0, 7)})`);
-        await emit({ stage: 'ship', status: 'shipping', message: `Pushed ${shipped.filesPushed} files to ${shipRepo} — Lovable will sync shortly` });
+        console.log(`[pipeline] shipped ${shipped.filesPushed} files → ${shipped.repoUrl} (${shipped.commit?.slice(0, 7)})`);
+        await emit({ stage: 'ship', status: 'shipping', message: `Pushed to ${shipped.repoUrl} — connect it to Replit/Vercel/local` });
+        // surface the repo URL as a flag so it shows in the dashboard
+        flags.push({
+          page_route: '(repo)', kind: 'no-backend',
+          summary: `Repo created: ${shipped.repoUrl}`,
+          detail: `${shipped.filesPushed} files pushed. Connect this repo to Replit (or clone locally) to run: npm install && npm run dev.`,
+        });
       } else {
         console.error(`[pipeline] ship failed: ${shipped.error}`);
         flags.push({
           page_route: '(ship)', kind: 'no-backend',
-          summary: `Push to ${shipRepo} failed`,
+          summary: 'Repo creation/push failed',
           detail: shipped.error ?? 'unknown error',
         });
       }
