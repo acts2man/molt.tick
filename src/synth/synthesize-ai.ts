@@ -59,6 +59,7 @@ export async function synthesizeWithAI(input: AiSynthInput): Promise<AiSynthResu
 
   const pageMeta: { route: string; comp: string; file: string }[] = [];
   let rebuilt = 0, failed = 0, totalTokens = 0;
+  const errors: string[] = [];
 
   for (const r of routes) {
     const cap = manifest.pages.find((p) => p.route === r.route);
@@ -73,20 +74,20 @@ export async function synthesizeWithAI(input: AiSynthInput): Promise<AiSynthResu
       const comp = routeToComp(r.route);
       const file = routeToFile(r.route);
       if (result.ok && result.code) {
-        // ensure it's a named default export component we can import
         let code = result.code;
         if (!/export\s+default/.test(code)) code += `\n\nexport default Page;\n`;
         await write(`src/pages/${file}.tsx`, code);
         rebuilt++;
         totalTokens += (result.usage?.input_tokens ?? 0) + (result.usage?.output_tokens ?? 0);
       } else {
-        // fallback stub so the build never breaks on one failed page
-        await write(`src/pages/${file}.tsx`, `export default function ${comp}() { return <div className="p-8">Page could not be rebuilt: ${result.error ?? 'unknown'}</div>; }\n`);
+        await write(`src/pages/${file}.tsx`, `export default function ${comp}() { return <div className="p-8">Page could not be rebuilt.</div>; }\n`);
         failed++;
+        if (result.error) errors.push(`${r.route}: ${result.error}`);
       }
       pageMeta.push({ route: r.route, comp, file });
     } catch (e) {
       failed++;
+      errors.push(`${r.route}: ${(e as Error).message}`);
     }
   }
 
@@ -119,5 +120,5 @@ createRoot(document.getElementById('root')!).render(<App />);
     pagesRebuilt: rebuilt, pagesFailed: failed,
   }, null, 2));
 
-  return { ok: rebuilt > 0, pagesRebuilt: rebuilt, pagesFailed: failed, totalTokens };
+  return { ok: rebuilt > 0, pagesRebuilt: rebuilt, pagesFailed: failed, totalTokens, error: errors.length ? errors.slice(0, 3).join(' | ') : undefined };
 }

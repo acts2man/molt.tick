@@ -79,7 +79,7 @@ export async function rebuildPageWithAI(input: RebuildInput): Promise<RebuildRes
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: input.model ?? 'claude-sonnet-4-5',
+        model: input.model ?? process.env.MOLT_AI_MODEL ?? 'claude-sonnet-4-5',
         max_tokens: 8000,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: `Recreate this page as a React + Tailwind component.\n\n${input.brief}` }],

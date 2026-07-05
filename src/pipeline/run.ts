@@ -150,6 +150,8 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
     const faithfulRoutes = manifest.pages.map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
     if (process.env.MOLT_AI_REBUILD === '1' && process.env.ANTHROPIC_API_KEY) {
       // AI-POWERED: Claude intelligently rebuilds each page as clean React.
+      const model = process.env.MOLT_AI_MODEL ?? 'claude-sonnet-4-5';
+      console.log(`[pipeline] AI mode ON · model=${model} · key=${process.env.ANTHROPIC_API_KEY ? 'present' : 'MISSING'}`);
       await emit({ stage: 'synthesize', status: 'synthesizing', message: 'AI-rebuilding pages with Claude…' });
       const ai = await synthesizeWithAI({
         captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes,
