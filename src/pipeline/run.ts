@@ -18,6 +18,7 @@ import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
 import { normalizePage } from '../normalize/elementor.js';
 import { buildPlan, type PlanInput } from '../plan/plan.js';
 import { synthesizeFaithful } from '../synth/faithful.js';
+import { synthesizeWithAI } from '../synth/synthesize-ai.js';
 import { verifyStructure } from '../verify/structure.js';
 import { renderAndDiff, type RenderResult } from '../verify/render.js';
 import { comparePixels } from '../verify/pixel.js';
@@ -145,13 +146,30 @@ export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult
       flags,
     });
 
-    // ---- Stage 4: synthesize (FAITHFUL visual reproduction) ----
-    // Original DOM + original CSS per page — reproduces what the page LOOKS like,
-    // not what its plugins do. Functionality is added later via Lovable.
-    await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Reproducing pages (original DOM + CSS)…' });
+    // ---- Stage 4: synthesize ----
     const faithfulRoutes = manifest.pages.map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
-    await synthesizeFaithful({ captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes });
-    await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Pages reproduced' });
+    if (process.env.MOLT_AI_REBUILD === '1' && process.env.ANTHROPIC_API_KEY) {
+      // AI-POWERED: Claude intelligently rebuilds each page as clean React.
+      await emit({ stage: 'synthesize', status: 'synthesizing', message: 'AI-rebuilding pages with Claude…' });
+      const ai = await synthesizeWithAI({
+        captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes,
+        onProgress: (m) => console.log(`[pipeline] ${m}`),
+      });
+      if (ai.ok) {
+        console.log(`[pipeline] AI rebuild: ${ai.pagesRebuilt} pages (${ai.pagesFailed} failed), ~${ai.totalTokens} tokens`);
+        await emit({ stage: 'synthesize', status: 'synthesizing', message: `AI rebuilt ${ai.pagesRebuilt} pages` });
+      } else {
+        // AI failed entirely — fall back to faithful mechanical capture
+        console.error(`[pipeline] AI rebuild failed (${ai.error}); falling back to faithful capture`);
+        await synthesizeFaithful({ captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes });
+        await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Fell back to faithful capture' });
+      }
+    } else {
+      // FAITHFUL: mechanical original DOM + CSS reproduction.
+      await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Reproducing pages (original DOM + CSS)…' });
+      await synthesizeFaithful({ captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes });
+      await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Pages reproduced' });
+    }
 
     // ---- Stage 5: verify ----
     await emit({ stage: 'verify', status: 'verifying', message: 'Verifying output…' });
