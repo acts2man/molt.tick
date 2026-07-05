@@ -24,7 +24,78 @@ export interface RebuildResult {
   usage?: { input_tokens: number; output_tokens: number };
 }
 
-/** Distill the IR into a compact readable brief — structured meaning, not raw HTML. */
+import { parse, HTMLElement } from 'node-html-parser';
+
+/**
+ * Distill the captured page HTML into a compact, readable brief for Claude —
+ * the meaningful content (headings, text, images, links, section structure),
+ * NOT the raw 300KB markup. Small enough to reason over, complete enough to
+ * rebuild faithfully. Built from page.html (what the crawler actually produces).
+ */
+export function buildBriefFromHtml(html: string, title: string, route: string, origin: string): string {
+  const root = parse(html, { blockTextElements: { script: false, style: false } });
+  // strip noise
+  for (const el of root.querySelectorAll('script, style, noscript, link, meta, svg')) el.remove();
+
+  const lines: string[] = [];
+  lines.push(`PAGE: ${title} (route ${route})`);
+  lines.push('');
+  lines.push('CONTENT (in document order — reproduce faithfully):');
+
+  const abs = (u: string) => { try { return new URL(u, origin).toString(); } catch { return u; } };
+  const seenText = new Set<string>();
+  let count = 0;
+  const MAX = 400; // cap items so the brief stays reasonable
+
+  const walk = (node: HTMLElement, depth = 0): void => {
+    if (count >= MAX) return;
+    const tag = node.rawTagName?.toLowerCase();
+    if (!tag) return;
+    // headings
+    if (/^h[1-6]$/.test(tag)) {
+      const t = node.text.replace(/\s+/g, ' ').trim();
+      if (t && !seenText.has(t)) { lines.push(`${'  '.repeat(Math.min(depth, 4))}[${tag}] ${t.slice(0, 200)}`); seenText.add(t); count++; }
+      return;
+    }
+    // paragraphs / meaningful text blocks
+    if (tag === 'p' || tag === 'li' || tag === 'blockquote') {
+      const t = node.text.replace(/\s+/g, ' ').trim();
+      if (t.length > 2 && !seenText.has(t)) { lines.push(`${'  '.repeat(Math.min(depth, 4))}[text] ${t.slice(0, 300)}`); seenText.add(t); count++; }
+      return;
+    }
+    // images
+    if (tag === 'img') {
+      const src = node.getAttribute('src') || node.getAttribute('data-src') || '';
+      const altAttr = node.getAttribute('alt') || '';
+      if (src && !src.startsWith('data:')) { lines.push(`${'  '.repeat(Math.min(depth, 4))}[image] ${abs(src)}${altAttr ? ` (alt: ${altAttr})` : ''}`); count++; }
+      return;
+    }
+    // links / buttons
+    if (tag === 'a') {
+      const t = node.text.replace(/\s+/g, ' ').trim();
+      const href = node.getAttribute('href') || '';
+      if (t && href && !seenText.has(t + href)) { lines.push(`${'  '.repeat(Math.min(depth, 4))}[link] "${t.slice(0, 80)}" → ${href}`); seenText.add(t + href); count++; }
+      // still descend (links can wrap images)
+    }
+    // background images on inline style
+    const style = node.getAttribute('style') || '';
+    const bgMatch = style.match(/background-image:\s*url\(["']?([^"')]+)/i);
+    if (bgMatch) { lines.push(`${'  '.repeat(Math.min(depth, 4))}[bg-image] ${abs(bgMatch[1])}`); count++; }
+    // section markers for structure
+    if (tag === 'section' || tag === 'header' || tag === 'footer' || tag === 'nav') {
+      lines.push(`\n${'  '.repeat(Math.min(depth, 4))}<${tag}>`);
+    }
+    for (const child of node.childNodes) {
+      if (child instanceof HTMLElement) walk(child, depth + 1);
+    }
+  };
+  const body = root.querySelector('body') ?? root;
+  walk(body);
+
+  return lines.join('\n');
+}
+
+/** Legacy IR-based brief (kept for the reference test data). */
 export function buildBrief(ir: any): string {
   const lines: string[] = [];
   lines.push(`PAGE: ${ir.title ?? ''} (route ${ir.route ?? '/'})`);

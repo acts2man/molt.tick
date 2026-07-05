@@ -10,7 +10,7 @@
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CaptureManifest } from '../ir/types.js';
-import { buildBrief, rebuildPageWithAI } from './ai-rebuild.js';
+import { buildBriefFromHtml, rebuildPageWithAI } from './ai-rebuild.js';
 
 export interface AiSynthInput {
   captureDir: string;
@@ -67,10 +67,11 @@ export async function synthesizeWithAI(input: AiSynthInput): Promise<AiSynthResu
     const slug = cap.files.dom.split('/')[0];
     onProgress?.(`AI-rebuilding ${r.route}…`);
     try {
-      const irPath = join(captureDir, slug, 'page.ir.json');
-      const ir = JSON.parse(await readFile(irPath, 'utf-8'));
-      const brief = buildBrief(ir);
-      const result = await rebuildPageWithAI({ route: r.route, title: ir.title ?? '', brief });
+      const htmlPath = join(captureDir, cap.files.dom); // page.html — what the crawler produces
+      const html = await readFile(htmlPath, 'utf-8');
+      const origin = (() => { try { return new URL(cap.url).origin; } catch { return ''; } })();
+      const brief = buildBriefFromHtml(html, cap.title ?? '', r.route, origin);
+      const result = await rebuildPageWithAI({ route: r.route, title: cap.title ?? '', brief });
       const comp = routeToComp(r.route);
       const file = routeToFile(r.route);
       if (result.ok && result.code) {
