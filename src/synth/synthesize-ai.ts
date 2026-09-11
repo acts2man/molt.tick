@@ -1,16 +1,16 @@
 /**
  * Molt — AI synthesis stage.
  *
- * Rebuilds each captured page with Claude (intelligent recreation) instead of
- * mechanical HTML/CSS copy, then assembles a complete, buildable Vite+React+
- * Tailwind project. Wired into the pipeline; gated by MOLT_AI_REBUILD + an API
- * key. Falls back to faithful mechanical capture when unavailable.
+ * Rebuilds each captured page using multimodal visual evidence instead of a
+ * text-only guess. Each page sends the original screenshot, a compact DOM brief,
+ * and a measured/computed visual specification to the reconstruction model.
  */
 
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { CaptureManifest } from '../ir/types.js';
+import type { CaptureManifest, ComputedEntry } from '../ir/types.js';
 import { buildBriefFromHtml, rebuildPageWithAI } from './ai-rebuild.js';
+import { buildVisualEvidence } from './visual-evidence.js';
 
 export interface AiSynthInput {
   captureDir: string;
@@ -44,7 +44,6 @@ export async function synthesizeWithAI(input: AiSynthInput): Promise<AiSynthResu
     await writeFile(full, body);
   };
 
-  // scaffold a complete Vite + React + Tailwind project
   await write('package.json', JSON.stringify({
     name: projectName, private: true, type: 'module',
     scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' },
@@ -65,13 +64,24 @@ export async function synthesizeWithAI(input: AiSynthInput): Promise<AiSynthResu
     const cap = manifest.pages.find((p) => p.route === r.route);
     if (!cap) continue;
     const slug = cap.files.dom.split('/')[0];
-    onProgress?.(`AI-rebuilding ${r.route}…`);
+    onProgress?.(`AI visually rebuilding ${r.route}…`);
+
     try {
-      const htmlPath = join(captureDir, cap.files.dom); // page.html — what the crawler produces
-      const html = await readFile(htmlPath, 'utf-8');
+      const html = await readFile(join(captureDir, cap.files.dom), 'utf-8');
+      const computed = JSON.parse(await readFile(join(captureDir, cap.files.computed), 'utf-8')) as ComputedEntry[];
       const origin = (() => { try { return new URL(cap.url).origin; } catch { return ''; } })();
       const brief = buildBriefFromHtml(html, cap.title ?? '', r.route, origin);
-      const result = await rebuildPageWithAI({ route: r.route, title: cap.title ?? '', brief });
+      const visualEvidence = buildVisualEvidence(computed);
+      const referenceImagePath = join(captureDir, cap.files.screenshot);
+
+      const result = await rebuildPageWithAI({
+        route: r.route,
+        title: cap.title ?? '',
+        brief,
+        visualEvidence,
+        referenceImagePath,
+      });
+
       const comp = routeToComp(r.route);
       const file = routeToFile(r.route);
       if (result.ok && result.code) {
@@ -92,7 +102,6 @@ export async function synthesizeWithAI(input: AiSynthInput): Promise<AiSynthResu
     }
   }
 
-  // dependency-free router (plain path switch — no react-router needed)
   const imports = pageMeta.map((p) => `import ${p.comp} from './pages/${p.file}';`).join('\n');
   const routeMap = pageMeta.map((p) => `  ${JSON.stringify(p.route)}: ${p.comp},`).join('\n');
   const first = pageMeta[0]?.comp ?? 'null';
@@ -116,9 +125,12 @@ createRoot(document.getElementById('root')!).render(<App />);
 `);
 
   await write('MOLT_OUTPUT.json', JSON.stringify({
-    project: projectName, mode: 'ai-rebuild',
+    project: projectName,
+    mode: 'ai-visual-rebuild',
     routes: pageMeta.map((p) => p.route),
-    pagesRebuilt: rebuilt, pagesFailed: failed,
+    pagesRebuilt: rebuilt,
+    pagesFailed: failed,
+    evidence: ['source-screenshot', 'dom-brief', 'computed-style-evidence'],
   }, null, 2));
 
   return { ok: rebuilt > 0, pagesRebuilt: rebuilt, pagesFailed: failed, totalTokens, error: errors.length ? errors.slice(0, 3).join(' | ') : undefined };
