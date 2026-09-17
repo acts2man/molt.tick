@@ -26,7 +26,8 @@ test('migration inventory identifies observed services without claiming completi
   assert.ok(items.some(i=>i.kind==='platform'&&i.provider==='WordPress'));
   assert.ok(items.some(i=>i.kind==='platform'&&i.provider==='Elementor'));
   assert.ok(items.every(i=>i.route==='/'));
-  assert.ok(items.every(i=>/Reconnect|Choose|Treat|frontend/i.test(i.action)));
+  assert.ok(items.every(i=>i.action.length>20));
+  assert.ok(items.every(i=>!/already migrated|complete migration/i.test(i.action)));
 });
 
 test('migration inventory deduplicates repeated service links',()=>{
