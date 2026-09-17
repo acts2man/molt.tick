@@ -76,18 +76,21 @@ export async function discoverInteractions(page: Page): Promise<InteractionTrigg
   return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
 }
 export async function activateInteraction(page: Page, trigger: InteractionTrigger): Promise<boolean> {
-  return await page.evaluate(({kind,name,controls}) => {
-    const clean=(s:unknown)=>String(s??'').replace(/\\s+/g,' ').trim().slice(0,120);
-    const label=(el:Element)=>clean(el.getAttribute('aria-label')||el.textContent);
-    let items:Element[]=[];
-    if(kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
-    else if(kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
+  const payload=JSON.stringify(trigger).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+  const script=`(() => {
+    const trigger=${payload};
+    const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
+    const label=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+    let items=[];
+    if(trigger.kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
+    else if(trigger.kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
     else items=Array.from(document.querySelectorAll('button,[role="button"]')).filter(el=>!el.matches('[type="submit"],[type="reset"]'));
-    const target=items.find(el=>label(el)===name&&(!controls||el.getAttribute('aria-controls')===controls));
+    const target=items.find(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
     if(!target)return false;
-    (target as HTMLElement).click();
+    target.click();
     return true;
-  }, trigger);
+  })()`;
+  return await page.evaluate(script) as boolean;
 }
 /** Do not erase transforms, reveal hidden menus, or resize the viewport to page height. */
 export async function settle(page: Page, signal: AbortSignal): Promise<void> {
