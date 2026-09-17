@@ -1,0 +1,64 @@
+name: Molt reconstruction
+run-name: "Molt studio · ${{ inputs.job_id }}"
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Job identifier created by the authenticated Molt Studio API
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: molt-studio-${{ inputs.job_id }}
+  cancel-in-progress: false
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install the engine and trusted React toolchain
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix render-toolchain install --no-audit --no-fund
+          npx --no-install playwright-core install --with-deps chromium
+      - name: Enable Chromium sandbox in the disposable runner
+        run: |
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Reconstruct, measure, refine, and report to the studio
+        env:
+          MOLT_JOB_ID: ${{ inputs.job_id }}
+          MOLT_STUDIO_ORIGIN: https://moltick.netlify.app
+          MOLT_MODEL_PROVIDER: ${{ secrets.MOLT_MODEL_PROVIDER || 'openai' }}
+          MOLT_AI_MODEL: ${{ secrets.MOLT_AI_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
+          MOLT_MAX_MODEL_CALLS: '24'
+          MOLT_AI_MAX_TOKENS: '16000'
+          MOLT_AGENT_MINUTES: '25'
+        run: ./node_modules/.bin/tsx scripts/studio-run.ts
+      - name: Preserve the actual reconstruction artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: molt-reconstruction
+          path: |
+            studio-artifacts/
+            !studio-artifacts/**/node_modules/**
+            !studio-artifacts/**/*.woff
+            !studio-artifacts/**/*.woff2
+            !studio-artifacts/**/*.ttf
+            !studio-artifacts/**/*.otf
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,46 @@
+[build]
+  base = "studio"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["libsodium-wrappers", "libsodium"]
+
+[[redirects]]
+  from = "/studio/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/connections"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/activity"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/guide"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "DENY"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
