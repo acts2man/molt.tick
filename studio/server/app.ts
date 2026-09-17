@@ -150,6 +150,27 @@ export async function handle(req: Request, services: Services): Promise<Response
         const settings:Settings={provider,model,configuredAt:new Date().toISOString(),accessChecked:!!apiKey};await store.setJSON(`settings/${owner}`,settings);return json({saved:true,...settings});
       }
     }
+    if(path[0]==='preflight' && method==='POST') {
+      const input=await body(req);
+      if(input.developmentTest!==true)throw new HttpError(400,'Confirm this owner development scan in Studio.');
+      const job=newJob(input,owner,'preflight'),key=dataKey(owner,job.id),existing=await store.get(key,{type:'json'});
+      if(existing){
+        if(existing.kind!=='preflight'||existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another scope scan.');
+        return json(existing);
+      }
+      const recent=await jobs(store,owner);
+      if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'Another scan or reconstruction is already active. Finish or cancel it first.');
+      if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=8)throw new HttpError(429,'This workspace allows eight new scans or reconstructions per hour.');
+      if(job.bundleId){const m=await store.get(`${bundleKey(owner,job.bundleId)}/manifest`,{type:'json'});if(!m?.ready)throw new HttpError(409,'Your page bundle has not finished uploading.');}
+      try{const workflow=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${PREFLIGHT_WORKFLOW}`);if(workflow.state!=='active')throw new HttpError(409,'The preflight workflow is not active.');}catch(e){if(e instanceof HttpError)throw e;throw new HttpError(409,'The preflight workflow is unavailable.');}
+      await store.setJSON(key,job);
+      try{
+        const dispatch=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${PREFLIGHT_WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:job.id}})});
+        const latest=await store.get(key,{type:'json'}) as Job;
+        if(latest.status==='dispatching'){latest.status='queued';latest.message='Waiting for the scope scanner';if(dispatch?.workflow_run_id){latest.runId=dispatch.workflow_run_id;latest.runUrl=dispatch.html_url;}await store.setJSON(key,latest);}
+        return json(latest,202);
+      }catch(e){job.status='error';job.error=(e as Error).message;job.message='The scope scanner could not be started';await store.setJSON(key,job);throw e;}
+    }
     if(path[0]==='jobs') {
       if(method==='GET' && path.length===1)return json({jobs:await jobs(store,owner)});
       if(method==='POST' && path.length===1) {
