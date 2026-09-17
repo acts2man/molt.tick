@@ -29,6 +29,10 @@ export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[
     result.push(input(`${v.viewport.name} complete source overview; native dimensions ${png.width}x${png.height}`,overview(png)));
     result.push(input(`${v.viewport.name} source y=0 at native resolution`,crop(png,0,1100)));
     if(png.height>1100)result.push(input(`${v.viewport.name} source bottom y=${png.height-1100}`,crop(png,png.height-1100,1100)));
+    for(const state of (v.interactions??[]).slice(0,2)){
+      const opened=await loadPng(state.screenshot);
+      result.push(input(`${v.viewport.name} INTERACTION ${state.trigger.kind} "${state.trigger.name}" source state`,overview(opened)));
+    }
   }return result;
 }
 export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
