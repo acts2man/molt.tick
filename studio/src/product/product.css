@@ -7,3 +7,34 @@
 @media(prefers-reduced-motion:reduce){.public-button{transition:none}.public-button:hover{transform:none}}
 
 .source-tabs button[aria-pressed=true]{background:#2c3424;color:#dce5ce;border-color:#414d35}.internal-guide.public-inner{padding:0;max-width:100%;color:#ecefdf}.internal-guide>h1{font-size:43px}.internal-guide .page-intro{font-size:14px}.internal-guide .public-kicker{color:#b8c0a6}.model-card .field select+input{margin-top:9px}.studio-hero .hero-art{display:none}.wizard-consent input{width:17px;height:17px}.public-site :target{scroll-margin-top:25px}.public-guide-card code{overflow-wrap:anywhere}.public-inner .fine-print{color:#9cad89;margin-top:30px;line-height:1.8}
+
+
+/* Customer accounts */
+.auth-page,.account-page{min-height:72vh}
+.auth-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.8fr);gap:42px;align-items:start}
+.auth-grid h1{font-size:clamp(44px,6vw,78px);line-height:.98;margin:18px 0 24px}
+.auth-card{max-width:560px;padding:28px;border:1px solid #445338;border-radius:14px;background:linear-gradient(145deg,#1d2618,#151b12);box-shadow:0 26px 70px #0003}
+.auth-card label{display:block;font-size:11px;color:#cbd5bd;margin-bottom:18px}
+.auth-card input{width:100%;margin-top:9px;padding:14px 15px;border-radius:7px;border:1px solid #435038;background:#0f150d;color:#eef2e8;font-size:15px}
+.auth-card .public-button{width:100%;margin-top:6px}
+.auth-switch{border:0;background:none;color:#d8c08e;margin-top:18px;padding:6px 0;font-size:12px}
+.auth-aside{padding:34px;border:1px solid #39472f;border-radius:14px;background:radial-gradient(circle at 100% 0,#596b3a30,transparent 45%),#171d14}
+.auth-aside h2{font-size:32px;line-height:1.12;margin:17px 0 22px}
+.auth-aside ul{padding-left:20px;color:#b8c5ac;line-height:2}
+.auth-aside p{font-size:12px;color:#92a185;margin-top:24px}
+.account-heading{display:flex;align-items:end;justify-content:space-between;gap:25px;padding:5px 0 30px}
+.account-heading h1{font-size:48px;margin:12px 0 8px}
+.account-heading p{color:#9aab8d;margin:0}
+.account-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:10px 0 28px}
+.account-metrics article{border:1px solid #3c4932;border-radius:12px;padding:25px;background:#182015}
+.account-metrics span{display:block;font-size:8px;letter-spacing:1.5px;color:#8fa17f}
+.account-metrics strong{display:block;font-size:30px;font-weight:500;margin:12px 0 8px;color:#edf0e6}
+.account-metrics small{color:#8fa17f}
+.account-next{display:flex;align-items:end;justify-content:space-between;gap:32px;border:1px solid #3b4931;border-radius:14px;padding:32px;background:linear-gradient(120deg,#20291a,#141b11)}
+.account-next h2{font-size:31px;max-width:700px;margin:15px 0}
+.account-next p{color:#99aa8c;max-width:760px}
+@media(max-width:760px){.auth-grid{grid-template-columns:1fr}.auth-aside{order:-1}.account-metrics{grid-template-columns:1fr}.account-heading,.account-next{align-items:flex-start;flex-direction:column}.account-heading h1{font-size:38px}}
+
+.account-quote{display:grid;grid-template-columns:minmax(0,.85fr) minmax(420px,1.15fr);gap:32px;margin:28px 0 10px;padding:32px;border:1px solid #3b4931;border-radius:14px;background:#151c12}
+.account-quote h2{font-size:29px;margin:15px 0 14px}.account-quote p{color:#95a388;font-size:12px}.account-quote form{display:grid;gap:16px}.account-quote label{font-size:10px;color:#aebda0}.account-quote input,.account-quote select{display:block;width:100%;margin-top:7px;background:#0f150d;color:#edf2e5;border:1px solid #405037;border-radius:7px;padding:12px}.quote-row{display:grid;grid-template-columns:.6fr 1fr 1fr;gap:10px}.quote-result{border:1px solid #53643f;border-radius:10px;padding:18px;background:#1f2919}.quote-result span,.quote-result small{display:block}.quote-result span{font-size:8px;letter-spacing:1.4px;color:#8fa17f}.quote-result strong{display:block;font-size:25px;margin:8px 0;color:#e8d2a4}.quote-result small{color:#90a182;line-height:1.6}
+@media(max-width:760px){.account-quote{grid-template-columns:1fr;padding:24px}.quote-row{grid-template-columns:1fr}}
