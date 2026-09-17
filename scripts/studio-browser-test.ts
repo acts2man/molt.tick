@@ -3,7 +3,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {serve,browser} from '../src/reconstruct/runtime.js';
 const out=resolve('studio-test-output');await mkdir(out,{recursive:true});
-const routes=['/','/studio','/connections','/activity','/guide','/how-it-works','/migration-guide','/plans','/usage'];
+const routes=['/','/studio','/connections','/activity','/guide','/how-it-works','/migration-guide','/plans','/usage','/login'];
 const host=await serve(resolve('studio/dist'),Object.fromEntries(routes.map(r=>[r,'index.html'])));
 const engine=await browser(),errors:string[]=[];
 try{
@@ -15,6 +15,7 @@ try{
    await page.screenshot({path:out+`/${route==='/'?'landing':route.slice(1)}-${width}.png`,fullPage:true});
    assert.equal(await page.evaluate('document.documentElement.scrollWidth>innerWidth+1'),false,`No horizontal overflow on ${route} at ${width}`);
   }
+  await page.goto(host.origin+'/login');await page.getByLabel('Email').waitFor();assert.equal(await page.getByLabel('Password').getAttribute('type'),'password');
   await page.goto(host.origin+'/studio');await page.getByRole('button',{name:'Connect GitHub',exact:true}).click();await page.locator('dialog[open]').waitFor();
   assert.equal(await page.locator('dialog input').getAttribute('type'),'password');await page.keyboard.press('Escape');await page.locator('dialog[open]').waitFor({state:'hidden'});
   await page.getByRole('button',{name:'Next: choose pages'}).click();await page.getByRole('button',{name:'Next: review the scope'}).click();
