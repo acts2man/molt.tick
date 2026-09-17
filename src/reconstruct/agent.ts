@@ -31,7 +31,7 @@ function prompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:stri
   const text=JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
     fonts:evidence.fontFaces,assets:evidence.assets.map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath})),
-    reference:pageContext(evidence,page),currentFiles:files,warnings:evidence.warnings,unresolvedIntegrations:evidence.blockers});
+    reference:pageContext(evidence,page),currentFiles:files,warnings:evidence.warnings,unresolvedIntegrations:evidence.blockers,integrationInventory:evidence.integrations.filter(i=>i.route===page.route)});
   if(text.length>390000)throw new Error('Page evidence exceeds the context budget; split this source into smaller pages');return text;
 }
 /** One browser-evidence contract, one shared React workspace, one measured repair loop. */
@@ -78,7 +78,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const finalBuild=signal.aborted?{ok:false,log:'Run cancelled before final compilation'}:await build(outDir,AbortSignal.any([signal,AbortSignal.timeout(120000)]));
   await writeFile(join(run,'final-build.log'),finalBuild.log);
   if(!finalBuild.ok){result.evaluation={...result.evaluation,pass:false,issues:[...result.evaluation.issues,'Final compilation of the retained source did not succeed']};}
-  const final:ReconstructionResult={complexity,status:result.evaluation.pass&&!evidence.blockers.length?'review':'needs-work',outDir,reportPath,...result,warnings:evidence.warnings,blockers:evidence.blockers,usage:model.usage,source:{site:evidence.site,assetCount:evidence.assets.length,pages:evidence.pages.map(p=>({route:p.route,title:p.title,sections:p.views[0].geometry.elements.filter(e=>/^(section|main|header|footer)$/.test(e.tag)).length,elements:p.views[0].geometry.elements.length}))}};
+  const final:ReconstructionResult={complexity,status:result.evaluation.pass&&!evidence.blockers.length?'review':'needs-work',outDir,reportPath,...result,warnings:evidence.warnings,blockers:evidence.blockers,integrations:evidence.integrations,usage:model.usage,source:{site:evidence.site,assetCount:evidence.assets.length,pages:evidence.pages.map(p=>({route:p.route,title:p.title,sections:p.views[0].geometry.elements.filter(e=>/^(section|main|header|footer)$/.test(e.tag)).length,elements:p.views[0].geometry.elements.length}))}};
   await writeFile(reportPath,JSON.stringify(final,null,2));
   await writeReview(join(run,'review.html'),final);
   await progress(final.status==='review'?'Measured visual checks passed; ready for human review':'Best measured reconstruction retained with unresolved differences');
