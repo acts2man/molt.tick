@@ -197,8 +197,27 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           if(g.brokenImages)evidence.blockers.push(`${target.route} ${viewport.name}: ${g.brokenImages} source images did not load.`);
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
-          item.title=g.title;item.views.push({viewport,screenshot,geometry:g});
-          await writeFile(join(options.directory,slug,`${viewport.name}.json`),JSON.stringify(g,null,2));
+          const interactions:NonNullable<Evidence['pages'][number]['views'][number]['interactions']>=[];
+          const triggers=await discoverInteractions(page);
+          for(let index=0;index<triggers.length;index++){
+            options.signal.throwIfAborted();
+            const trigger=triggers[index],id=`${trigger.kind}-${createHash('sha256').update(JSON.stringify(trigger)).digest('hex').slice(0,8)}`;
+            if(!await activateInteraction(page,trigger)){evidence.warnings.push(`${target.route} ${viewport.name}: could not replay source interaction "${trigger.name}".`);continue;}
+            await page.waitForTimeout(250);
+            await page.evaluate(`(() => { for(const a of document.getAnimations()){try{if(a.effect.getComputedTiming().iterations!==Infinity)a.finish();}catch{}} })()`);
+            const stateScreenshot=join(options.directory,slug,`${viewport.name}-${id}.png`);
+            await page.screenshot({path:stateScreenshot,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
+            const stateGeometry=await geometry(page);
+            interactions.push({id,trigger,screenshot:stateScreenshot,geometry:stateGeometry});
+            await writeFile(join(options.directory,slug,`${viewport.name}-${id}.json`),JSON.stringify(stateGeometry,null,2));
+            if(index<triggers.length-1){
+              const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});
+              if(!reset?.ok()){evidence.warnings.push(`${target.route} ${viewport.name}: interaction-state reset returned HTTP ${reset?.status()}.`);break;}
+              await settle(page,options.signal);
+            }
+          }
+          item.title=g.title;item.views.push({viewport,screenshot,geometry:g,interactions});
+          await writeFile(join(options.directory,slug,`${viewport.name}.json`),JSON.stringify({...g,interactions:interactions.map(i=>({id:i.id,trigger:i.trigger,screenshot:i.screenshot}))},null,2));
           await Promise.all(pending);
           if(assetErrors.length)evidence.blockers.push(`${target.route}: asset capture errors: ${assetErrors.slice(0,3).join('; ')}`);
         }finally{await ctx.close();}
