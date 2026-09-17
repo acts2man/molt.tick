@@ -2,7 +2,7 @@ name: Studio checks
 on:
   push:
     branches: [main, feature/visual-reconstruction-engine]
-    paths: ['studio/**', 'netlify.toml', '.github/workflows/studio-checks.yml', 'scripts/studio-run.ts']
+    paths: ['studio/**', 'netlify.toml', '.github/workflows/studio-checks.yml', 'scripts/studio-run.ts', 'scripts/studio-browser-test.ts']
   pull_request:
     branches: [main]
 permissions:
@@ -37,6 +37,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: molt-studio-ui-checks
-          path: studio-test-output/
+          path: |
+            studio-test-output/
+            studio/dist/
+            studio/src/
+            studio/server/
+            studio/test/
+            studio/netlify/
+            studio/package.json
+            studio/package-lock.json
+            studio/tsconfig.json
+            studio/vite.config.ts
+            studio/index.html
+            netlify.toml
           retention-days: 7
           if-no-files-found: warn
