@@ -1,125 +1,54 @@
-# Molt — WordPress → React migration engine
+# Molt - evidence-first React reconstruction
 
-**WordPress in. React out.** Molt crawls a live WordPress site, rebuilds it as a
-modern React codebase (TanStack + Tailwind, Lovable-editable shape), and pushes
-it to a repo — pixel-verified, page by page.
+Recreate the visitor experience of a website as editable React source, using
+browser evidence and a measured correction loop rather than page-builder HTML
+passthrough.
 
-Pipeline: **Crawl → Normalize → Plan → Synthesize → Verify → Ship**
+**Capture -> reconstruct -> compile -> compare -> repair -> review**
 
-## Status (v0.1)
+The primary engine lives in `src/reconstruct`. It accepts a live URL with optional
+explicit page routes, or a local bundle of saved HTML pages and assets. Each page
+is captured at desktop, tablet and mobile widths. The model receives screenshots,
+geometry, exact visible text and local asset references, and authors a shared
+React/Vite workspace. The engine measures the output, asks for targeted repairs,
+rejects regressions and retains the best measured result.
 
-| Stage | State | Notes |
-|---|---|---|
-| 1 Crawl | ✅ built + validated | discovery (sitemap + nav-BFS), full per-page capture |
-| 2 Normalize | ✅ built + validated | Elementor → IR, deterministic, no AI |
-| 3 Plan | ✅ built + validated | chrome detection (id + fingerprint), library matching, flag generation |
-| 4 Synthesize | ✅ built + validated | IR+plan+sidecar → Lovable-editable TanStack project; exact styles preserved |
-| 5 Verify | ✅ built + validated | structural checks + render harness producing REAL pixel numbers |
-| 6 Ship | ◻ | GitHub App push to the user's Lovable-born repo |
-| Worker | ✅ built + validated | Supabase polling worker — the engine↔platform wire |
-
-## What the crawler captures (per page)
-
-1. **Rendered DOM** — post-JS, what the site actually shows
-2. **Every stylesheet** — static CSS survives intact (465 KB on the reference
-   homepage vs. the ~14 KB a SingleFile capture kept)
-3. **Computed-style sidecar** — `getComputedStyle` per element, keyed by a
-   stable path + Elementor id. Catches styles applied by JS at runtime — the
-   `rotateY(30°) translateZ(-1344px)` class of problem no static capture sees.
-4. **Assets in DOM order** — order is sacred (galleries). Lightbox full-size
-   URLs recovered from `href` or decoded from `data-e-action-hash`.
-5. **Iframe manifest** — provider-detected (src → title → frame-content sniff)
-6. **Full-page screenshot** — ground truth for Stage 5 pixel-diff
-
-## Validation (against the completed Soul2Souls reference migration)
-
-Run on a local reconstruction of the site built from its real captures:
-
-- **7/7 pages** discovered (nav-BFS) and captured; 404s correctly skipped
-- **Gallery order: 89/89 photos position-for-position identical** to the
-  hand-verified ground truth (`IMG_4867` → `SNRX5420`)
-- **Podcasts: 15/15 iframes identified as Mixcloud**
-- Sidecar: 2,610 styled elements on the homepage, 171 with Elementor ids,
-  162 elements carrying live transform matrices site-wide
-- Normalizer reproduced the prior proof-of-concept's exact hero benchmarks:
-  heading `b940335` text + tag, button `f5cc07e` text + href, images
-  `01ab8f1`/`9c6e656` with exact dimensions — **plus** live computed styles
-  resolved per element, which the old PoC could not do
-- Unknown plugin widgets flagged by name on every page:
-  `sr-e-menu · sr-offcanvas · music-player · social-icons · icon-box` — the
-  exact set that became the proven React component library in the reference
-  migration. The identical flag signature across pages is the Stage-3
-  shared-chrome signal.
-
-## Stage 3 validation (same reference site)
-
-- **11 global chrome sections** detected via id-equality across all 7 pages,
-  labeled header / social-rail / offcanvas / footer — saves rebuilding 66
-  per-page sections. Breakpoint variants (same template id rendered ×2 per
-  page) and per-route style variants (home dark header vs interior light
-  header share ids) both detected; styling resolves from the sidecar per route.
-- **9/9 plugin widget types matched** to proven library components
-  (`HeaderNav · SocialIconRow · OffcanvasPanels · IconBox ·
-  PersistentAudioPlayer · SupabaseShop · MailingListForm ·
-  GalleryWithLightbox · ContactFormMailto`) — zero unknown-widget flags.
-- **Flag queue reproduces the reference migration's actual human decisions**,
-  correctly attributed: payment → `/shop` (Woo, no processor), no-backend →
-  `/contact` (CF7 → mailto + TODO seam) and the site-wide footer Mailchimp
-  form, runtime-style → live 3D matrices (values read from the sidecar,
-  never hardcoded).
-- Signal sniffing uses strong content markers (`add-to-cart`,
-  `woocommerce-loop`, `wpcf7-field`) attributed to the densest page — WP
-  loads plugin classes globally, so weak substring checks misattribute.
-
-## Pipeline orchestrator
-
-The whole engine runs as one call — `runPipeline({ siteUrl, workDir })` chains
-crawl → normalize → plan → synthesize → verify and emits a `ProgressEvent` per
-stage. The result is shaped like the platform's tables (migrations / pages /
-flags) so the Supabase worker writes it straight through. `pixel_match` is
-`null` until a render screenshot of the synthesized site exists — the platform
-shows "—" rather than a fabricated number.
-
-Validated end-to-end on the reference capture: 7/7 route checks, 261 assets,
-all 4 flags reproduced, status progresses crawl→…→review with live events.
-
-## Run it
-
-```bash
-npm install
-
-# crawl a live site
-npm run crawl -- https://example.com --out capture --max 50
-
-# normalize a captured page → IR
-npm run normalize -- capture home
-
-# local validation harness (serves a reconstructed site in-process, crawls it)
-npx tsx test/local-crawl.ts /path/to/site-dir /tmp/molt-capture /about/
+```sh
+npm run reconstruct -- --url https://example.com --out ./work
+npm run reconstruct -- --bundle ./saved-pages --out ./work
 ```
 
-Chromium path defaults to the dev container's install; override with
-`MOLT_CHROME=/path/to/chrome`.
+Setup, API-provider configuration, saved-page format, budgets and limitations are
+in [docs/RECONSTRUCTION.md](docs/RECONSTRUCTION.md).
 
-## Known v0 gaps (deliberate)
+Each run produces React source, real source/output screenshots, difference maps,
+compiler/browser diagnostics, a machine-readable report and an offline review
+screen. The report never substitutes source imagery for missing output.
 
-- `spacer` / `divider` widgets are skipped (pure spacing; layout fidelity
-  comes from the sidecar) — revisit in Synthesize
-- Static-CSS → IR merge (parsing captured stylesheets per element id) is a
-  planned pass; the sidecar carries the load meanwhile
-- Sitemap discovery is unit-level tested; nav-BFS is E2E tested (the local
-  fixture has no sitemap — most live WP sites do)
-- In-page `evaluate` blocks are **string-form on purpose**: tsx/esbuild
-  injects a `__name` helper into transformed arrow functions that doesn't
-  exist in the browser. Keep them strings.
+`src/pipeline/run.ts` adapts this engine to the existing worker API. Legacy crawl,
+normalize and synthesis utilities remain as diagnostic tools, not the primary
+reconstruction path. The historical verification milestone is documented in
+`docs/VERIFICATION.md`; the new reconstruction documentation supersedes its
+pipeline configuration and remaining-work list.
 
-## Architecture decisions of record
+## Verification
 
-- **Lovable is one-way** (export-only; it can't import an existing repo).
-  Output repos must be *born from Lovable*, then Molt pushes into them via a
-  scoped GitHub App. Push to `main` by default; PR path opt-in **with guided
-  merge instructions** for non-Git users.
-- Output shape must stay Lovable-editable: React/Vite or TanStack Start,
-  single root `package.json`, working dev script, Tailwind, no monorepo.
-- Lovable is the primary destination, not a lock-in — the same output deploys
-  to Vercel/Netlify or ships as a download.
+```sh
+npm run typecheck
+npm test
+```
+
+CI also installs the trusted render toolchain and Chromium to run real browser
+fixtures and a complete capture/React-build/compare/repair test with a deterministic
+model double. Provider request tests use mocked responses; no paid model keys are
+required for CI. Test success does not establish fidelity on arbitrary websites.
+
+## Scope
+
+This repository contains the reconstruction engine and generated review UI, not
+the separate hosted dashboard. It does not migrate WordPress databases, payments,
+authentication, or form backends. Unresolved source/media integrations remain
+explicit. Production requires isolated browser/build workers, egress controls,
+server-side model credentials, and a live end-to-end acceptance run.
+
+No universal pixel-perfect guarantee or automatic production deployment is implied.

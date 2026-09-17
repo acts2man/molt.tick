@@ -21,3 +21,24 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+  reconstruction-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix render-toolchain install --no-audit --no-fund
+      - run: npx --no-install playwright-core install --with-deps chromium
+      - name: Real browser and React compilation with a deterministic test model
+        run: npm test
+        env:
+          MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
+          MOLT_NO_SANDBOX: '1'
+          MOLT_RUN_BROWSER_TESTS: '1'
+          MOLT_RUN_FULL_AGENT_TESTS: '1'
