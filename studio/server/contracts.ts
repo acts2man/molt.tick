@@ -1,6 +1,7 @@
 export const REPOSITORY = 'acts2man/molt.tick';
 export const OWNER = 'acts2man';
 export const WORKFLOW = 'reconstruct-site.yml';
+export const PREFLIGHT_WORKFLOW = 'preflight-site.yml';
 export const BRANCH = 'main';
 export const ACTIVE = new Set(['dispatching', 'queued', 'running', 'cancelling']);
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -35,17 +36,17 @@ export function sourcePages(source: string, text: string): string[] {
 }
 export interface Settings { provider: 'openai' | 'anthropic'; model: string; configuredAt: string; accessChecked: boolean }
 export interface Job {
-  id: string; owner: string; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
+  id: string; owner: string; kind: 'preflight' | 'reconstruction'; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
-  report?: any; usage?: any; error?: string;
+  report?: any; preflight?: any; usage?: any; error?: string; sourcePreflightId?: string;
 }
-export function newJob(input: any, owner: string): Job {
+export function newJob(input: any, owner: string, kind:'preflight'|'reconstruction'='reconstruction'): Job {
   const id = uuid(input.id), source = sourceUrl(String(input.url || ''));
   const pages = sourcePages(source, String(input.pages || ''));
   const maxPages = Number(input.maxPages ?? 5), maxRepairs = Number(input.maxRepairs ?? 3);
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 12 || !Number.isInteger(maxRepairs) || maxRepairs < 0 || maxRepairs > 6) throw new HttpError(400, 'Invalid reconstruction limits.');
   if (pages.length > maxPages) throw new HttpError(400, 'Your explicit page list exceeds the page limit.');
   const now = new Date().toISOString();
-  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
+  return { id, owner, kind, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), maxPages, maxRepairs, status: 'dispatching', message: kind==='preflight'?'Submitting to the scope scanner':'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
 }
