@@ -9,7 +9,8 @@ function key(secret: string): Buffer {
 }
 export function seal(value: Session, secret: string): string {
   const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key(secret), iv);
-  return Buffer.concat([iv, cipher.getAuthTag ? Buffer.alloc(0) : Buffer.alloc(0), cipher.update(JSON.stringify(value)), cipher.final(), cipher.getAuthTag()]).toString('base64url');
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]);
+  return Buffer.concat([iv, encrypted, cipher.getAuthTag()]).toString('base64url');
 }
 export function unseal(value: string, secret: string): Session | null {
   try {
@@ -19,7 +20,7 @@ export function unseal(value: string, secret: string): Session | null {
     const decipher = createDecipheriv('aes-256-gcm', key(secret), bytes.subarray(0, 12));
     decipher.setAuthTag(bytes.subarray(-16));
     const result = JSON.parse(Buffer.concat([decipher.update(bytes.subarray(12, -16)), decipher.final()]).toString('utf8')) as Session;
-    if (result.login.toLowerCase() !== OWNER || !result.token || !Number.isFinite(result.expires) || result.expires <= Date.now()) return null;
+    if (typeof result.login !== 'string' || result.login.toLowerCase() !== OWNER || typeof result.token !== 'string' || !result.token || !Number.isFinite(result.expires) || result.expires <= Date.now()) return null;
     return result;
   } catch { return null; }
 }
