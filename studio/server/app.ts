@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { ACTIVE, BRANCH, HttpError, Job, OWNER, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
+import { ACTIVE, BRANCH, HttpError, Job, OWNER, PREFLIGHT_WORKFLOW, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
 import { assertMutation, cookie, runnerIdentity } from './security.ts';
 import { createSession, readSession, revokeSession } from './sessions.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
@@ -39,6 +39,20 @@ async function jobs(store: Store, owner: string): Promise<Job[]> {
 function safeUsage(value:any):any {const clip=(v:unknown,n=2000)=>String(v??'').slice(0,n);return { calls:Number(value?.calls)||0,inputTokens:Number(value?.inputTokens)||0,outputTokens:Number(value?.outputTokens)||0,
       records:Array.isArray(value?.records)?value.records.slice(0,200).map((r:any)=>({call:Number(r.call)||0,provider:clip(r.provider,30),model:clip(r.model,100),inputTokens:typeof r.inputTokens==='number'&&Number.isSafeInteger(r.inputTokens)&&r.inputTokens>=0?r.inputTokens:null,outputTokens:typeof r.outputTokens==='number'&&Number.isSafeInteger(r.outputTokens)&&r.outputTokens>=0?r.outputTokens:null,estimatedUsd:typeof r.estimatedUsd==='number'&&Number.isFinite(r.estimatedUsd)&&r.estimatedUsd>=0?r.estimatedUsd:null,reported:r.reported===true,outcome:clip(r.outcome,60),pricingReviewed:clip(r.pricingReviewed,30)})):[],
       costEstimate:value?.costEstimate?{estimatedUsd:typeof value.costEstimate.estimatedUsd==='number'&&Number.isFinite(value.costEstimate.estimatedUsd)?value.costEstimate.estimatedUsd:null,complete:value.costEstimate.complete===true,unpricedCalls:Number(value.costEstimate.unpricedCalls)||0,excludes:clip(value.costEstimate.excludes)}:null };}
+function safePreflight(input:any):any {
+  if(!input||input.binding!==false||!Array.isArray(input.pages))throw new HttpError(400,'Invalid preflight report.');
+  const clip=(value:unknown,n=2000)=>String(value??'').slice(0,n);
+  const list=(value:unknown)=>Array.isArray(value)?value.slice(0,100).map(v=>clip(v)):[];
+  const credit=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=100000?value:0;
+  return {
+    version:clip(input.version,60),binding:false,site:clip(input.site,500),discoveredPages:Math.min(50,Math.max(0,Number(input.discoveredPages)||0)),
+    firstPassCredits:credit(input.firstPassCredits),refinementCredits:credit(input.refinementCredits),suggestedReserveCredits:credit(input.suggestedReserveCredits),
+    maxRepairs:Math.min(6,Math.max(0,Number(input.maxRepairs)||0)),
+    pages:input.pages.slice(0,50).map((p:any)=>({route:clip(p.route,200),complexity:clip(p.complexity,20),credits:credit(p.credits),sections:Math.max(0,Number(p.sections)||0),images:Math.max(0,Number(p.images)||0),elements:Math.max(0,Number(p.elements)||0),height:Math.max(0,Number(p.height)||0),reasons:list(p.reasons)})),
+    integrations:Array.isArray(input.integrations)?input.integrations.slice(0,100).map((i:any)=>({kind:clip(i.kind,40),provider:clip(i.provider,120),route:clip(i.route,200),evidence:clip(i.evidence,500),action:clip(i.action)})):[],
+    warnings:list(input.warnings),blockers:list(input.blockers),limitations:list(input.limitations),
+  };
+}
 function safeReport(input: any): any {
   if (!input || !['review','needs-work'].includes(input.status) || !Array.isArray(input.evaluation?.views)) throw new HttpError(400, 'Invalid reconstruction report.');
   const clip = (value: unknown, n = 2000) => String(value ?? '').slice(0,n);
