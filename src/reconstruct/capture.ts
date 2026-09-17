@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { Page } from 'playwright-core';
 import { browser, restrictNetwork, serve } from './runtime.js';
 import { assertPublicUrl, inside, publicUrl, routePath, validateViewports } from './policy.js';
-import { VIEWPORTS, type Evidence, type Geometry, type Viewport } from './types.js';
+import { VIEWPORTS, type Evidence, type Geometry, type InteractionTrigger, type Viewport } from './types.js';
 
 export interface CaptureOptions {
   url?: string; urls?: string[]; bundleDir?: string; directory: string;
@@ -38,7 +38,7 @@ const GEOMETRY = `(() => {
   const b=el.getBoundingClientRect(),s=getComputedStyle(el);
   if(!b.width||!b.height||s.display==='none'||s.visibility==='hidden') continue;
   if(elements.length>=1400){truncated=true;break;}
-  const e={key:index.get(el),parent:index.get(el.parentElement),tag,text:/^h[1-6]$/.test(tag)?el.innerText:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(' ').trim(),x:b.x+scrollX,y:b.y+scrollY,width:b.width,height:b.height,style:read(s)};
+  const e={key:index.get(el),parent:index.get(el.parentElement),tag,text:/^h[1-6]$/.test(tag)?el.innerText:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(' ').trim(),x:b.x+scrollX,y:b.y+scrollY,width:b.width,height:b.height,style:read(s),attributes:attrs(el)};
   if(tag==='img') e.src=el.currentSrc||el.src;
   if(tag==='a') e.href=el.href;
   if(tag==='svg') e.svg=el.outerHTML.length<16000?el.outerHTML:undefined;
@@ -54,6 +54,38 @@ const GEOMETRY = `(() => {
 })()`;
 export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
+}
+
+/** Observe only bounded, reversible interaction states. Links, submit buttons and arbitrary clicks are excluded. */
+const INTERACTIONS = `(() => {
+ const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
+ const name=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+ const out=[],seen=new Set();
+ const push=(kind,el)=>{const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');if(!n||seen.has(key))return;seen.add(key);out.push({kind,name:n,controls});};
+ for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const s=d.querySelector(':scope > summary');if(s)push('details',s);}
+ for(const el of Array.from(document.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"]'))){
+   if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
+   if(el.getAttribute('role')==='tab')continue; push('button',el);
+ }
+ for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tab',el);
+ return out.slice(0,3);
+})()`;
+export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
+  return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
+}
+export async function activateInteraction(page: Page, trigger: InteractionTrigger): Promise<boolean> {
+  return await page.evaluate(({kind,name,controls}) => {
+    const clean=(s:unknown)=>String(s??'').replace(/\\s+/g,' ').trim().slice(0,120);
+    const label=(el:Element)=>clean(el.getAttribute('aria-label')||el.textContent);
+    let items:Element[]=[];
+    if(kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
+    else if(kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
+    else items=Array.from(document.querySelectorAll('button,[role="button"]')).filter(el=>!el.matches('[type="submit"],[type="reset"]'));
+    const target=items.find(el=>label(el)===name&&(!controls||el.getAttribute('aria-controls')===controls));
+    if(!target)return false;
+    (target as HTMLElement).click();
+    return true;
+  }, trigger);
 }
 /** Do not erase transforms, reveal hidden menus, or resize the viewport to page height. */
 export async function settle(page: Page, signal: AbortSignal): Promise<void> {
