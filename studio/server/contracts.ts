@@ -38,7 +38,7 @@ export interface Job {
   id: string; owner: string; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
-  report?: any; error?: string;
+  report?: any; usage?: any; error?: string;
 }
 export function newJob(input: any, owner: string): Job {
   const id = uuid(input.id), source = sourceUrl(String(input.url || ''));

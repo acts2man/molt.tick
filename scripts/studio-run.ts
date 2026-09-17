@@ -3,6 +3,9 @@ import { readFile, writeFile, mkdir, cp } from 'node:fs/promises';
 import { join, resolve, dirname, relative } from 'node:path';
 import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
+import { modelFromEnv } from '../src/reconstruct/provider.js';
+import type { Model } from '../src/reconstruct/types.js';
+let liveModel:Model|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
@@ -53,7 +56,8 @@ try{
     if(manifest.files.length>300)throw new Error('Bundle has too many files');let total=0;
     for(const f of manifest.files){if(f.size>4_000_000||(total+=f.size)>50_000_000)throw new Error('Bundle size limit exceeded');const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});const bytes=await (await studio(`/bundle?file=${encodeURIComponent(f.path)}`)).arrayBuffer();if(bytes.byteLength!==f.size)throw new Error('Bundle file size mismatch');await writeFile(dest,Buffer.from(bytes));}
   }
-  const result=await runReconstruction({...(bundleDir?{bundleDir}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message)});
+  liveModel=modelFromEnv();
+  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message)});
   await progress('Preparing comparison images and the retained React source.');
   const report=JSON.parse(JSON.stringify(result));
   for(let i=0;i<report.evaluation.views.length;i++){
@@ -66,7 +70,7 @@ try{
   if(result.status!=='review')process.exitCode=2;
 }catch(error){
   const message=redacted(error instanceof Error?error.message:String(error));
-  await writeFile(join(artifacts,'error.json'),JSON.stringify({error:message},null,2));
-  try{await progress(message,{error:message});}catch(callbackError){console.error('Could not persist final status:',redacted((callbackError as Error).message));}
+  await writeFile(join(artifacts,'error.json'),JSON.stringify({error:message,usage:liveModel?.usage},null,2));
+  try{await progress(message,{error:message,usage:liveModel?.usage});}catch(callbackError){console.error('Could not persist final status:',redacted((callbackError as Error).message));}
   console.error(message);process.exitCode=1;
 }

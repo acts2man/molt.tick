@@ -36,12 +36,16 @@ async function jobs(store: Store, owner: string): Promise<Job[]> {
   const rows = await Promise.all(blobs.filter(b => b.key.split('/').length === 3).slice(-100).map(b => store.get(b.key, {type: 'json'})));
   return rows.filter(Boolean).sort((a,b) => b.createdAt.localeCompare(a.createdAt));
 }
+function safeUsage(value:any):any {const clip=(v:unknown,n=2000)=>String(v??'').slice(0,n);return { calls:Number(value?.calls)||0,inputTokens:Number(value?.inputTokens)||0,outputTokens:Number(value?.outputTokens)||0,
+      records:Array.isArray(value?.records)?value.records.slice(0,200).map((r:any)=>({call:Number(r.call)||0,provider:clip(r.provider,30),model:clip(r.model,100),inputTokens:typeof r.inputTokens==='number'&&Number.isSafeInteger(r.inputTokens)&&r.inputTokens>=0?r.inputTokens:null,outputTokens:typeof r.outputTokens==='number'&&Number.isSafeInteger(r.outputTokens)&&r.outputTokens>=0?r.outputTokens:null,estimatedUsd:typeof r.estimatedUsd==='number'&&Number.isFinite(r.estimatedUsd)&&r.estimatedUsd>=0?r.estimatedUsd:null,reported:r.reported===true,outcome:clip(r.outcome,60),pricingReviewed:clip(r.pricingReviewed,30)})):[],
+      costEstimate:value?.costEstimate?{estimatedUsd:typeof value.costEstimate.estimatedUsd==='number'&&Number.isFinite(value.costEstimate.estimatedUsd)?value.costEstimate.estimatedUsd:null,complete:value.costEstimate.complete===true,unpricedCalls:Number(value.costEstimate.unpricedCalls)||0,excludes:clip(value.costEstimate.excludes)}:null };}
 function safeReport(input: any): any {
   if (!input || !['review','needs-work'].includes(input.status) || !Array.isArray(input.evaluation?.views)) throw new HttpError(400, 'Invalid reconstruction report.');
   const clip = (value: unknown, n = 2000) => String(value ?? '').slice(0,n);
   const list = (value: unknown) => Array.isArray(value) ? value.slice(0,100).map(v => clip(v)) : [];
   return {status:input.status, reason:clip(input.reason), warnings:list(input.warnings), blockers:list(input.blockers),
-    usage: { calls:Number(input.usage?.calls)||0,inputTokens:Number(input.usage?.inputTokens)||0,outputTokens:Number(input.usage?.outputTokens)||0 },
+    usage: safeUsage(input.usage),
+    complexity:input.complexity?{version:clip(input.complexity.version,60),binding:false,firstPassCredits:Number(input.complexity.firstPassCredits)||0,pages:Array.isArray(input.complexity.pages)?input.complexity.pages.slice(0,12).map((p:any)=>({route:clip(p.route,200),complexity:clip(p.complexity,20),credits:Number(p.credits)||0,reasons:list(p.reasons)})):[]}:null,
     evaluation:{pass:input.evaluation.pass === true,issues:list(input.evaluation.issues),views:input.evaluation.views.slice(0,72).map((v:any)=>({
       route:clip(v.route,200),viewport:clip(v.viewport,30),pass:v.pass === true,
       score:typeof v.score === 'number' && Number.isFinite(v.score) && v.score>=0 && v.score<=100?v.score:null,
@@ -83,6 +87,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(!ACTIVE.has(job.status))return json({ignored:true});
         const now=new Date().toISOString();job.updatedAt=now;job.runId=identity.runId;job.runUrl=`https://github.com/${REPOSITORY}/actions/runs/${identity.runId}`;
         job.message=String(event.message??'Processing').slice(0,4000);
+        if(event.usage)job.usage=safeUsage(event.usage);
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
         if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);return json({saved:true});
@@ -117,7 +122,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}
         const provider=settings?.provider??(names.includes('OPENAI_API_KEY')?'openai':names.includes('ANTHROPIC_API_KEY')?'anthropic':'openai');
         const keyPresent=names.includes(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY');
-        return json({provider,model:settings?.model??'',keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
+        return json({provider,model:settings?.model??(provider==='openai'?'gpt-6-astra':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
       }
       if(method==='POST') {
         const input=await body(req),provider=input.provider,model=String(input.model??'').trim(),apiKey=String(input.apiKey??'').trim();
@@ -132,8 +137,8 @@ export async function handle(req: Request, services: Services): Promise<Response
     if(path[0]==='jobs') {
       if(method==='GET' && path.length===1)return json({jobs:await jobs(store,owner)});
       if(method==='POST' && path.length===1) {
-        const input=await body(req),job=newJob(input,owner),key=dataKey(owner,job.id),existing=await store.get(key,{type:'json'});
-        if(existing){if(existing.sourceUrl!==job.sourceUrl)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
+        const input=await body(req);if(input.developmentTest!==true)throw new HttpError(400,'This runner is for owner development tests, not customer production jobs. Confirm the test scope in Studio.');const job=newJob(input,owner),key=dataKey(owner,job.id),existing=await store.get(key,{type:'json'});
+        if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
         const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);

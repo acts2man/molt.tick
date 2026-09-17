@@ -29,7 +29,7 @@ export interface ImageInput { label: string; base64: string }
 export interface ModelRequest { prompt: string; images: ImageInput[] }
 export interface Model {
   complete(request: ModelRequest, signal: AbortSignal): Promise<ModelReply>;
-  usage: { calls: number; inputTokens: number; outputTokens: number };
+  usage: { calls: number; inputTokens: number; outputTokens: number; records?: import('./usage.js').UsageRecord[]; costEstimate?: ReturnType<typeof import('./usage.js').usageSummary> };
 }
 export interface ViewCheck {
   route: string; viewport: string; score: number | null; worstBand: number | null;
@@ -40,6 +40,7 @@ export interface Attempt {
   round: number; accepted: boolean; summary: string; evaluation: Evaluation; digest: string;
 }
 export interface ReconstructionResult {
+  complexity?: ReturnType<typeof import('./complexity.js').assessComplexity>;
   status: 'review' | 'needs-work'; outDir: string; reportPath: string;
   evaluation: Evaluation; attempts: Attempt[]; warnings: string[]; blockers: string[];
   usage: Model['usage']; reason?: string;

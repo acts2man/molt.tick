@@ -49,7 +49,7 @@ const GEOMETRY = `(() => {
  const rules=(list)=>{for(const r of Array.from(list||[])){if(r.type===5)fontFaces.push(r.cssText);else if(r.type===4)mediaQueries.push(r.conditionText);if(r.cssRules)rules(r.cssRules);}};
  for(const s of Array.from(document.styleSheets)){try{rules(s.cssRules);}catch{}}
  return {text:document.body.innerText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
- brokenImages:Array.from(document.images).filter(i=>i.getBoundingClientRect().width>0&&(!i.complete||i.naturalWidth===0)).length,
+ brokenImages:Array.from(document.images).filter(i=>{const b=i.getBoundingClientRect(),s=getComputedStyle(i);return b.width>0&&b.height>0&&b.right>0&&b.left<innerWidth&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&i.naturalWidth===0;}).length,
  elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),truncated};
 })()`;
 export async function geometry(page: Page): Promise<Geometry> {

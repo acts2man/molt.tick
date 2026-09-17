@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { integer } from './policy.js';
+import { usageRecord, usageSummary } from './usage.js';
 import type { Model, ModelReply, ModelRequest } from './types.js';
 
 export const INSTRUCTIONS = `You are a website reconstruction engineer, not a redesign assistant.
@@ -32,7 +33,8 @@ export function createModel(options:ProviderOptions):Model{
   if(!options.key.trim()||!options.model.trim())throw new Error('Provider API key and explicit model ID are required');
   const maxCalls=options.maxCalls??40,maxTokens=options.maxOutputTokens??16000,requestMs=options.requestMs??180000;
   if(!['openai','anthropic'].includes(options.provider)||!Number.isInteger(maxCalls)||maxCalls<1||maxCalls>200||!Number.isInteger(maxTokens)||maxTokens<1000||maxTokens>64000||!Number.isInteger(requestMs)||requestMs<1000||requestMs>600000)throw new Error('Invalid provider limits');
-  const usage={calls:0,inputTokens:0,outputTokens:0};
+  const usage:Model['usage']={calls:0,inputTokens:0,outputTokens:0,records:[]};
+  const record=(call:number,data:unknown,outcome:string)=>{const entry=usageRecord(call,options.provider,options.model,data,outcome);usage.records!.push(entry);usage.costEstimate=usageSummary(usage.records!);};
   const fetcher=options.fetcher??fetch;
   return {usage,async complete(request:ModelRequest,signal:AbortSignal):Promise<ModelReply>{
     if(request.images.length>18||request.prompt.length>400000)throw new Error('Model context budget exceeded');
@@ -53,17 +55,21 @@ export function createModel(options:ProviderOptions):Model{
     const encoded=JSON.stringify(body);if(Buffer.byteLength(encoded)>24_000_000)throw new Error('Request exceeds payload budget');
     for(let attempt=0;attempt<3;attempt++){
       signal.throwIfAborted();if(usage.calls>=maxCalls)throw new Error('Model call budget exhausted');usage.calls++;
+      const call=usage.calls;
       const response=await fetcher(options.provider==='anthropic'?'https://api.anthropic.com/v1/messages':'https://api.openai.com/v1/responses',{
         method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(requestMs)]),
         headers:options.provider==='anthropic'?{'content-type':'application/json','x-api-key':options.key,'anthropic-version':'2023-06-01'}:{'content-type':'application/json',authorization:`Bearer ${options.key}`},body:encoded,
-      });
-      const raw=await response.text();if(raw.length>3_000_000)throw new Error('Provider response exceeds budget');
+      }).catch(error=>{record(call,null,'transport-error');throw error;});
+      const raw=await response.text().catch(error=>{record(call,null,'response-read-error');throw error;});if(raw.length>3_000_000){record(call,null,'oversized-response');throw new Error('Provider response exceeds budget');}
       if(!response.ok){
+        record(call,null,`http-${response.status}`);
         if([429,500,502,503,529].includes(response.status)&&attempt<2){const seconds=Math.min(10,Math.max(1,Number(response.headers.get('retry-after'))||2**attempt));await sleep(seconds*1000,undefined,{signal});continue;}
         throw new Error(`${options.provider} request failed (HTTP ${response.status}); ${raw.slice(0,500).split(options.key).join('[redacted]')}`);
       }
-      const data=JSON.parse(raw);
-      usage.inputTokens+=Number(data.usage?.input_tokens??0);usage.outputTokens+=Number(data.usage?.output_tokens??0);
+      let data:any;try{data=JSON.parse(raw);}catch(error){record(call,null,'invalid-json');throw error;}
+      record(call,data.usage,String(data.status??data.stop_reason??'response'));
+      const reported=usage.records![usage.records!.length-1];
+      usage.inputTokens+=reported.inputTokens??0;usage.outputTokens+=reported.outputTokens??0;
       if(options.provider==='anthropic'){
         if(data.stop_reason!=='end_turn')throw new Error(`Model response incomplete: ${data.stop_reason}`);
         return parseReply((data.content??[]).filter((b:{type:string})=>b.type==='text').map((b:{text:string})=>b.text).join('\n'));
