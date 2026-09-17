@@ -103,7 +103,9 @@ export async function handle(req: Request, services: Services): Promise<Response
         job.message=String(event.message??'Processing').slice(0,4000);
         if(event.usage)job.usage=safeUsage(event.usage);
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
-        if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
+        if(event.preflight){job.preflight=safePreflight(event.preflight);job.status='scoped';job.message=`Scope analyzed: ${job.preflight.discoveredPages} page(s), up to ${job.preflight.suggestedReserveCredits} planning credits`;}
+        else if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}
+        else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);return json({saved:true});
       }
       throw new HttpError(404,'Runner route not found.');
