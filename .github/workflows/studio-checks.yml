@@ -1,0 +1,54 @@
+name: Studio checks
+on:
+  push:
+    branches: [main, feature/visual-reconstruction-engine]
+    paths: ['studio/**', 'netlify.toml', '.github/workflows/studio-checks.yml', 'scripts/studio-run.ts', 'scripts/studio-browser-test.ts']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned studio dependencies
+        run: npm --prefix studio install --no-audit --no-fund
+      - name: Typecheck and build the actual Netlify interface
+        run: npm --prefix studio run build
+      - name: Test private API and job controls
+        run: npm --prefix studio test
+      - name: Install engine browser test dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright-core install --with-deps chromium
+      - name: Verify desktop, mobile, deep routes and connection dialog
+        env:
+          MOLT_NO_SANDBOX: '1'
+        run: ./node_modules/.bin/tsx scripts/studio-browser-test.ts
+      - name: Retain interface screenshots and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: molt-studio-ui-checks
+          path: |
+            studio-test-output/
+            studio/dist/
+            studio/src/
+            studio/server/
+            studio/test/
+            studio/netlify/
+            studio/package.json
+            studio/package-lock.json
+            studio/tsconfig.json
+            studio/vite.config.ts
+            studio/index.html
+            netlify.toml
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,0 +1,72 @@
+/* Keep the decorative orbit in its own canvas, not the page's scroll area. */
+.hero-art {
+  overflow: clip;
+  overflow-clip-margin: 14px;
+}
+
+/* Comfortable interface typography; monospace metadata stays secondary. */
+.sidebar nav a { font-size: 14px; }
+.workspace-switch b { font-size: 12px; }
+.workspace-switch small { font-size: 9px; line-height: 1.45; }
+.logo small { font-size: 8px; letter-spacing: 1.1px; }
+.crumb { font-size: 13px; }
+.button { font-size: 14px; }
+.button.compact { font-size: 12px; }
+.connection-label { font-size: 11px; }
+.eyebrow, .studio-hero .eyebrow { font-size: 10px; }
+.studio-hero p { font-size: 14px; line-height: 1.8; }
+.workflow-strip b { font-size: 13px; }
+.workflow-strip small { font-size: 11px; }
+.workflow-strip .step-number { font-size: 10px; }
+.workflow-strip > div > span:last-of-type { min-width: 0; }
+.source-tabs button { font-size: 13px; }
+.field > span { font-size: 13px; }
+.field input, .field select, .field textarea { font-size: 14px; }
+.field small { font-size: 11px; }
+.input-with-icon input { font-size: 14px; }
+.form-options { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.form-options > * { min-width: 0; }
+.advanced summary { font-size: 12px; }
+.advanced summary span { font-size: 11px; }
+.setup-note { font-size: 12px; }
+.cost-note { font-size: 11px; }
+.run-spec > p { font-size: 13px; line-height: 1.8; }
+.spec-row span { font-size: 11px; }
+.spec-row b { font-size: 13px; line-height: 1.6; }
+.spec-foot > span:last-child { font-size: 11px; }
+.text-button { font-size: 12px; }
+.empty h3 { font-size: 17px; }
+.empty p { font-size: 13px; }
+.project-info b { font-size: 14px; }
+.project-info small { font-size: 11px; }
+.page-title p { font-size: 14px; }
+.connection-card > p { font-size: 13px; }
+.fine-print, .security-note { font-size: 11px; line-height: 1.8; }
+.notice { font-size: 13px; }
+.activity-row b { font-size: 13px; }
+.activity-row small { font-size: 11px; }
+.guide-card p { font-size: 14px; }
+
+@media (max-width: 1200px) {
+  .workflow-strip small { font-size: 10px; }
+  .workflow-strip b { font-size: 12px; }
+}
+@media (max-width: 980px) {
+  .workflow-strip b { font-size: 12px; }
+}
+@media (max-width: 740px) {
+  .crumb { font-size: 11px; }
+  .top-actions .button { font-size: 11px; }
+  .studio-hero h1 { font-size: clamp(34px, 10vw, 42px); }
+  .studio-hero .eyebrow { font-size: 9px; }
+  .studio-hero p { font-size: 13px; }
+  .field input, .field textarea { font-size: 16px; }
+  .input-with-icon input { font-size: 14px; }
+  .field select { font-size: 13px; }
+  .source-tabs button { font-size: 12px; }
+  .button { font-size: 13px; }
+  .notice { font-size: 12px; }
+  .workflow-strip b { font-size: 11px; }
+  .workflow-strip > div { padding-inline: 8px; }
+  .capture-sizes { gap: 11px; }
+}

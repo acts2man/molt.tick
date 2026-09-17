@@ -1,283 +1,74 @@
-/**
- * Molt — Pipeline orchestrator.
- *
- * One entry point that runs the whole engine for a single site:
- *   crawl → normalize → plan → synthesize → verify
- *
- * Emits a progress event as each stage begins/ends so a caller (the Supabase
- * worker) can stream live status into the platform's dashboard. Returns a
- * result shaped exactly like the platform's tables (migrations / pages / flags)
- * so the worker just writes it straight through.
- */
-
-import { existsSync } from 'node:fs';
+/** Compatibility adapter: old worker tables, new evidence-first reconstruction core. */
+import { runReconstruction } from '../reconstruct/agent.js';
+import type { ReconstructionResult } from '../reconstruct/types.js';
 import { shipToNewRepo } from '../ship/ship.js';
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { crawl, normalizeStartUrl, type CrawlScope } from '../crawl/crawler.js';
-import { normalizePage } from '../normalize/elementor.js';
-import { buildPlan, type PlanInput } from '../plan/plan.js';
-import { synthesizeFaithful } from '../synth/faithful.js';
-import { synthesizeWithAI } from '../synth/synthesize-ai.js';
-import { verifyStructure } from '../verify/structure.js';
-import { renderAndDiff, type RenderResult } from '../verify/render.js';
-import { comparePixels } from '../verify/pixel.js';
-import type {
-  CaptureManifest, ComputedEntry, PageIR, MigrationPlan,
-} from '../ir/types.js';
 
 export type Stage = 'crawl' | 'normalize' | 'plan' | 'synthesize' | 'verify' | 'ship';
-export type MigrationStatus =
-  | 'crawling' | 'normalizing' | 'planning' | 'synthesizing' | 'verifying' | 'shipping' | 'review' | 'shipped' | 'error';
-
-export interface ProgressEvent {
-  stage: Stage;
-  status: MigrationStatus;
-  message: string;
-  /** incremental page/flag data as it becomes known */
-  pages?: PageResult[];
-  flags?: FlagResult[];
-}
-
+export type MigrationStatus = 'crawling' | 'normalizing' | 'planning' | 'synthesizing' | 'verifying' | 'shipping' | 'review' | 'shipped' | 'error';
 export interface PageResult {
-  route: string;
-  title: string;
-  section_count: number;
-  widget_count: number;
-  pixel_match: number | null;
-  status: 'pending' | 'verified' | 'flagged';
-  screenshot_path?: string;   // local path to the original capture screenshot (worker uploads it)
-  slug?: string;
+  route:string;title:string;section_count:number;widget_count:number;pixel_match:number|null;
+  status:'pending'|'verified'|'flagged';screenshot_path?:string;source_screenshot_path?:string;slug?:string;
 }
-
-export interface FlagResult {
-  page_route: string;
-  kind: string;
-  summary: string;
-  detail: string;
-}
-
-export interface PipelineResult {
-  status: MigrationStatus;      // 'review' on success, 'error' on failure
-  site_url: string;
-  output_repo: string;
-  elapsed_seconds: number;
-  pages: PageResult[];
-  flags: FlagResult[];
-  assets: number;
-  routeChecks: { passed: number; total: number };
-  outDir: string;               // where the synthesized project was written
-  error?: string;
-}
-
+export interface FlagResult {page_route:string;kind:string;summary:string;detail:string}
+export interface ProgressEvent {stage:Stage;status:MigrationStatus;message:string;pages?:PageResult[];flags?:FlagResult[]}
 export interface PipelineOptions {
-  siteUrl: string;
-  workDir: string;              // scratch dir for capture + output
-  outputRepo?: string;
-  maxPages?: number;
-  /** when set, skip crawl and reuse an existing capture dir (validation/dev) */
-  reuseCaptureDir?: string;
-  scope?: CrawlScope;   // core | all | posts
-  urls?: string[];      // explicit page list (skips discovery)
-  shipRepo?: string;    // owner/name of a Lovable repo to push into
-  onProgress?: (e: ProgressEvent) => void | Promise<void>;
+  siteUrl:string;workDir:string;outputRepo?:string;maxPages?:number;reuseCaptureDir?:string;
+  scope?:'core'|'all'|'posts';urls?:string[];shipRepo?:string;bundleDir?:string;
+  onProgress?:(e:ProgressEvent)=>void|Promise<void>;
 }
-
-const STATUS_FOR: Record<Stage, MigrationStatus> = {
-  crawl: 'crawling', normalize: 'normalizing', plan: 'planning',
-  synthesize: 'synthesizing', verify: 'verifying', ship: 'review',
-};
-
-export async function runPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const {
-    siteUrl: rawSiteUrl, workDir, outputRepo: rawOutputRepo, scope = 'core', urls: explicitUrls, shipRepo: shipRepoOpt,
-    maxPages = 50, reuseCaptureDir, onProgress,
-  } = opts;
-  const siteUrl = normalizeStartUrl(rawSiteUrl);
-  const outputRepo = rawOutputRepo ?? deriveRepo(siteUrl);
-  const started = Date.now();
-  const captureDir = reuseCaptureDir ?? join(workDir, 'capture');
-  const outDir = join(workDir, 'site');
-  const emit = async (e: ProgressEvent) => { if (onProgress) await onProgress(e); };
-
-  try {
-    // ---- Stage 1: crawl ----
-    let manifest: CaptureManifest;
-    if (reuseCaptureDir) {
-      manifest = JSON.parse(await readFile(join(captureDir, 'manifest.json'), 'utf-8'));
-      await emit({ stage: 'crawl', status: 'crawling', message: `Reusing capture (${manifest.pages.length} pages)` });
-    } else {
-      await emit({ stage: 'crawl', status: 'crawling', message: `Crawling ${siteUrl}…` });
-      manifest = await crawl({ startUrl: siteUrl, outDir: captureDir, maxPages, scope, urls: explicitUrls });
-      await emit({ stage: 'crawl', status: 'crawling', message: `Captured ${manifest.pages.length} pages` });
-    }
-
-    // ---- Stage 2: normalize ----
-    if (manifest.pages.length === 0) {
-      throw new Error('No pages could be captured — the site may have blocked the crawler, or the page crashed during capture. Try again, or check that the URL loads in a browser.');
-    }
-    await emit({ stage: 'normalize', status: 'normalizing', message: 'Normalizing pages to IR…' });
-    const planInputs: PlanInput[] = [];
-    const irByRoute = new Map<string, PageIR>();
-    const computedByRoute = new Map<string, ComputedEntry[]>();
-    const domByRoute = new Map<string, string>();
-    for (const p of manifest.pages) {
-      const slug = p.files.dom.split('/')[0];
-      const ir = await normalizePage(join(captureDir, slug, 'page.html'), join(captureDir, slug, 'computed.json'));
-      ir.route = p.route;
-      const dom = await readFile(join(captureDir, slug, 'page.html'), 'utf-8');
-      const computed = JSON.parse(await readFile(join(captureDir, slug, 'computed.json'), 'utf-8')) as ComputedEntry[];
-      planInputs.push({ route: p.route, ir, dom, computed });
-      irByRoute.set(p.route, ir);
-      computedByRoute.set(p.route, computed);
-      domByRoute.set(p.route, dom);
-    }
-    await emit({ stage: 'normalize', status: 'normalizing', message: `Normalized ${planInputs.length} pages` });
-
-    // ---- Stage 3: plan ----
-    await emit({ stage: 'plan', status: 'planning', message: 'Planning migration…' });
-    const plan: MigrationPlan = buildPlan(planInputs);
-    const flags: FlagResult[] = plan.flags.map((f) => ({
-      page_route: f.page, kind: f.kind, summary: f.summary, detail: f.detail,
-    }));
-    await emit({
-      stage: 'plan', status: 'planning',
-      message: `${plan.stats.chromeSections} shared sections · ${plan.library.length} components matched · ${plan.flags.length} flags`,
-      flags,
+export interface PipelineResult {
+  status:MigrationStatus;site_url:string;output_repo:string;elapsed_seconds:number;pages:PageResult[];
+  flags:FlagResult[];assets:number;routeChecks:{passed:number;total:number};outDir:string;
+  verification?:ReconstructionResult['evaluation'];error?:string;
+}
+export async function runPipeline(options:PipelineOptions):Promise<PipelineResult>{
+  const started=Date.now();let stage:Stage='crawl';
+  let outputRepo=options.outputRepo??'molt-reconstruction';
+  let assetCount=0;let outDir=options.workDir;let pages:PageResult[]=[];let flags:FlagResult[]=[];
+  const emit=async(e:ProgressEvent)=>{stage=e.stage;await options.onProgress?.(e);};
+  const finish=(status:MigrationStatus,error?:string,verification?:ReconstructionResult['evaluation']):PipelineResult=>({
+    status,site_url:options.siteUrl,output_repo:outputRepo,elapsed_seconds:Math.round((Date.now()-started)/1000),
+    pages,flags,assets:assetCount,routeChecks:{passed:pages.filter(p=>p.pixel_match!==null).length,total:pages.length},outDir,verification,error,
+  });
+  try{
+    if(options.reuseCaptureDir)throw new Error('Legacy capture reuse is not accepted by the new core. Use a saved-page bundle (bundle.json) or recapture the live source.');
+    if(options.scope&&options.scope!=='core'&&!options.urls?.length)throw new Error('For all-pages or posts-only jobs, provide the explicit page list. The new core does not guess pages from slug length.');
+    const result=await runReconstruction({url:options.bundleDir?undefined:options.siteUrl,bundleDir:options.bundleDir,urls:options.urls,workDir:options.workDir,maxPages:options.maxPages,
+      onProgress:async(message)=>{
+        const verifying=/^(Building|Measured|Best)/.test(message);
+        const capturing=message.startsWith('Capturing');
+        // Keep legacy claimed jobs out of the queue's 'crawling' state.
+        await emit({stage:capturing?'crawl':verifying?'verify':'synthesize',status:capturing?'normalizing':verifying?'verifying':'synthesizing',message});
+      },
     });
-
-    // ---- Stage 4: synthesize ----
-    const faithfulRoutes = manifest.pages.map((p) => ({ route: p.route, slug: p.files.dom.split('/')[0] }));
-    if (process.env.MOLT_AI_REBUILD === '1' && process.env.ANTHROPIC_API_KEY) {
-      // AI-POWERED: Claude intelligently rebuilds each page as clean React.
-      const model = process.env.MOLT_AI_MODEL ?? 'claude-sonnet-4-5';
-      console.log(`[pipeline] AI mode ON · model=${model} · key=${process.env.ANTHROPIC_API_KEY ? 'present' : 'MISSING'}`);
-      await emit({ stage: 'synthesize', status: 'synthesizing', message: 'AI-rebuilding pages with Claude…' });
-      const ai = await synthesizeWithAI({
-        captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes,
-        onProgress: (m) => console.log(`[pipeline] ${m}`),
-      });
-      if (ai.ok) {
-        console.log(`[pipeline] AI rebuild: ${ai.pagesRebuilt} pages (${ai.pagesFailed} failed), ~${ai.totalTokens} tokens`);
-        await emit({ stage: 'synthesize', status: 'synthesizing', message: `AI rebuilt ${ai.pagesRebuilt} pages` });
-      } else {
-        // AI failed entirely — fall back to faithful mechanical capture
-        console.error(`[pipeline] AI rebuild failed (${ai.error}); falling back to faithful capture`);
-        await synthesizeFaithful({ captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes });
-        await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Fell back to faithful capture' });
-      }
-    } else {
-      // FAITHFUL: mechanical original DOM + CSS reproduction.
-      await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Reproducing pages (original DOM + CSS)…' });
-      await synthesizeFaithful({ captureDir, manifest, outDir, projectName: outputRepo, routes: faithfulRoutes });
-      await emit({ stage: 'synthesize', status: 'synthesizing', message: 'Pages reproduced' });
+    outDir=result.outDir;assetCount=result.source.assetCount;
+    const routes=[...new Set(result.evaluation.views.map(v=>v.route))];
+    pages=routes.map(route=>{
+      const checks=result.evaluation.views.filter(v=>v.route===route),desktop=checks.find(v=>v.viewport==='desktop')??checks[0];
+      const source=result.source.pages.find(p=>p.route===route)!;
+      return {route,title:source.title,section_count:source.sections,widget_count:source.elements,pixel_match:checks.every(v=>v.score!==null)?Math.min(...checks.map(v=>v.score!)):null,
+        status:checks.every(v=>v.pass)?'verified':'flagged',screenshot_path:desktop.candidate,source_screenshot_path:desktop.source,
+        slug:route==='/'?'home':Buffer.from(route).toString('hex'),
+      };
+    });
+    flags=[...result.blockers.map(detail=>({page_route:'(project)',kind:'no-backend',summary:'Unresolved integration or source evidence',detail})),
+      ...result.evaluation.views.filter(v=>!v.pass).map(v=>({page_route:v.route,kind:'runtime-style',summary:`${v.viewport}: reconstruction needs further work`,detail:v.issues.join('; ')||`Pixel match ${v.score??'not measured'}; worst region ${v.worstBand??'not measured'}`}))];
+    await emit({stage:'verify',status:'verifying',message:'Reconstruction and repair results',pages,flags});
+    if(!result.evaluation.pass)return finish('error',result.reason??'Measured acceptance did not pass',result.evaluation);
+    const target=options.shipRepo??process.env.MOLT_SHIP_REPO;
+    if(target&&result.status==='review'&&flags.length===0){
+      await emit({stage:'ship',status:'shipping',message:'Exporting verified React source'});
+      const shipped=await shipToNewRepo({outDir,repoName:target==='1'?outputRepo:target,commitMessage:'Molt evidence-first React reconstruction'});
+      if(!shipped.pushed)throw new Error(shipped.error??'Repository export failed');
+      outputRepo=shipped.repoUrl??outputRepo;
+      await emit({stage:'ship',status:'shipped',message:'Verified source exported',pages,flags});
+      return finish('shipped',undefined,result.evaluation);
     }
-
-    // ---- Stage 5: verify ----
-    await emit({ stage: 'verify', status: 'verifying', message: 'Verifying output…' });
-    const structure = await verifyStructure(outDir, plan);
-
-    // ---- Stage 5b: preview screenshots ----
-    // We no longer build+render the React output on the server (fragile, and the
-    // reproduction is faithful DOM+CSS anyway). Instead we surface each page's
-    // ORIGINAL captured screenshot as the preview. The worker uploads these to
-    // Supabase Storage. pixel_match stays null (Option B — automated fidelity
-    // scoring via a screenshot service — can be added later without blocking).
-    await emit({ stage: 'verify', status: 'verifying', message: 'Preparing page previews…' });
-
-    // build per-page results; screenshot_path points at the original capture
-    const flaggedRoutes = new Set(plan.flags.map((f) => f.page.split(' ')[0]));
-    const pages: PageResult[] = [];
-    for (const p of manifest.pages) {
-      const ir = irByRoute.get(p.route)!;
-      const slug = p.files.dom.split('/')[0];
-      const sectionCount = ir.sections.length;
-      const widgetCount = ir.sections.reduce((n, s) => n + s.columns.reduce((m, c) => m + c.widgets.length, 0), 0);
-      const shotPath = join(captureDir, slug, 'original.png');
-      pages.push({
-        route: p.route, title: ir.title,
-        section_count: sectionCount, widget_count: widgetCount,
-        pixel_match: null,
-        status: flaggedRoutes.has(p.route) ? 'flagged' : 'verified',
-        screenshot_path: existsSync(shotPath) ? shotPath : undefined,
-        slug,
-      });
-    }
-    await emit({ stage: 'verify', status: 'verifying', message: `Route checks ${structure.routeChecks.passed}/${structure.routeChecks.total}`, pages });
-
-    // ---- Stage 6: ship (create a fresh standalone repo, push the complete app) ----
-    const shouldShip = shipRepoOpt ?? process.env.MOLT_SHIP_REPO;
-    if (shouldShip) {
-      const repoName = typeof shouldShip === 'string' && shouldShip !== '1'
-        ? shouldShip
-        : `${outputRepo}`; // derive a name from the migration's output repo name
-      await emit({ stage: 'ship', status: 'shipping', message: `Creating repo and pushing…` });
-      const shipped = await shipToNewRepo({
-        outDir, repoName,
-        commitMessage: `Molt — faithful migration of ${siteUrl}`,
-      });
-      if (shipped.pushed) {
-        console.log(`[pipeline] shipped ${shipped.filesPushed} files → ${shipped.repoUrl} (${shipped.commit?.slice(0, 7)})`);
-        await emit({ stage: 'ship', status: 'shipping', message: `Pushed to ${shipped.repoUrl} — connect it to Replit/Vercel/local` });
-        // surface the repo URL as a flag so it shows in the dashboard
-        flags.push({
-          page_route: '(repo)', kind: 'no-backend',
-          summary: `Repo created: ${shipped.repoUrl}`,
-          detail: `${shipped.filesPushed} files pushed. Connect this repo to Replit (or clone locally) to run: npm install && npm run dev.`,
-        });
-      } else {
-        console.error(`[pipeline] ship failed: ${shipped.error}`);
-        flags.push({
-          page_route: '(ship)', kind: 'no-backend',
-          summary: 'Repo creation/push failed',
-          detail: shipped.error ?? 'unknown error',
-        });
-      }
-    }
-
-    // ---- done → review ----
-    const assets = manifest.pages.reduce((n, p) => n + p.stats.assets, 0);
-    const elapsed = Math.round((Date.now() - started) / 1000);
-    await emit({ stage: 'ship', status: 'review', message: 'Ready for review', pages, flags });
-
-    return {
-      status: 'review', site_url: siteUrl, output_repo: outputRepo,
-      elapsed_seconds: elapsed, pages, flags, assets,
-      routeChecks: structure.routeChecks, outDir,
-    };
-  } catch (err) {
-    const elapsed = Math.round((Date.now() - started) / 1000);
-    const detail = `${(err as Error)?.message ?? String(err)}\n${(err as Error)?.stack ?? ''}`;
-    console.error('[pipeline] FAILED:', detail);
-    await emit({ stage: 'crawl', status: 'error', message: (err as Error)?.message ?? String(err) });
-    return {
-      status: 'error', site_url: siteUrl, output_repo: outputRepo,
-      elapsed_seconds: elapsed, pages: [], flags: [], assets: 0,
-      routeChecks: { passed: 0, total: 0 }, outDir, error: detail,
-    };
-  }
-}
-
-// pixel_match is only meaningful once a rendered screenshot of the synth output
-// exists at <outDir>/renders/<slug>.png. Until the render step lands, return null
-// (the platform shows "—") rather than a fabricated number.
-async function tryPixel(captureDir: string, outDir: string, slug: string): Promise<number | null> {
-  try {
-    const original = join(captureDir, slug, 'original.png');
-    const rendered = join(outDir, 'renders', `${slug}.png`);
-    await readFile(rendered); // throws if not present
-    const res = await comparePixels(original, rendered);
-    return res.matchPct;
-  } catch {
-    return null;
-  }
-}
-
-function deriveRepo(url: string): string {
-  try {
-    const h = new URL(url).hostname.replace(/^www\./, '');
-    return h.split('.')[0] + '-react';
-  } catch {
-    return 'migrated-site';
+    await emit({stage:'verify',status:'review',message:flags.length?'Visual review available; integration decisions block automatic export':'Ready for human review',pages,flags});
+    return finish('review',undefined,result.evaluation);
+  }catch(error){
+    const message=(error as Error).message;
+    try{await emit({stage,status:'error',message,pages,flags});}catch{}
+    return finish('error',message);
   }
 }

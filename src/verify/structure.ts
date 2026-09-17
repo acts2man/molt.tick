@@ -1,18 +1,8 @@
 /**
- * Molt Stage 5 — Structural verification.
- *
- * Static checks on the synthesized project, no rendering required. This is the
- * "real route click-throughs" done deterministically: prove the emitted site is
- * internally coherent before we ever pixel-diff it.
- *
- * Checks per migration:
- *  - route coverage    — every planned route emitted a route file
- *  - link integrity    — every internal href points to a route that exists
- *  - component wiring   — every <LibraryComponent/> used is imported + has a file
- *  - scaffold           — package.json / vite / tailwind / index.css present
- *  - flag representation — every plan flag left a marker or matched component
+ * Static output-contract checks. These are not browser click-through tests.
+ * Accept the current src/pages scaffold and the legacy src/routes scaffold.
+ * Actual compilation, runtime behavior and responsive fidelity need separate tests.
  */
-
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { MigrationPlan } from '../ir/types.js';
@@ -33,109 +23,108 @@ export interface VerifyReport {
   deadLinkTotal: number;
   unimportedTotal: number;
   flagsRepresented: { kind: string; page: string; found: boolean }[];
+  integrityIssues: string[];
   pass: boolean;
 }
 
-const routeToFile = (route: string) =>
-  route === '/' ? 'index' : route.slice(1).replace(/\/$/, '').replace(/\//g, '.');
+function fileForRoute(route: string): string {
+  if (!route.startsWith('/') || route.startsWith('//') || /[\\?#\0]/.test(route)
+    || route.split('/').some((segment) => segment === '.' || segment === '..')) {
+    throw new Error(`Invalid route: ${route}`);
+  }
+  return route === '/' ? 'index' : route.slice(1).replace(/\/$/, '').replace(/\//g, '.');
+}
 
-async function exists(p: string): Promise<boolean> {
-  try { await stat(p); return true; } catch { return false; }
+async function exists(path: string): Promise<boolean> {
+  try { return (await stat(path)).isFile(); } catch { return false; }
+}
+
+async function sourcesUnder(directory: string): Promise<string[]> {
+  const results: string[] = [];
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) results.push(...await sourcesUnder(path));
+    else if (entry.isFile() && /\.(tsx?|jsx?)$/.test(entry.name)) results.push(path);
+  }
+  return results;
+}
+
+function cleanRoute(route: string): string {
+  return route.replace(/\/+$/, '') || '/';
 }
 
 export async function verifyStructure(siteDir: string, plan: MigrationPlan): Promise<VerifyReport> {
-  const routeFiles = new Set<string>();
-  try {
-    for (const f of await readdir(join(siteDir, 'src/routes'))) {
-      if (f.endsWith('.tsx')) routeFiles.add(f.replace(/\.tsx$/, ''));
-    }
-  } catch { /* no routes dir */ }
-
-  // the set of route paths that actually exist, for link resolution
-  const existingRoutes = new Set(plan.routes.map((r) => r.route));
-
-  // available library component files
-  const libFiles = new Set<string>();
-  try {
-    for (const f of await readdir(join(siteDir, 'src/components/library'))) {
-      if (f.endsWith('.tsx')) libFiles.add(f.replace(/\.tsx$/, ''));
-    }
-  } catch { /* none */ }
-
+  const issues: string[] = [];
+  const current = await exists(join(siteDir, 'src/main.tsx'));
+  const routeDir = current ? 'src/pages' : 'src/routes';
+  const known = new Set(plan.routes.map((r) => cleanRoute(r.route)));
+  if (!plan.routes.length) issues.push('No planned routes');
+  if (known.size !== plan.routes.length) issues.push('Duplicate normalized routes');
+  const names = new Set<string>();
   const routes: RouteCheck[] = [];
+  let output: { mode?: string; routes?: string[]; pagesFailed?: number } = {};
+  try {
+    output = JSON.parse(await readFile(join(siteDir, 'MOLT_OUTPUT.json'), 'utf8'));
+    if (!Array.isArray(output.routes) || output.routes.some((r) => typeof r !== 'string')
+      || output.routes.length !== known.size || new Set(output.routes.map(cleanRoute)).size !== known.size
+      || output.routes.some((r) => !known.has(cleanRoute(r)))) {
+      issues.push('Output manifest does not cover the planned routes exactly');
+    }
+    if (typeof output.pagesFailed === 'number' && output.pagesFailed > 0) issues.push('Output records failed pages');
+    if (output.mode === 'faithful-visual') issues.push('A captured HTML snapshot is not an independent React rebuild');
+  } catch { issues.push('Missing or invalid MOLT_OUTPUT.json'); }
+
   for (const r of plan.routes) {
-    const file = routeToFile(r.route);
-    const fileExists = routeFiles.has(file);
-    let internalLinks = 0;
-    const deadLinks: string[] = [];
-    const componentsUsed: string[] = [];
-    const componentsUnimported: string[] = [];
-
+    let file = '';
+    try { file = fileForRoute(r.route); } catch (e) { issues.push((e as Error).message); }
+    if (file && names.has(file)) issues.push(`Route filename collision: ${r.route}`);
+    names.add(file);
+    const fileExists = !!file && await exists(join(siteDir, routeDir, `${file}.tsx`));
+    const check: RouteCheck = { route: r.route, fileExists, internalLinks: 0, deadLinks: [], componentsUsed: [], componentsUnimported: [] };
     if (fileExists) {
-      const src = await readFile(join(siteDir, 'src/routes', file + '.tsx'), 'utf-8');
-      // internal links: href="/..." (not http, not #, not mailto)
-      for (const m of src.matchAll(/href="(\/[^"]*)"/g)) {
-        const href = m[1].replace(/\/$/, '') || '/';
-        internalLinks++;
-        // resolve against existing routes (normalize trailing slash)
-        const norm = href === '' ? '/' : href;
-        if (!existingRoutes.has(norm) && !existingRoutes.has(norm + '/')) deadLinks.push(m[1]);
+      const src = await readFile(join(siteDir, routeDir, `${file}.tsx`), 'utf8');
+      if (!src.trim()) issues.push(`Empty route component: ${r.route}`);
+      if (/Page could not be rebuilt\./.test(src)) issues.push(`Failure placeholder: ${r.route}`);
+      for (const match of src.matchAll(/href\s*=\s*(?:\{\s*)?["'](\/[^"']*)["']/g)) {
+        if (match[1].startsWith('//')) continue; // External protocol-relative link.
+        const href = cleanRoute(match[1].split(/[?#]/)[0]);
+        check.internalLinks++;
+        if (!known.has(href)) check.deadLinks.push(match[1]);
       }
-      // library components used: <ComponentName/> that look like lib comps
-      const used = new Set<string>();
-      for (const m of src.matchAll(/<([A-Z][A-Za-z0-9]+)\s*\/?>/g)) {
-        const name = m[1];
-        if (name === 'SiteLayout') continue;
-        used.add(name);
-      }
-      // SiteLayout carries chrome components; check the layout too
-      componentsUsed.push(...used);
     }
-    routes.push({ route: r.route, fileExists, internalLinks, deadLinks, componentsUsed, componentsUnimported });
+    routes.push(check);
   }
 
-  // verify SiteLayout's imports cover its used components
-  let layoutSrc = '';
-  try { layoutSrc = await readFile(join(siteDir, 'src/components/SiteLayout.tsx'), 'utf-8'); } catch { /* */ }
-  const layoutImports = new Set([...layoutSrc.matchAll(/import\s*\{\s*([A-Za-z0-9]+)\s*\}/g)].map((m) => m[1]));
-
-  // cross-check every used lib component resolves to a file or a layout import
-  for (const rc of routes) {
-    for (const c of rc.componentsUsed) {
-      const resolvable = libFiles.has(c) || layoutImports.has(c);
-      if (!resolvable && /^(HeaderNav|OffcanvasPanels|SocialIconRow|PersistentAudioPlayer|MailingListForm|GalleryWithLightbox|IconBox|SupabaseShop|ContactFormMailto|MixcloudPlayer)$/.test(c)) {
-        rc.componentsUnimported.push(c);
+  // A deliberately conservative independence guard, not an XSS sanitizer.
+  // Rich text/SVG exceptions require an explicit future contract, not silent raw-page injection.
+  for (const path of await sourcesUnder(join(siteDir, 'src'))) {
+    const src = await readFile(path, 'utf8');
+    if (/dangerouslySetInnerHTML|\.innerHTML\s*=|insertAdjacentHTML\s*\(|\.html\?raw/.test(src)) {
+      issues.push(`Captured/raw HTML injection in ${path.slice(siteDir.length + 1)}`);
+    }
+    // Check relative module imports in their OWN module, not against imports in a different file.
+    for (const match of src.matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
+      const modulePath = match[1].split('?')[0];
+      const base = join(path, '..', modulePath);
+      const candidates = [base, ...['.ts', '.tsx', '.js', '.jsx', '.css'].map((ext) => base + ext), join(base, 'index.ts'), join(base, 'index.tsx')];
+      if (!(await Promise.all(candidates.map(exists))).some(Boolean)) {
+        issues.push(`Unresolved relative import ${match[1]} in ${path.slice(siteDir.length + 1)}`);
       }
     }
   }
-
-  const scaffold = await Promise.all(
-    ['package.json', 'vite.config.ts', 'tailwind.config.js', 'src/index.css', 'src/components/SiteLayout.tsx']
-      .map(async (f) => ({ file: f, present: await exists(join(siteDir, f)) })),
-  );
-
-  // flags: each plan flag should leave a trace — a matched component or a FLAG comment
-  const allSrc = (await Promise.all(
-    routes.filter((r) => r.fileExists).map((r) => readFile(join(siteDir, 'src/routes', routeToFile(r.route) + '.tsx'), 'utf-8')),
-  )).join('\n') + layoutSrc;
-  const flagsRepresented = plan.flags.map((f) => ({
-    kind: f.kind, page: f.page,
-    found: f.kind === 'unknown-widget'
-      ? /FLAG: unconverted widget/.test(allSrc)
-      : true, // payment/no-backend/runtime-style are represented by matched components + sidecar
-  }));
-
-  const routesPassed = routes.filter((r) => r.fileExists && r.deadLinks.length === 0 && r.componentsUnimported.length === 0).length;
+  const required = current
+    ? ['package.json', 'vite.config.ts', 'index.html', 'src/main.tsx', 'src/index.css', 'tailwind.config.js', 'postcss.config.js']
+    : ['package.json', 'vite.config.ts', 'tailwind.config.js', 'src/index.css', 'src/components/SiteLayout.tsx'];
+  const scaffold = await Promise.all(required.map(async (file) => ({ file, present: await exists(join(siteDir, file)) })));
+  const passed = routes.filter((r) => r.fileExists && !r.deadLinks.length).length;
   const deadLinkTotal = routes.reduce((n, r) => n + r.deadLinks.length, 0);
-  const unimportedTotal = routes.reduce((n, r) => n + r.componentsUnimported.length, 0);
-
   return {
-    routeChecks: { passed: routesPassed, total: routes.length },
-    scaffold,
-    routes,
-    deadLinkTotal,
-    unimportedTotal,
-    flagsRepresented,
-    pass: routesPassed === routes.length && scaffold.every((s) => s.present) && deadLinkTotal === 0,
+    routeChecks: { passed, total: routes.length }, scaffold, routes, deadLinkTotal,
+    unimportedTotal: issues.filter((i) => i.startsWith('Unresolved relative import')).length,
+    // A recorded flag is not proof that its missing backend or widget was implemented.
+    flagsRepresented: plan.flags.map((f) => ({ kind: f.kind, page: f.page, found: false })),
+    integrityIssues: issues,
+    pass: routes.length > 0 && passed === routes.length && scaffold.every((s) => s.present) && issues.length === 0,
   };
 }
