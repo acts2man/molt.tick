@@ -9,6 +9,7 @@ export interface ElementEvidence {
   key: string; parent?: string; tag: string; text: string;
   x: number; y: number; width: number; height: number;
   style: Record<string, string>; src?: string; href?: string; svg?: string;
+  attributes?: Record<string, string>;
   before?: Record<string, string>; after?: Record<string, string>;
 }
 export interface Geometry {
