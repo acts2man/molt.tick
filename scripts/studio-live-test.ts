@@ -13,7 +13,7 @@ while (Date.now() < deadline) {
     const r = await fetch(`${origin}/api/molt/session`, { signal: AbortSignal.timeout(10_000), cache: 'no-store' });
     if (r.ok && r.headers.get('content-type')?.includes('application/json')) {
       session = await r.json();
-      if (session.serverReady === true) break;
+      if (session.serverReady === true) {const home=await fetch(origin+'/plans',{signal:AbortSignal.timeout(10000)});if(home.ok){const html=await home.text();if(html.includes('Your next creative chapter'))break;}}
     }
   } catch { /* Deployment may still be starting. */ }
   await new Promise(r => setTimeout(r, 10_000));
@@ -30,14 +30,14 @@ try {
     try {
       const page = await ctx.newPage();
       page.on('pageerror', e => errors.push(e.message));
-      for (const route of ['/', '/connections', '/activity', '/guide']) {
+      for (const route of ['/', '/studio', '/connections', '/activity', '/guide', '/plans', '/how-it-works', '/migration-guide', '/usage']) {
         const response = await page.goto(origin + route, { waitUntil: 'networkidle', timeout: 30_000 });
         assert.equal(response?.status(), 200, `Live route ${route}`);
         await page.locator('main h1').waitFor();
         assert.equal(await page.evaluate('document.documentElement.scrollWidth > innerWidth + 1'), false, `${route} at ${width}: no horizontal overflow`);
-        await page.screenshot({ path: `${out}/${route === '/' ? 'studio' : route.slice(1)}-${width}.png`, fullPage: true });
+        await page.screenshot({ path: `${out}/${route === '/' ? 'landing' : route.slice(1)}-${width}.png`, fullPage: true });
       }
-      await page.goto(origin);
+      await page.goto(origin+'/studio');
       await page.getByRole('button', { name: 'Connect GitHub', exact: true }).click();
       await page.locator('dialog[open]').waitFor();
       assert.equal(await page.locator('dialog input').getAttribute('type'), 'password');
@@ -48,7 +48,7 @@ try {
   assert.deepEqual(errors, []);
   await writeFile(`${out}/live-check.json`, JSON.stringify({
     passed: true, origin, session, privateJobsStatus: privateResponse.status,
-    viewports: [1440, 768, 390], routes: ['/', '/connections', '/activity', '/guide'],
+    viewports: [1440, 768, 390], routes: ['/', '/studio', '/connections', '/activity', '/guide', '/plans', '/how-it-works', '/migration-guide', '/usage'],
     boundary: 'Read-only deployed checks. No authentication bypass, credentials, paid model calls, or client reconstructions were used.',
   }, null, 2));
 } finally { await engine.close(); }

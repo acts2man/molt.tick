@@ -1,3 +1,17 @@
+# Molt Studio - a new creative foundation
+
+Public landing: https://moltick.netlify.app
+Owner development studio: https://moltick.netlify.app/studio
+
+This repository now contains the public product experience, guided owner beta,
+and reconstruction engine. Customer subscriptions are **not** enabled. The
+GitHub Actions runner is for developing and evaluating this software, not the
+production backend of a commercial SaaS.
+
+Read `docs/product/COMMERCIAL-LAUNCH.md` for credit metering, the production
+executor boundary, customer onboarding, service migration, and launch gates.
+`docs/product/PROVIDER-SOURCES.md` records dated provider references.
+
 # Molt Studio
 
 A browser workspace and evidence-first engine for recreating websites as editable React.
