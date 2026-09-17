@@ -4,6 +4,7 @@ import { Landing, PlansPage } from './product/Landing';
 import { WorkflowGuide, MigrationGuide, OwnerSetupHelp, SetupPath, MODEL_ID } from './product/Guidance';
 import { ReconstructionWizard as NewReconstruction } from './product/Wizard';
 import { UsagePage } from './product/Usage';
+import { AuthPage, AccountPage } from './product/Account';
 import { active, api, date, label, post } from './api';
 import type { Job } from '../server/contracts';
 
@@ -37,6 +38,8 @@ export function App(){
   if(path==='/plans')return <PlansPage/>;
   if(path==='/how-it-works')return <WorkflowGuide/>;
   if(path==='/migration-guide')return <MigrationGuide/>;
+  if(path==='/login')return <AuthPage/>;
+  if(path==='/account')return <AccountPage/>;
   return <StudioApp/>;
 }
 function StudioApp(){
