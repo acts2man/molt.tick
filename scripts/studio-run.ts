@@ -62,6 +62,12 @@ try{
   const report=JSON.parse(JSON.stringify(result));
   for(let i=0;i<report.evaluation.views.length;i++){
     const view=report.evaluation.views[i];view.sourceImage=view.source?await preview(view.source,`view-${i}-source.png`):null;view.candidateImage=view.candidate?await preview(view.candidate,`view-${i}-react.png`):null;view.diffImage=view.diff?await preview(view.diff,`view-${i}-diff.png`):null;
+    for(let stateIndex=0;stateIndex<(view.interactions??[]).length;stateIndex++){
+      const state=view.interactions[stateIndex],prefix=`view-${i}-state-${stateIndex}`;
+      state.sourceImage=state.source?await preview(state.source,`${prefix}-source.png`):null;
+      state.candidateImage=state.candidate?await preview(state.candidate,`${prefix}-react.png`):null;
+      state.diffImage=state.diff?await preview(state.diff,`${prefix}-diff.png`):null;
+    }
   }
   await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
