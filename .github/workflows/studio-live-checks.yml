@@ -1,0 +1,36 @@
+name: Published Studio checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['studio/**', 'netlify.toml', 'scripts/studio-live-test.ts', '.github/workflows/studio-live-checks.yml']
+permissions:
+  contents: read
+concurrency:
+  group: published-studio-checks
+  cancel-in-progress: true
+jobs:
+  published:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx --no-install playwright-core install --with-deps chromium
+      - name: Inspect the deployed application without credentials or paid jobs
+        env:
+          MOLT_NO_SANDBOX: '1'
+        run: ./node_modules/.bin/tsx scripts/studio-live-test.ts
+      - name: Preserve live screenshots and check results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: molt-published-studio
+          path: studio-live-output/
+          retention-days: 7
