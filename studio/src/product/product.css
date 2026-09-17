@@ -34,3 +34,7 @@
 .account-next h2{font-size:31px;max-width:700px;margin:15px 0}
 .account-next p{color:#99aa8c;max-width:760px}
 @media(max-width:760px){.auth-grid{grid-template-columns:1fr}.auth-aside{order:-1}.account-metrics{grid-template-columns:1fr}.account-heading,.account-next{align-items:flex-start;flex-direction:column}.account-heading h1{font-size:38px}}
+
+.account-quote{display:grid;grid-template-columns:minmax(0,.85fr) minmax(420px,1.15fr);gap:32px;margin:28px 0 10px;padding:32px;border:1px solid #3b4931;border-radius:14px;background:#151c12}
+.account-quote h2{font-size:29px;margin:15px 0 14px}.account-quote p{color:#95a388;font-size:12px}.account-quote form{display:grid;gap:16px}.account-quote label{font-size:10px;color:#aebda0}.account-quote input,.account-quote select{display:block;width:100%;margin-top:7px;background:#0f150d;color:#edf2e5;border:1px solid #405037;border-radius:7px;padding:12px}.quote-row{display:grid;grid-template-columns:.6fr 1fr 1fr;gap:10px}.quote-result{border:1px solid #53643f;border-radius:10px;padding:18px;background:#1f2919}.quote-result span,.quote-result small{display:block}.quote-result span{font-size:8px;letter-spacing:1.4px;color:#8fa17f}.quote-result strong{display:block;font-size:25px;margin:8px 0;color:#e8d2a4}.quote-result small{color:#90a182;line-height:1.6}
+@media(max-width:760px){.account-quote{grid-template-columns:1fr;padding:24px}.quote-row{grid-template-columns:1fr}}
