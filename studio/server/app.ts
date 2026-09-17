@@ -189,12 +189,27 @@ export async function handle(req: Request, services: Services): Promise<Response
         }catch(e){job.status='error';job.error=(e as Error).message;job.message='The runner could not be started';await store.setJSON(key,job);throw e;}
       }
       const id=uuid(path[1]??''),key=dataKey(owner,id);let job=await store.get(key,{type:'json'}) as Job|null;if(!job)throw new HttpError(404,'This reconstruction was not found.');
+      if(method==='POST' && path[2]==='reconstruct') {
+        if(job.kind!=='preflight'||job.status!=='scoped'||!job.preflight)throw new HttpError(409,'Complete the scope scan before approving reconstruction.');
+        if(job.reconstructionId){const existing=await store.get(dataKey(owner,job.reconstructionId),{type:'json'});if(existing)return json(existing);}
+        const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'Another scan or reconstruction is already active.');
+        const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
+        if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before approving reconstruction.');
+        const observed=Array.isArray(job.preflight.pages)?job.preflight.pages.map((p:any)=>String(p.route||'')).filter(Boolean):[];
+        const next=newJob({id:randomUUID(),url:job.sourceUrl,pages:job.bundleId?'':observed.join('\n'),maxPages:job.bundleId?job.maxPages:Math.max(1,Math.min(12,observed.length||job.maxPages)),maxRepairs:job.maxRepairs,bundleId:job.bundleId},owner,'reconstruction');
+        next.sourcePreflightId=job.id;await store.setJSON(dataKey(owner,next.id),next);job.reconstructionId=next.id;job.updatedAt=new Date().toISOString();await store.setJSON(key,job);
+        try{
+          const dispatch=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:next.id}})});
+          const latest=await store.get(dataKey(owner,next.id),{type:'json'}) as Job;if(latest.status==='dispatching'){latest.status='queued';latest.message='Waiting for the reconstruction runner';if(dispatch?.workflow_run_id){latest.runId=dispatch.workflow_run_id;latest.runUrl=dispatch.html_url;}await store.setJSON(dataKey(owner,next.id),latest);}return json(latest,202);
+        }catch(e){next.status='error';next.error=(e as Error).message;next.message='The reconstruction runner could not be started';await store.setJSON(dataKey(owner,next.id),next);throw e;}
+      }
       if(method==='GET' && path[2]==='images') {
         const name=path[3]??'';if(!/^[a-z0-9-]{1,80}\.png$/.test(name))throw new HttpError(400,'Invalid image identifier.');
         const image=await store.get(`images/${owner}/${id}/${name}`,{type:'arrayBuffer'});if(!image)throw new HttpError(404,'This screenshot is unavailable.');
         return new Response(image,{headers:{'content-type':'image/png','cache-control':'private, max-age=300','x-content-type-options':'nosniff'}});
       }
       if(method==='GET' && path.length===2) {
+        const jobWorkflow=job.kind==='preflight'?PREFLIGHT_WORKFLOW:WORKFLOW;
         let workflow:any=null,artifacts:any[]=[];
         if(job.runId){
           try {workflow=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}`);
@@ -202,7 +217,7 @@ export async function handle(req: Request, services: Services): Promise<Response
             if(workflow.status==='completed'){const a=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/artifacts`);artifacts=a.artifacts.filter((f:any)=>!f.expired).map((f:any)=>({name:f.name,size:f.size_in_bytes,url:`https://github.com/${REPOSITORY}/actions/runs/${job!.runId}/artifacts/${f.id}`}));}
           }catch{}
         }else if(ACTIVE.has(job.status)) {
-          const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);
+          const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${jobWorkflow}/runs?event=workflow_dispatch&per_page=50`);
           const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));
           if(run){job.runId=run.id;job.runUrl=run.html_url;await store.setJSON(key,job);}else if(Date.now()-Date.parse(job.createdAt)>600000){job.status='error';job.message='No runner started within ten minutes. Check GitHub Actions permissions and availability.';await store.setJSON(key,job);}
         }
@@ -210,7 +225,7 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       if(method==='POST' && path[2]==='cancel') {
         if(!ACTIVE.has(job.status))throw new HttpError(409,'This job has already finished.');
-        if(!job.runId){const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));if(run)job.runId=run.id;}
+        if(!job.runId){const jobWorkflow=job.kind==='preflight'?PREFLIGHT_WORKFLOW:WORKFLOW;const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${jobWorkflow}/runs?event=workflow_dispatch&per_page=50`);const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));if(run)job.runId=run.id;}
         if(!job.runId)throw new HttpError(409,'The runner has not assigned an ID yet. Refresh in a few seconds.');
         await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/cancel`,{method:'POST'});job.status='cancelling';job.message='Cancellation requested; waiting for the runner to stop';await store.setJSON(key,job);return json(job,202);
       }
