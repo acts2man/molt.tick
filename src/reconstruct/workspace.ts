@@ -67,6 +67,33 @@ export async function snapshot(root: string): Promise<FileChange[]> {
   return result.sort((a,b) => a.path.localeCompare(b.path));
 }
 export const digest = (files: FileChange[]) => createHash('sha256').update(JSON.stringify([...files].sort((a,b) => a.path.localeCompare(b.path)))).digest('hex');
+export function migrationHandoff(evidence: Evidence): string {
+  const clean=(s:string)=>s.replace(/[\r\n|]+/g,' ').trim();
+  const lines=[
+    '# Molt migration handoff',
+    '',
+    'The React frontend is only one part of leaving WordPress or another site platform. Complete and verify the items below before cancelling the old host or changing production DNS.',
+    '',
+    '## Always verify before cutover',
+    '',
+    '- **Domain and DNS:** record the current DNS zone and lower TTLs only when a cutover plan requires it.',
+    '- **Human email inboxes:** identify the current mailbox provider and MX records. Web hosting and mailbox hosting are separate; do not cancel the old service until every required inbox can send and receive from the new arrangement.',
+    '- **Forms and application email:** submit every production form end to end. Choose a real delivery backend (for example Netlify Forms or a secured endpoint with an email/CRM provider) instead of treating a visual form as functional.',
+    '- **Payments and commerce:** preserve merchant ownership. Test checkout, receipts, refunds, webhooks, tax, shipping, subscriptions, inventory and order history wherever they apply.',
+    '- **CMS / editing:** decide how nontechnical editors will change content after the page-builder runtime is removed.',
+    '- **SEO and redirects:** preserve canonical URLs, titles, descriptions, structured data and required redirects. Crawl the new site before launch.',
+    '- **Rollback:** keep the old site and DNS settings available until the new deployment and business workflows are verified.',
+    '',
+    '## Services observed in the source',
+    ''
+  ];
+  if(!evidence.integrations.length)lines.push('No known external service was identified from the captured frontend. That does **not** prove the site has no backend, email, DNS, analytics, membership, booking or commerce dependencies.');
+  else for(const item of evidence.integrations)lines.push(`- **${clean(item.provider)}** — ${clean(item.kind)} on \`${clean(item.route)}\`. Evidence: ${clean(item.evidence)}. **Next:** ${clean(item.action)}`);
+  if(evidence.blockers.length){lines.push('','## Blocking decisions','');for(const item of evidence.blockers)lines.push(`- ${clean(item)}`);}
+  if(evidence.warnings.length){lines.push('','## Capture warnings','');for(const item of evidence.warnings)lines.push(`- ${clean(item)}`);}
+  lines.push('','## Cutover rule','','Do not cancel the previous hosting/platform account solely because the React build looks correct. Cut over only after the frontend, DNS, inboxes, forms, payments/commerce, redirects, private data and rollback path that apply to this site have been tested.','');
+  return lines.join('\n');
+}
 export async function apply(root: string, changes: FileChange[], allowedPages: Set<string>): Promise<void> {
   validateChanges(changes);
   for (const f of changes) if (f.path.startsWith('src/pages/') && !allowedPages.has(f.path)) throw new Error('Model attempted to invent a route');
@@ -100,6 +127,7 @@ export async function scaffold(root: string, evidence: Evidence): Promise<void> 
     await mkdir(join(root,'public/assets'),{recursive:true}); await copyFile(a.file,join(root,'public',a.publicPath));
   }
   await write('public/_redirects', evidence.pages.map(p=>`${p.route} /index.html 200`).join('\n'));
-  await write('MOLT_OUTPUT.json', JSON.stringify({ mode:'reconstruction-agent', routes:evidence.pages.map(p=>p.route), pageFiles:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})), warnings:evidence.warnings, blockers:evidence.blockers },null,2));
-  await write('README.md', '# React reconstruction\n\nRun `npm install` then `npm run dev`. Build with `npm run build`.\n\nThis is a front-end reconstruction, not a WordPress database, authentication, payments, or form-backend migration. Review MOLT_OUTPUT.json and the separate reconstruction report for measured scope, warnings and unresolved integrations.\n');
+  await write('MOLT_OUTPUT.json', JSON.stringify({ mode:'reconstruction-agent', routes:evidence.pages.map(p=>p.route), pageFiles:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})), warnings:evidence.warnings, blockers:evidence.blockers, integrations:evidence.integrations },null,2));
+  await write('MOLT_MIGRATION_PLAN.md', migrationHandoff(evidence));
+  await write('README.md', '# React reconstruction\n\nRun `npm install` then `npm run dev`. Build with `npm run build`.\n\nThis is a front-end reconstruction, not a WordPress database, mailbox, authentication, payments, commerce, or form-backend migration. Review `MOLT_OUTPUT.json`, `MOLT_MIGRATION_PLAN.md`, and the separate reconstruction report before cutover.\n');
 }

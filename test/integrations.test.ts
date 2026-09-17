@@ -11,7 +11,7 @@ function evidence():Evidence {
       geometry:{
         text:'Example',title:'Example',height:1200,overflow:false,brokenImages:0,elements:[],
         links:['https://checkout.stripe.com/c/pay/demo','https://calendly.com/example/demo'],
-        embeds:['https://www.youtube.com/embed/demo'],forms:1,fontFaces:[],mediaQueries:[],platformHints:['WordPress','Elementor'],truncated:false,
+        embeds:['https://www.youtube.com/embed/demo'],forms:1,fontFaces:[],mediaQueries:[],platformHints:['WordPress','Elementor','Contact Form 7','WooCommerce'],truncated:false,
       },
     }]}],
   };
@@ -25,6 +25,8 @@ test('migration inventory identifies observed services without claiming completi
   assert.ok(items.some(i=>i.kind==='media'&&i.provider==='YouTube'));
   assert.ok(items.some(i=>i.kind==='platform'&&i.provider==='WordPress'));
   assert.ok(items.some(i=>i.kind==='platform'&&i.provider==='Elementor'));
+  assert.ok(items.some(i=>i.kind==='forms'&&i.provider==='Contact Form 7'));
+  assert.ok(items.some(i=>i.kind==='commerce'&&i.provider==='WooCommerce'));
   assert.ok(items.every(i=>i.route==='/'));
   assert.ok(items.every(i=>i.action.length>20));
   assert.ok(items.every(i=>!/already migrated|complete migration/i.test(i.action)));

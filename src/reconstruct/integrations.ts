@@ -46,11 +46,19 @@ export function detectIntegrations(evidence:Pick<Evidence,'pages'>):IntegrationF
     }
     for(const hint of view.geometry.platformHints??[]){
       const lower=hint.toLowerCase();
+      if(lower.includes('woocommerce')){
+        out.push({kind:'commerce',provider:'WooCommerce',route:page.route,evidence:hint,action:'Migrate or reconnect products, cart, orders, customers, inventory, taxes, shipping, subscriptions and payment gateways that the store actually uses; do not treat the React cart UI as the store database.'});
+        continue;
+      }
+      const formProvider=lower.includes('contact form 7')?'Contact Form 7':lower.includes('gravity')?'Gravity Forms':lower.includes('wpforms')?'WPForms':lower.includes('fluent')?'Fluent Forms':'';
+      if(formProvider){
+        out.push({kind:'forms',provider:formProvider,route:page.route,evidence:hint,action:'Replace the WordPress form runtime with an approved submission backend, preserve required fields/consent, and verify delivery, spam handling and notifications end to end.'});
+        continue;
+      }
       let provider='';
       if(lower.includes('elementor'))provider='Elementor';
       else if(lower.includes('wpbakery'))provider='WPBakery';
       else if(lower.includes('divi'))provider='Divi';
-      else if(lower.includes('woocommerce'))provider='WooCommerce';
       else if(lower.includes('wordpress'))provider='WordPress';
       else if(lower.includes('shopify'))provider='Shopify';
       else if(lower.includes('wix'))provider='Wix';
