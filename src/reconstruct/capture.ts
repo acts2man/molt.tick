@@ -95,15 +95,17 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
 /** Do not erase transforms, reveal hidden menus, or resize the viewport to page height. */
 export async function settle(page: Page, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
+  const maxHeight=Number(process.env.MOLT_MAX_CAPTURE_HEIGHT??26000);
+  if(!Number.isInteger(maxHeight)||maxHeight<12000||maxHeight>27000)throw new Error('MOLT_MAX_CAPTURE_HEIGHT must be an integer from 12000 to 27000');
   await page.evaluate(`Promise.race([document.fonts.ready,new Promise(r=>setTimeout(r,5000))])`);
   let height = await page.evaluate('document.documentElement.scrollHeight') as number;
-  if (height > 18000) throw new Error('Page exceeds the 18000px capture budget; split the source into sections');
+  if (height > maxHeight) throw new Error(`Page height ${height}px exceeds the safe ${maxHeight}px capture budget; capture the page as smaller saved-page routes or reduce infinite/lazy content`);
   for (let y = 0; y < height; y += 650) {
     signal.throwIfAborted();
     await page.evaluate(`scrollTo(0,${y})`);
     await page.waitForTimeout(70);
     height = await page.evaluate('document.documentElement.scrollHeight') as number;
-    if (height > 18000) throw new Error('Page grows beyond the capture budget');
+    if (height > maxHeight) throw new Error(`Page grew beyond the safe ${maxHeight}px capture budget while lazy content loaded`);
   }
   await page.evaluate(`scrollTo(0,0)`);
   await page.waitForTimeout(350);

@@ -32,6 +32,15 @@ test('real browser captures two imported pages at all three viewports and locali
   assert.ok(view.geometry.elements.find(e=>e.tag==='h1'&&e.width>0));
   assert.equal(view.interactions?.length,1);assert.equal(view.interactions?.[0].trigger.kind,'details');assert.equal(view.interactions?.[0].trigger.name,'Project notes');
 }));
+test('capture accepts a long landing page beyond the former 18000px ceiling within the bounded pixel budget',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const longHtml='<!doctype html><html><head><meta charset="utf-8"><title>Long page</title></head><body style="margin:0"><main style="height:19500px;padding:32px"><h1>Long-form landing page</h1><p>Bottom content remains part of the same page.</p></main></body></html>';
+  await writeFile(join(dir,'bundle/home.html'),longHtml);
+  await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'long-evidence'),viewports:[{name:'mobile',width:390,height:844}],signal:AbortSignal.timeout(60000)});
+  assert.equal(evidence.pages.length,1);assert.equal(evidence.pages[0].views.length,1);
+  assert.ok(evidence.pages[0].views[0].geometry.height>18000);
+  const bytes=(await readFile(evidence.pages[0].views[0].screenshot)).length;assert.ok(bytes>0);
+}));
 test('full agent builds real React, detects a deliberate mismatch, repairs it and verifies every viewport',{skip:process.env.MOLT_RUN_FULL_AGENT_TESTS!=='1'},()=>fixture(async dir=>{
   let generation=0,repair=0;
   const model:Model={usage:{calls:0,inputTokens:0,outputTokens:0},async complete(request){

@@ -17,22 +17,37 @@ export interface AgentOptions {
   maxPages?:number; maxRepairs?:number; model?:Model; signal?:AbortSignal;
   onProgress?:(message:string)=>void|Promise<void>;
 }
-function pageContext(evidence:Evidence,page:EvidencePage):unknown{
+function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=360):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
-  return {route:page.route,title:page.title,file:routeFile(page.route),views:page.views.map(v=>({
-    viewport:v.viewport,fullVisibleText:v.geometry.text,pageHeight:v.geometry.height,mediaQueries:v.geometry.mediaQueries,
-    interactions:(v.interactions??[]).map(state=>({id:state.id,trigger:state.trigger,visibleText:state.geometry.text,pageHeight:state.geometry.height,
-      geometry:state.geometry.elements.filter(e=>e.text||e.src||e.svg||e.attributes?.['aria-expanded']||e.attributes?.['aria-selected']||/^(nav|dialog|details)$/.test(e.tag)).slice(0,180).map(e=>JSON.parse(remap(JSON.stringify(e))))})),
-    // All visible copy is retained. Geometry is prioritized separately, never used to trim copy.
-    geometry:v.geometry.elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav)$/.test(e.tag)||e.style['background-image']!=='none').slice(0,450).map(e=>JSON.parse(remap(JSON.stringify(e)))),
-  }))};
+  const desktopText=page.views[0]?.geometry.text??'';
+  const mediaQueries=[...new Set(page.views.flatMap(v=>v.geometry.mediaQueries))];
+  return {route:page.route,title:page.title,file:routeFile(page.route),fullVisibleText:desktopText,mediaQueries,
+    views:page.views.map((v,index)=>({
+      viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,
+      ...(index>0&&v.geometry.text!==desktopText?{visibleTextOverride:v.geometry.text}:{}),
+      interactions:(v.interactions??[]).map(state=>({id:state.id,trigger:state.trigger,visibleText:state.geometry.text,pageHeight:state.geometry.height,
+        geometry:state.geometry.elements.filter(e=>e.text||e.src||e.svg||e.attributes?.['aria-expanded']||e.attributes?.['aria-selected']||/^(nav|dialog|details)$/.test(e.tag)).slice(0,Math.min(120,geometryLimit)).map(e=>JSON.parse(remap(JSON.stringify(e))))})),
+      geometry:v.geometry.elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav)$/.test(e.tag)||e.style['background-image']!=='none').slice(0,geometryLimit).map(e=>JSON.parse(remap(JSON.stringify(e)))),
+    }))};
+}
+function relevantFiles(files:FileChange[],page:EvidencePage):FileChange[]{
+  const pageFile=routeFile(page.route);
+  return files.filter(f=>f.path===pageFile||f.path==='src/site.css'||f.path.startsWith('src/components/')||f.path.startsWith('src/styles/'));
+}
+function relevantAssets(evidence:Evidence,page:EvidencePage){
+  const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),interactions:(v.interactions??[]).map(i=>i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})))})));
+  return evidence.assets.filter(a=>haystack.includes(a.original)).map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath}));
 }
 function prompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string):string{
-  const text=JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+  const build=(limit:number)=>JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
-    fonts:evidence.fontFaces,assets:evidence.assets.map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath})),
-    reference:pageContext(evidence,page),currentFiles:files,warnings:evidence.warnings,unresolvedIntegrations:evidence.blockers,integrationInventory:evidence.integrations.filter(i=>i.route===page.route)});
-  if(text.length>390000)throw new Error('Page evidence exceeds the context budget; split this source into smaller pages');return text;
+    fonts:evidence.fontFaces,assets:relevantAssets(evidence,page),
+    reference:pageContext(evidence,page,limit),currentFiles:relevantFiles(files,page),warnings:evidence.warnings,unresolvedIntegrations:evidence.blockers,integrationInventory:evidence.integrations.filter(i=>i.route===page.route)});
+  let text=build(360);
+  if(text.length>390000)text=build(220);
+  if(text.length>390000)text=build(120);
+  if(text.length>390000)throw new Error('Page evidence still exceeds the context budget after safe compaction; split this source into smaller page routes');
+  return text;
 }
 /** One browser-evidence contract, one shared React workspace, one measured repair loop. */
 export async function runReconstruction(options:AgentOptions):Promise<ReconstructionResult>{

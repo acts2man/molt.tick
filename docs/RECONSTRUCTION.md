@@ -154,3 +154,7 @@ a deterministic model double, and checks all six page/device combinations.
 These tests do not call paid models and do not establish quality on arbitrary
 client sites. Live provider generation and the deployed worker still need a
 separate acceptance run with authorized credentials and deployment access.
+
+## Large-page handling
+
+The default safe capture ceiling is 26,000 CSS pixels per page (configurable only within a bounded 12,000–27,000 range). Model evidence keeps the complete visible copy once, deduplicates repeated responsive metadata, sends only page-referenced assets, and adaptively compacts high-value geometry before refusing an oversized request. Molt fails closed rather than silently dropping source copy or accepting an unmeasured page.
