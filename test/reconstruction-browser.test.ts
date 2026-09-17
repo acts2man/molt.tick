@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { capture } from '../src/reconstruct/capture.js';
 import { compare, referenceImages } from '../src/reconstruct/images.js';
 import { runReconstruction } from '../src/reconstruct/agent.js';
+import { runPreflight } from '../src/reconstruct/preflight.js';
 import type { Model } from '../src/reconstruct/types.js';
 
 const CSS=`*{box-sizing:border-box}body{margin:0;line-height:1.5;font-family:Arial,sans-serif;background:#101114;color:#efeee8}header{height:80px;padding:24px 6%;display:flex;gap:24px;align-items:center;border-bottom:1px solid #393939}a{color:inherit;text-decoration:none}main{padding:64px 6%;max-width:1000px}h1{font-size:48px;line-height:1.1;font-weight:700;margin:0 0 24px}p{font-size:18px;line-height:1.6;margin:0 0 24px}.accent{color:#dbad6b}footer{padding:24px 6%;border-top:1px solid #393939}details{margin-top:28px;border-top:1px solid #393939;padding-top:18px}summary{cursor:pointer;font-weight:700}details p{margin:14px 0 0}img{display:block;width:36px;height:36px}@media(max-width:600px){header{height:72px;padding:18px 6%}main{padding:40px 6%}h1{font-size:34px}}`;
@@ -40,6 +41,15 @@ test('capture accepts a long landing page beyond the former 18000px ceiling with
   assert.equal(evidence.pages.length,1);assert.equal(evidence.pages[0].views.length,1);
   assert.ok(evidence.pages[0].views[0].geometry.height>18000);
   const bytes=(await readFile(evidence.pages[0].views[0].screenshot)).length;assert.ok(bytes>0);
+}));
+test('preflight scopes a saved site without invoking a model',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const report=await runPreflight({bundleDir:join(dir,'bundle'),workDir:join(dir,'preflight-runs'),maxRepairs:2,signal:AbortSignal.timeout(60000)});
+  assert.equal(report.discoveredPages,2);
+  assert.equal(report.pages.length,2);
+  assert.ok(report.firstPassCredits>=30);
+  assert.equal(report.suggestedReserveCredits,report.firstPassCredits);
+  assert.equal(report.binding,false);
+  assert.match((await readFile(report.reportPath,'utf8')),/"binding": false/);
 }));
 test('full agent builds real React, detects a deliberate mismatch, repairs it and verifies every viewport',{skip:process.env.MOLT_RUN_FULL_AGENT_TESTS!=='1'},()=>fixture(async dir=>{
   let generation=0,repair=0;
