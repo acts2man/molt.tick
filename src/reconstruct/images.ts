@@ -42,6 +42,12 @@ export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
     result.push(input(`${v.viewport} SOURCE complete overview`,overview(source)));
     result.push(input(`${v.viewport} SOURCE detail y=${y}`,crop(source,y,1100)));
     if(v.candidate){const target=await loadPng(v.candidate);result.push(input(`${v.viewport} CANDIDATE complete overview`,overview(target)));result.push(input(`${v.viewport} CANDIDATE detail y=${y}`,crop(target,y,1100)));}
+    const failed=(v.interactions??[]).find(state=>!state.pass);
+    if(failed){
+      const opened=await loadPng(failed.source);
+      result.push(input(`${v.viewport} SOURCE INTERACTION ${failed.trigger.kind} "${failed.trigger.name}"`,overview(opened)));
+      if(failed.candidate){const candidate=await loadPng(failed.candidate);result.push(input(`${v.viewport} CANDIDATE INTERACTION ${failed.trigger.kind} "${failed.trigger.name}"`,overview(candidate)));}
+    }
   }return result;
 }
 export async function compare(sourcePath:string,candidatePath:string,diffPath:string):Promise<{score:number;worstBand:number;worstY:number}>{
