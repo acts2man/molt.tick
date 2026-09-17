@@ -39,7 +39,7 @@ export interface Job {
   id: string; owner: string; kind: 'preflight' | 'reconstruction'; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
-  report?: any; preflight?: any; usage?: any; error?: string; sourcePreflightId?: string;
+  report?: any; preflight?: any; usage?: any; error?: string; sourcePreflightId?: string; reconstructionId?: string;
 }
 export function newJob(input: any, owner: string, kind:'preflight'|'reconstruction'='reconstruction'): Job {
   const id = uuid(input.id), source = sourceUrl(String(input.url || ''));
