@@ -63,7 +63,8 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
     snapshot:()=>snapshot(outDir),restore:(s:FileChange[])=>restore(outDir,s),digest,
     evaluate:async(round:number)=>{await progress(`Building and comparing every page/device (round ${round})`);return evaluate(outDir,evidence,join(run,`attempt-${round}`),signal);},
     propose:async(best,history,round)=>{
-      const worst=[...best.views].filter(v=>!v.pass).sort((a,b)=>(a.worstBand??-1)-(b.worstBand??-1))[0];
+      const rank=(v:typeof best.views[number])=>Math.min(v.worstBand??101,...(v.interactions??[]).filter(i=>!i.pass).map(i=>i.worstBand??0));
+      const worst=[...best.views].filter(v=>!v.pass).sort((a,b)=>rank(a)-rank(b))[0];
       const page=evidence.pages.find(p=>p.route===worst?.route)??evidence.pages[0];
       await progress(`Repairing ${page.route}; keeping passing pages and viewports intact`);
       const checks=best.views.filter(v=>v.route===page.route);
