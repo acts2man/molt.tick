@@ -1,0 +1,23 @@
+name: Studio public endpoint diagnostics
+on:
+  push:
+    branches: [feature/visual-reconstruction-engine]
+    paths: [.github/workflows/studio-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read public application endpoints without credentials
+        run: |
+          node --input-type=module <<'JS'
+          for(const path of ['/', '/connections', '/api/molt/session', '/api/molt/jobs']) {
+            try {
+              const r=await fetch('https://moltick.netlify.app'+path,{signal:AbortSignal.timeout(20000)});
+              const text=await r.text();
+              console.log(JSON.stringify({path,status:r.status,type:r.headers.get('content-type'),body:text.slice(0,2500)}));
+            } catch(e) {console.log(JSON.stringify({path,error:e.message}));}
+          }
+          JS
