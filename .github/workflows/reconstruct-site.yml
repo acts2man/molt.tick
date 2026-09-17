@@ -41,6 +41,7 @@ jobs:
           MOLT_STUDIO_ORIGIN: https://moltick.netlify.app
           MOLT_MODEL_PROVIDER: ${{ secrets.MOLT_MODEL_PROVIDER || 'openai' }}
           MOLT_AI_MODEL: ${{ secrets.MOLT_AI_MODEL }}
+          MOLT_REASONING_EFFORT: high
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
