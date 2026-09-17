@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type { Page } from 'playwright-core';
 import { browser, restrictNetwork, serve } from './runtime.js';
 import { assertPublicUrl, inside, publicUrl, routePath, validateViewports } from './policy.js';
+import { detectIntegrations } from './integrations.js';
 import { VIEWPORTS, type Evidence, type Geometry, type InteractionTrigger, type Viewport } from './types.js';
 
 export interface CaptureOptions {
@@ -48,9 +49,9 @@ const GEOMETRY = `(() => {
  const fontFaces=[],mediaQueries=[];
  const rules=(list)=>{for(const r of Array.from(list||[])){if(r.type===5)fontFaces.push(r.cssText);else if(r.type===4)mediaQueries.push(r.conditionText);if(r.cssRules)rules(r.cssRules);}};
  for(const s of Array.from(document.styleSheets)){try{rules(s.cssRules);}catch{}}
- return {text:document.body.innerText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
+ const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n return {text:document.body.innerText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
  brokenImages:Array.from(document.images).filter(i=>{const b=i.getBoundingClientRect(),s=getComputedStyle(i);return b.width>0&&b.height>0&&b.right>0&&b.left<innerWidth&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&i.naturalWidth===0;}).length,
- elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),truncated};
+ elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),platformHints:Array.from(new Set(platformHints)),truncated};
 })()`;
 export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
@@ -116,7 +117,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
   const maxPages = options.maxPages ?? 12;
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50) throw new Error('maxPages must be 1..50');
   await mkdir(join(options.directory,'assets'),{recursive:true});
-  const evidence: Evidence = { site:'',directory:options.directory,pages:[],assets:[],fontFaces:[],warnings:[],blockers:[] };
+  const evidence: Evidence = { site:'',directory:options.directory,pages:[],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[] };
   const assetMap = new Map<string,Evidence['assets'][number]>(), faces = new Set<string>();
   let totalBytes=0;
   const save = async (url:string,body:Buffer,mime:string) => {
@@ -231,7 +232,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       if(urlsIn(resolved).some(u=>!u.startsWith('/assets/'))){evidence.warnings.push('A source font could not be localized; fallback may differ.');continue;}
       evidence.fontFaces.push(resolved);
     }
-    evidence.warnings=[...new Set(evidence.warnings)];evidence.blockers=[...new Set(evidence.blockers)];
+    evidence.warnings=[...new Set(evidence.warnings)];evidence.blockers=[...new Set(evidence.blockers)];evidence.integrations=detectIntegrations(evidence);
     await writeFile(join(options.directory,'evidence.json'),JSON.stringify(evidence,null,2));
     return evidence;
   }finally{options.signal.removeEventListener('abort',stop);await engine?.close().catch(()=>{});await local?.close();}
