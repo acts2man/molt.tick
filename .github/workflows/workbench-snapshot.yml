@@ -1,0 +1,29 @@
+name: Product development snapshot
+on:
+  push:
+    branches: [feature/product-experience]
+    paths: [.github/workflows/workbench-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix studio install --no-audit --no-fund
+          mkdir -p development-bundle
+          git archive --format=tar HEAD | gzip > development-bundle/source.tar.gz
+          tar --exclude='*.woff' --exclude='*.woff2' --exclude='*.ttf' --exclude='*.otf' -czf development-bundle/dependencies.tar.gz node_modules studio/node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: molt-product-development
+          path: development-bundle/
+          retention-days: 1
