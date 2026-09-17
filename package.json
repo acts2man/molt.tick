@@ -14,7 +14,8 @@
     "synth": "tsx src/synth/cli.ts",
     "verify": "tsx src/verify/cli.ts",
     "run-pipeline": "tsx src/pipeline/cli.ts",
-    "worker": "tsx src/worker/cli.ts"
+    "worker": "tsx src/worker/cli.ts",
+    "preflight": "tsx src/reconstruct/preflight-cli.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {
