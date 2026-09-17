@@ -11,8 +11,11 @@ Old stage utilities remain for diagnostics; they are not silently substituted.
 
 The model sees native-resolution crops, complete-page overviews, exact visible
 copy, typography/layout measurements, localized assets, existing shared source
-files, and real compiler/browser failures. Model instructions distinguish
-reconstruction from redesign and treat source material as untrusted evidence.
+files, real compiler/browser failures, and bounded interaction states that were
+actually observed in the source. Molt may open safe disclosures, aria-expanded
+controls and inactive tabs; it does not click links, submit forms, or perform
+arbitrary/destructive actions. Model instructions distinguish reconstruction
+from redesign and treat source material as untrusted evidence.
 
 ## Run
 
@@ -94,8 +97,11 @@ Missing generated evidence is never replaced with the original image.
 Acceptance checks production compilation, browser failures, exact normalized
 visible copy/reading order, heading geometry/typography, page height, broken
 images, new overflow, internal route targets, global pixel comparison (95%), and
-worst horizontal-band comparison (85%). These are acceptance criteria, not a
-universal fidelity guarantee. Pixel scores cannot validate interaction behavior.
+worst horizontal-band comparison (85%). When safe source interactions were
+observed, Molt also replays those controls in generated React and compares their
+opened/selected states; a static page match cannot hide a failed menu, disclosure,
+or tab state. These remain bounded acceptance criteria, not a universal fidelity
+guarantee or proof of every possible interaction path.
 
 The repair state machine retains only non-regressing improvements across the
 entire route/device matrix. Repeated patches skip an unnecessary rebuild.
@@ -126,11 +132,15 @@ Chromium sandboxing is enabled by default. `MOLT_NO_SANDBOX=1` is only for a
 separately isolated, disposable environment such as the secret-free CI fixture.
 Do not disable sandboxing merely to make an unisolated production worker run.
 
-Source forms and iframe media remain integration blockers, not fake working
-features. Advanced motion, interaction-state capture/replay, authentication,
-ecommerce, production job leases/persistence and large-site context splitting
-still require dedicated implementation/verification. The premium review UI does
-not imply those integrations are complete.
+Source forms and unsupported iframe media remain integration blockers, not fake
+working features. Capture now also records a structured migration inventory for
+observed forms, common payment/commerce/booking/media/marketing services, and
+source-platform signatures such as WordPress, Elementor, WPBakery and Divi. This
+inventory describes what must be reconnected; it never claims those services
+were migrated. Advanced motion, authenticated/private states, ecommerce data,
+production job leases/persistence and large-site context splitting still require
+dedicated implementation/verification. The premium review UI does not imply
+those integrations are complete.
 
 ## Tests
 

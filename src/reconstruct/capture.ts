@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import type { Page } from 'playwright-core';
 import { browser, restrictNetwork, serve } from './runtime.js';
 import { assertPublicUrl, inside, publicUrl, routePath, validateViewports } from './policy.js';
-import { VIEWPORTS, type Evidence, type Geometry, type Viewport } from './types.js';
+import { detectIntegrations } from './integrations.js';
+import { VIEWPORTS, type Evidence, type Geometry, type InteractionTrigger, type Viewport } from './types.js';
 
 export interface CaptureOptions {
   url?: string; urls?: string[]; bundleDir?: string; directory: string;
@@ -32,13 +33,14 @@ const GEOMETRY = `(() => {
  const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility'];
  const nodes=Array.from(document.querySelectorAll('body *')); const index=new Map(nodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
+ const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
  const elements=[]; let truncated=false;
  for(const el of nodes){
   const tag=el.tagName.toLowerCase(); if(/^(script|style|noscript|link|meta)$/.test(tag)) continue;
   const b=el.getBoundingClientRect(),s=getComputedStyle(el);
   if(!b.width||!b.height||s.display==='none'||s.visibility==='hidden') continue;
   if(elements.length>=1400){truncated=true;break;}
-  const e={key:index.get(el),parent:index.get(el.parentElement),tag,text:/^h[1-6]$/.test(tag)?el.innerText:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(' ').trim(),x:b.x+scrollX,y:b.y+scrollY,width:b.width,height:b.height,style:read(s)};
+  const e={key:index.get(el),parent:index.get(el.parentElement),tag,text:/^h[1-6]$/.test(tag)?el.innerText:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(' ').trim(),x:b.x+scrollX,y:b.y+scrollY,width:b.width,height:b.height,style:read(s),attributes:attrs(el)};
   if(tag==='img') e.src=el.currentSrc||el.src;
   if(tag==='a') e.href=el.href;
   if(tag==='svg') e.svg=el.outerHTML.length<16000?el.outerHTML:undefined;
@@ -48,12 +50,47 @@ const GEOMETRY = `(() => {
  const fontFaces=[],mediaQueries=[];
  const rules=(list)=>{for(const r of Array.from(list||[])){if(r.type===5)fontFaces.push(r.cssText);else if(r.type===4)mediaQueries.push(r.conditionText);if(r.cssRules)rules(r.cssRules);}};
  for(const s of Array.from(document.styleSheets)){try{rules(s.cssRules);}catch{}}
- return {text:document.body.innerText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
+ const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n return {text:document.body.innerText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
  brokenImages:Array.from(document.images).filter(i=>{const b=i.getBoundingClientRect(),s=getComputedStyle(i);return b.width>0&&b.height>0&&b.right>0&&b.left<innerWidth&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&i.naturalWidth===0;}).length,
- elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),truncated};
+ elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),platformHints:Array.from(new Set(platformHints)),truncated};
 })()`;
 export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
+}
+
+/** Observe only bounded, reversible interaction states. Links, submit buttons and arbitrary clicks are excluded. */
+const INTERACTIONS = `(() => {
+ const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
+ const name=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+ const out=[],seen=new Set();
+ const push=(kind,el)=>{const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');if(!n||seen.has(key))return;seen.add(key);out.push({kind,name:n,controls});};
+ for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const s=d.querySelector(':scope > summary');if(s)push('details',s);}
+ for(const el of Array.from(document.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"]'))){
+   if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
+   if(el.getAttribute('role')==='tab')continue; push('button',el);
+ }
+ for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tab',el);
+ return out.slice(0,3);
+})()`;
+export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
+  return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
+}
+export async function activateInteraction(page: Page, trigger: InteractionTrigger): Promise<boolean> {
+  const payload=JSON.stringify(trigger).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+  const script=`(() => {
+    const trigger=${payload};
+    const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
+    const label=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+    let items=[];
+    if(trigger.kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
+    else if(trigger.kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
+    else items=Array.from(document.querySelectorAll('button,[role="button"]')).filter(el=>!el.matches('[type="submit"],[type="reset"]'));
+    const target=items.find(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+    if(!target)return false;
+    target.click();
+    return true;
+  })()`;
+  return await page.evaluate(script) as boolean;
 }
 /** Do not erase transforms, reveal hidden menus, or resize the viewport to page height. */
 export async function settle(page: Page, signal: AbortSignal): Promise<void> {
@@ -84,7 +121,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
   const maxPages = options.maxPages ?? 12;
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50) throw new Error('maxPages must be 1..50');
   await mkdir(join(options.directory,'assets'),{recursive:true});
-  const evidence: Evidence = { site:'',directory:options.directory,pages:[],assets:[],fontFaces:[],warnings:[],blockers:[] };
+  const evidence: Evidence = { site:'',directory:options.directory,pages:[],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[] };
   const assetMap = new Map<string,Evidence['assets'][number]>(), faces = new Set<string>();
   let totalBytes=0;
   const save = async (url:string,body:Buffer,mime:string) => {
@@ -165,8 +202,27 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           if(g.brokenImages)evidence.blockers.push(`${target.route} ${viewport.name}: ${g.brokenImages} source images did not load.`);
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
-          item.title=g.title;item.views.push({viewport,screenshot,geometry:g});
-          await writeFile(join(options.directory,slug,`${viewport.name}.json`),JSON.stringify(g,null,2));
+          const interactions:NonNullable<Evidence['pages'][number]['views'][number]['interactions']>=[];
+          const triggers=await discoverInteractions(page);
+          for(let index=0;index<triggers.length;index++){
+            options.signal.throwIfAborted();
+            const trigger=triggers[index],id=`${trigger.kind}-${createHash('sha256').update(JSON.stringify(trigger)).digest('hex').slice(0,8)}`;
+            if(!await activateInteraction(page,trigger)){evidence.warnings.push(`${target.route} ${viewport.name}: could not replay source interaction "${trigger.name}".`);continue;}
+            await page.waitForTimeout(250);
+            await page.evaluate(`(() => { for(const a of document.getAnimations()){try{if(a.effect.getComputedTiming().iterations!==Infinity)a.finish();}catch{}} })()`);
+            const stateScreenshot=join(options.directory,slug,`${viewport.name}-${id}.png`);
+            await page.screenshot({path:stateScreenshot,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
+            const stateGeometry=await geometry(page);
+            interactions.push({id,trigger,screenshot:stateScreenshot,geometry:stateGeometry});
+            await writeFile(join(options.directory,slug,`${viewport.name}-${id}.json`),JSON.stringify(stateGeometry,null,2));
+            if(index<triggers.length-1){
+              const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});
+              if(!reset?.ok()){evidence.warnings.push(`${target.route} ${viewport.name}: interaction-state reset returned HTTP ${reset?.status()}.`);break;}
+              await settle(page,options.signal);
+            }
+          }
+          item.title=g.title;item.views.push({viewport,screenshot,geometry:g,interactions});
+          await writeFile(join(options.directory,slug,`${viewport.name}.json`),JSON.stringify({...g,interactions:interactions.map(i=>({id:i.id,trigger:i.trigger,screenshot:i.screenshot}))},null,2));
           await Promise.all(pending);
           if(assetErrors.length)evidence.blockers.push(`${target.route}: asset capture errors: ${assetErrors.slice(0,3).join('; ')}`);
         }finally{await ctx.close();}
@@ -180,7 +236,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       if(urlsIn(resolved).some(u=>!u.startsWith('/assets/'))){evidence.warnings.push('A source font could not be localized; fallback may differ.');continue;}
       evidence.fontFaces.push(resolved);
     }
-    evidence.warnings=[...new Set(evidence.warnings)];evidence.blockers=[...new Set(evidence.blockers)];
+    evidence.warnings=[...new Set(evidence.warnings)];evidence.blockers=[...new Set(evidence.blockers)];evidence.integrations=detectIntegrations(evidence);
     await writeFile(join(options.directory,'evidence.json'),JSON.stringify(evidence,null,2));
     return evidence;
   }finally{options.signal.removeEventListener('abort',stop);await engine?.close().catch(()=>{});await local?.close();}

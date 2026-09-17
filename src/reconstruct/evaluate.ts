@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { browser, build, restrictNetwork, serve } from './runtime.js';
-import { geometry, settle } from './capture.js';
+import { activateInteraction, geometry, settle } from './capture.js';
 import { compare } from './images.js';
 import { routeFile } from './policy.js';
 import type { Evidence, Evaluation, ViewCheck, Geometry } from './types.js';
@@ -65,7 +65,33 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         const known=new Set(evidence.pages.map(p=>p.route));
         for(const link of generated.links){const url=new URL(link);if(url.origin!==host.origin)continue;const route=url.pathname.replace(/\/+$/,'')||'/';if(!known.has(route)&&!url.pathname.startsWith('/assets/'))check.issues.push(`Unresolved internal link: ${route}`);}
         const metrics=await compare(check.source,check.candidate,check.diff);Object.assign(check,metrics);
-        check.pass=check.issues.length===0&&metrics.score>=threshold&&metrics.worstBand>=bandThreshold;
+        check.interactions=[];
+        for(let stateIndex=0;stateIndex<(reference.interactions??[]).length;stateIndex++){
+          const state=reference.interactions![stateIndex];
+          if(stateIndex>0){
+            const reset=await page.goto(host.origin+pageRef.route,{waitUntil:'load',timeout:30000});
+            if(!reset?.ok()){check.issues.push(`Interaction reset failed before "${state.trigger.name}"`);break;}
+            await settle(page,signal);
+          }
+          const stateCheck={id:state.id,trigger:state.trigger,score:null,worstBand:null,pass:false,issues:[],source:state.screenshot} as NonNullable<ViewCheck['interactions']>[number];
+          if(!await activateInteraction(page,state.trigger)){
+            stateCheck.issues.push(`Generated page is missing interactive control: ${state.trigger.name}`);
+          }else{
+            await page.waitForTimeout(250);
+            await page.evaluate(`(() => { for(const a of document.getAnimations()){try{if(a.effect.getComputedTiming().iterations!==Infinity)a.finish();}catch{}} })()`);
+            stateCheck.candidate=join(directory,`${stem}-${state.id}.png`);
+            stateCheck.diff=join(directory,`${stem}-${state.id}.diff.png`);
+            await page.screenshot({path:stateCheck.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
+            const stateGenerated=await geometry(page);
+            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated));
+            const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
+            stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;
+            await writeFile(join(directory,`${stem}-${state.id}.json`),JSON.stringify({source:state.geometry,generated:stateGenerated,check:stateCheck},null,2));
+          }
+          if(!stateCheck.pass)check.issues.push(`Interaction "${state.trigger.name}" does not match its observed source state`);
+          check.interactions.push(stateCheck);
+        }
+        check.pass=check.issues.length===0&&metrics.score>=threshold&&metrics.worstBand>=bandThreshold&&check.interactions.every(i=>i.pass);
         await writeFile(join(directory,`${stem}.json`),JSON.stringify({source:reference.geometry,generated,check},null,2));
       }catch(error){check.issues.push((error as Error).message);check.pass=false;}
       finally{await ctx.close().catch(()=>{});}
