@@ -8,6 +8,7 @@
     "crawl": "tsx src/crawl/cli.ts",
     "normalize": "tsx src/normalize/cli.ts",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "plan": "tsx src/plan/cli.ts",
     "synth": "tsx src/synth/cli.ts",
     "verify": "tsx src/verify/cli.ts",
