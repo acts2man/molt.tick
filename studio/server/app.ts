@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { ACTIVE, BRANCH, HttpError, Job, OWNER, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
-import { assertMutation, cookie, runnerIdentity, seal, sessionFor } from './security.ts';
+import { assertMutation, cookie, runnerIdentity } from './security.ts';
+import { createSession, readSession, revokeSession } from './sessions.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
 
 export interface Store {
@@ -88,19 +89,24 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       throw new HttpError(404,'Runner route not found.');
     }
-    const session=sessionFor(req,env.secret);
-    if(method==='GET' && path[0]==='session')return json({connected:!!session,login:session?.login??null,serverReady:env.secret.length>=40,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
+    const session=await readSession(req,store,env.secret);
+    if(method==='GET' && path[0]==='session'){
+      // Read the real automatically provisioned backend before reporting readiness.
+      await store.get('system/studio-health',{type:'json'});
+      return json({connected:!!session,login:session?.login??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
+    }
     if(!['GET','HEAD'].includes(method))assertMutation(req);
     if(method==='POST' && path[0]==='connect') {
-      if(env.secret.length<40)throw new HttpError(503,'Session encryption is not configured.');
       const input=await body(req),token=String(input.token??'').trim();
       if(token.length<20||token.length>255||/\s/.test(token))throw new HttpError(400,'Enter a valid GitHub fine-grained access token.');
       const user=await gh(token,'/user');if(String(user.login).toLowerCase()!==OWNER)throw new HttpError(403,`This workspace belongs to ${OWNER}. Use that GitHub account.`);
       const repo=await gh(token,`/repos/${REPOSITORY}`);if(!repo.permissions?.push)throw new HttpError(403,'This token must have access to the Molt repository.');
       await gh(token,`/repos/${REPOSITORY}/actions/workflows?per_page=1`);
-      return json({connected:true,login:user.login},200,{'set-cookie':cookie(seal({token,login:OWNER,expires:Date.now()+28800000},env.secret))});
+      const identifier=await createSession(store,token,OWNER);
+      await revokeSession(req,store);
+      return json({connected:true,login:user.login},200,{'set-cookie':cookie(identifier)});
     }
-    if(method==='POST' && path[0]==='disconnect')return json({connected:false},200,{'set-cookie':cookie('',true)});
+    if(method==='POST' && path[0]==='disconnect'){await revokeSession(req,store);return json({connected:false},200,{'set-cookie':cookie('',true)});}
     if(!session)throw new HttpError(401,'Connect your GitHub workspace to continue.');
     const token=session.token,owner=session.login;
     if(path[0]==='settings') {
