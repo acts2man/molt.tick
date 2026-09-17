@@ -15,7 +15,7 @@ export interface ElementEvidence {
 export interface Geometry {
   text: string; title: string; height: number; overflow: boolean; brokenImages: number;
   elements: ElementEvidence[]; links: string[]; embeds: string[]; forms: number;
-  fontFaces: string[]; mediaQueries: string[]; truncated: boolean;
+  fontFaces: string[]; mediaQueries: string[]; platformHints?: string[]; truncated: boolean;
 }
 export type InteractionKind = 'button' | 'tab' | 'details';
 export interface InteractionTrigger {
@@ -41,7 +41,7 @@ export interface EvidencePage { route: string; url: string; title: string; views
 export interface Evidence {
   site: string; directory: string; pages: EvidencePage[];
   assets: Array<{ original: string; file: string; publicPath: string }>;
-  fontFaces: string[]; warnings: string[]; blockers: string[];
+  fontFaces: string[]; warnings: string[]; blockers: string[]; integrations: import('./integrations.js').IntegrationFinding[];
 }
 export interface FileChange { path: string; content: string }
 export interface ModelReply { files: FileChange[]; summary: string }
@@ -76,6 +76,6 @@ export interface ReconstructionResult {
   complexity?: ReturnType<typeof import('./complexity.js').assessComplexity>;
   status: 'review' | 'needs-work'; outDir: string; reportPath: string;
   evaluation: Evaluation; attempts: Attempt[]; warnings: string[]; blockers: string[];
-  usage: Model['usage']; reason?: string;
+  usage: Model['usage']; integrations: import('./integrations.js').IntegrationFinding[]; reason?: string;
   source: {site:string;assetCount:number;pages:Array<{route:string;title:string;sections:number;elements:number}>};
 }
