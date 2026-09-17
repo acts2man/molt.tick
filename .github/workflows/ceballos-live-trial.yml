@@ -1,0 +1,125 @@
+name: Ceballos live reconstruction
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/visual-reconstruction-engine]
+    paths: [.github/workflows/ceballos-live-trial.yml]
+permissions:
+  contents: read
+concurrency:
+  group: ceballos-live-reconstruction
+  cancel-in-progress: false
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check configured provider without revealing credentials
+        id: provider
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MOLT_MODEL_PROVIDER: ${{ vars.MOLT_MODEL_PROVIDER || secrets.MOLT_MODEL_PROVIDER }}
+          MOLT_AI_MODEL: ${{ vars.MOLT_AI_MODEL || secrets.MOLT_AI_MODEL }}
+        run: |
+          mkdir -p trial
+          node --input-type=module <<'NODE'
+          import { writeFileSync, appendFileSync } from 'node:fs';
+          const provider = process.env.MOLT_MODEL_PROVIDER?.trim() || (process.env.OPENAI_API_KEY ? 'openai' : process.env.ANTHROPIC_API_KEY ? 'anthropic' : '');
+          const model = process.env.MOLT_AI_MODEL?.trim() || '';
+          const keyPresent = provider === 'openai' ? Boolean(process.env.OPENAI_API_KEY?.trim()) : provider === 'anthropic' ? Boolean(process.env.ANTHROPIC_API_KEY?.trim()) : false;
+          const result = { providerConfigured: ['openai', 'anthropic'].includes(provider), modelConfigured: Boolean(model), keyPresent, ready: Boolean(keyPresent && model) };
+          writeFileSync('trial/provider-preflight.json', JSON.stringify(result, null, 2));
+          appendFileSync(process.env.GITHUB_OUTPUT, `ready=${result.ready}\nprovider=${provider}\n`);
+          console.log('Provider preflight (presence only):', JSON.stringify(result));
+          NODE
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx --no-install playwright-core install --with-deps chromium
+      - name: Capture the actual source with Molt (no model credentials in this step)
+        id: capture
+        env:
+          MOLT_NO_SANDBOX: '1'
+        run: |
+          cat > .ceballos-capture.ts <<'TS'
+          import { mkdir, writeFile, appendFile } from 'node:fs/promises';
+          import { lookup } from 'node:dns/promises';
+          import { capture } from './src/reconstruct/capture.js';
+          const input = 'https://ceballostreeservices.com';
+          const status: Record<string, unknown> = { input, startedAt: new Date().toISOString(), stage: 'source-capture', ok: false };
+          await mkdir('trial/source', { recursive: true });
+          try {
+            status.addresses = await lookup(new URL(input).hostname, { all: true });
+            console.log('Source DNS resolved');
+            const evidence = await capture({ url: input, directory: 'trial/source', maxPages: 12, signal: AbortSignal.timeout(600000) });
+            status.ok = true;
+            status.pages = evidence.pages.map(p => ({ route: p.route, title: p.title, viewports: p.views.map(v => ({ name: v.viewport.name, width: v.viewport.width, height: v.viewport.height, screenshot: v.screenshot, pageHeight: v.geometry.height, brokenImages: v.geometry.brokenImages })) }));
+            status.assets = evidence.assets.length;
+            status.warnings = evidence.warnings;
+            status.blockers = evidence.blockers;
+          } catch (e) {
+            status.error = e instanceof Error ? e.message : String(e);
+            console.error('Molt source capture did not complete:', status.error);
+          }
+          status.finishedAt = new Date().toISOString();
+          await writeFile('trial/source-status.json', JSON.stringify(status, null, 2));
+          await appendFile(process.env.GITHUB_OUTPUT!, `ok=${status.ok}\n`);
+          console.log('SOURCE_RESULT', JSON.stringify(status));
+          TS
+          ./node_modules/.bin/tsx .ceballos-capture.ts
+      - name: Install trusted rendering dependencies
+        if: steps.provider.outputs.ready == 'true' && steps.capture.outputs.ok == 'true'
+        run: npm --prefix render-toolchain install --no-audit --no-fund
+      - name: Enable Chromium sandbox user namespaces in this disposable runner
+        if: steps.provider.outputs.ready == 'true' && steps.capture.outputs.ok == 'true'
+        run: |
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Live model reconstruction, production build, comparison and repair
+        if: steps.provider.outputs.ready == 'true' && steps.capture.outputs.ok == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MOLT_MODEL_PROVIDER: ${{ steps.provider.outputs.provider }}
+          MOLT_AI_MODEL: ${{ vars.MOLT_AI_MODEL || secrets.MOLT_AI_MODEL }}
+          MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
+          MOLT_MAX_MODEL_CALLS: '16'
+          MOLT_AI_MAX_TOKENS: '16000'
+          MOLT_MAX_REPAIRS: '6'
+          MOLT_AGENT_MINUTES: '25'
+        run: npm run reconstruct -- --url https://ceballostreeservices.com --out ./trial/reconstruction
+      - name: Preserve diagnostics and any generated React output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceballos-live-trial
+          path: |
+            trial/
+            !trial/**/node_modules/**
+            !trial/**/*.woff
+            !trial/**/*.woff2
+            !trial/**/*.ttf
+            !trial/**/*.otf
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Report the actual outcome
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const read = p => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
+          const provider = read('trial/provider-preflight.json');
+          const source = read('trial/source-status.json');
+          const notes = ['# Ceballos live Molt trial', '', 'Target: ceballostreeservices.com', '', `Source capture completed: ${source?.ok === true}`, `Provider configuration available to this GitHub runner: ${provider?.ready === true}`, '', 'This is not a simulated model run. Missing credentials or inaccessible source material are blockers, not successful reconstructions. Source captures are evidence, never presented as generated React output.'];
+          if (source?.error) notes.push('', `Source error: ${String(source.error).replace(/[<>]/g, '')}`);
+          if (!provider?.ready) notes.push('', 'Model generation did not run: configure MOLT_AI_MODEL and the selected provider API key securely on the engine runner. No secret values were logged.');
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, notes.join('\n'));
+          if (!source?.ok || !provider?.ready) process.exitCode = 2;
+          NODE
