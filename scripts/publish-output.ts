@@ -37,9 +37,12 @@ export async function reserveOutputRepository(directory:string,owner:string,name
   const repository=`${owner}/${repo}`;
   await run('gh',['repo','create',repository,'--private','--add-readme','--description','React reconstruction reserved by Molt'],directory,{GH_TOKEN:token});
   try{
-    // Prove the *new* repository accepts the exact privileged operations the post-model handoff needs.
-    await run('gh',['secret','set','MOLT_HANDOFF_PREFLIGHT','--repo',repository,'--body','verified'],directory,{GH_TOKEN:token});
-    await run('gh',['secret','delete','MOLT_HANDOFF_PREFLIGHT','--repo',repository],directory,{GH_TOKEN:token});
+    try{await run('gh',['repo','view',repository,'--json','name'],directory,{GH_TOKEN:token});}
+    catch(error){throw new Error('NEW_REPOSITORY_ACCESS: The token created the repository but cannot access it. Edit the fine-grained token and set Repository access to All repositories. '+(error instanceof Error?error.message:String(error)));}
+    try{
+      await run('gh',['secret','set','MOLT_HANDOFF_PREFLIGHT','--repo',repository,'--body','verified'],directory,{GH_TOKEN:token});
+      await run('gh',['secret','delete','MOLT_HANDOFF_PREFLIGHT','--repo',repository],directory,{GH_TOKEN:token});
+    }catch(error){throw new Error('ACTIONS_SECRETS_WRITE: The token cannot write Actions secrets to the new repository. Set Secrets to Read & write. '+(error instanceof Error?error.message:String(error)));}
     const probe=`name: Molt handoff permission probe
 on:
   workflow_dispatch:
@@ -50,9 +53,11 @@ jobs:
     steps:
       - run: echo permission-check
 `;
-    const encoded=Buffer.from(probe,'utf8').toString('base64');
-    const sha=await run('gh',['api',`repos/${repository}/contents/.github/workflows/molt-permission-check.yml`,'--method','PUT','--field','message=Verify Molt workflow permission','--field',`content=${encoded}`,'--jq','.content.sha'],directory,{GH_TOKEN:token});
-    await run('gh',['api',`repos/${repository}/contents/.github/workflows/molt-permission-check.yml`,'--method','DELETE','--field','message=Remove Molt workflow permission probe','--field',`sha=${sha.trim()}`],directory,{GH_TOKEN:token});
+    try{
+      const encoded=Buffer.from(probe,'utf8').toString('base64');
+      const sha=await run('gh',['api',`repos/${repository}/contents/.github/workflows/molt-permission-check.yml`,'--method','PUT','--field','message=Verify Molt workflow permission','--field',`content=${encoded}`,'--jq','.content.sha'],directory,{GH_TOKEN:token});
+      await run('gh',['api',`repos/${repository}/contents/.github/workflows/molt-permission-check.yml`,'--method','DELETE','--field','message=Remove Molt workflow permission probe','--field',`sha=${sha.trim()}`],directory,{GH_TOKEN:token});
+    }catch(error){throw new Error('WORKFLOW_FILE_WRITE: The token cannot write workflow files to the new repository. Set Contents and Workflows to Read & write. '+(error instanceof Error?error.message:String(error)));}
   }catch(error){
     try{await run('gh',['repo','delete',repository,'--yes'],directory,{GH_TOKEN:token});}catch{}
     throw new Error('GitHub delivery preflight failed before model usage: '+(error instanceof Error?error.message:String(error)));
