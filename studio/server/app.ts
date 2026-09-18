@@ -126,8 +126,8 @@ export async function handle(req: Request, services: Services): Promise<Response
     const integration=env.secret.length>=40?await githubIntegration(store,env):null;
     if(method==='GET' && path[0]==='session'){
       await store.get('system/studio-health',{type:'json'});
-      const authorized=!!account&&(!binding||binding.userId===account.id);
-      return json({authenticated:!!account,authorized,claimable:!!account&&!binding,connected:authorized&&!!integration,login:authorized&&integration?integration.record.login:null,email:account?.email??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
+      const authorized=!!account&&!!binding&&binding.userId===account.id,claimable=!!account&&!binding;
+      return json({authenticated:!!account,authorized,claimable,connected:authorized&&!!integration,login:authorized&&integration?integration.record.login:null,email:account?.email??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
     }
     if(!['GET','HEAD'].includes(method))assertMutation(req);
     if(!account)throw new HttpError(401,'Sign in to your Molt account to continue.');
