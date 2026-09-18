@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/reconstruct/**'
       - 'scripts/studio-run.ts'
+      - 'studio/server/netlify.ts'
+      - 'scripts/publish-netlify.ts'
+      - 'scripts/publish-output.ts'
       - 'scripts/studio-finalize.ts'
       - 'scripts/runner-callback.ts'
       - 'scripts/studio-report.ts'
@@ -16,6 +19,9 @@ on:
     paths:
       - 'src/reconstruct/**'
       - 'scripts/studio-run.ts'
+      - 'studio/server/netlify.ts'
+      - 'scripts/publish-netlify.ts'
+      - 'scripts/publish-output.ts'
       - 'scripts/studio-finalize.ts'
       - 'scripts/runner-callback.ts'
       - 'scripts/studio-report.ts'

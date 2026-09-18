@@ -12,7 +12,8 @@ function setup(){
   const calls:any[]=[];
   map.set('auth/owner-binding-v1',{userId:USER,email:'owner@example.test',createdAt:new Date().toISOString()});
   map.set('integrations/owner/github-v1',{ciphertext:sealSecret('github_pat_test_not_real_0123456789',SECRET),login:'acts2man',connectedAt:new Date().toISOString()});
-  const services:Services={store,env:{secret:SECRET,origin:ORIGIN,context:'production'},authenticate:async req=>req.headers.get('authorization')?{id:USER,email:'owner@example.test'}:null,github:async(_t,p,init)=>{calls.push({p,init});if(p==='/user')return{login:'acts2man'};if(p.endsWith('/actions/secrets?per_page=100'))return{secrets:['OPENAI_API_KEY','MOLT_AI_MODEL','MOLT_GITHUB_EXPORT_TOKEN'].map(name=>({name}))};if(p.endsWith('/actions/workflows/reconstruct-site.yml'))return{state:'active'};if(p.includes('dispatches'))return null;if(p.includes('workflows?'))return{workflows:[]};return{permissions:{push:true}};},identifyRunner:async()=>({runId:123}),saveSecrets:async()=>{},checkProvider:async()=>{}};
+  map.set('integrations/owner/netlify-v1',{ciphertext:sealSecret('netlify_test_token_not_real_0123456789',SECRET),teamSlug:'test-team',teamName:'Test Team',connectedAt:new Date().toISOString()});
+  const services:Services={store,env:{secret:SECRET,origin:ORIGIN,context:'production'},authenticate:async req=>req.headers.get('authorization')?{id:USER,email:'owner@example.test'}:null,github:async(_t,p,init)=>{calls.push({p,init});if(p==='/user')return{login:'acts2man'};if(p.endsWith('/actions/secrets?per_page=100'))return{secrets:['OPENAI_API_KEY','MOLT_AI_MODEL','MOLT_GITHUB_EXPORT_TOKEN','MOLT_NETLIFY_AUTH_TOKEN','MOLT_NETLIFY_TEAM_SLUG'].map(name=>({name}))};if(p.endsWith('/actions/workflows/reconstruct-site.yml'))return{state:'active'};if(p.includes('dispatches'))return null;if(p.includes('workflows?'))return{workflows:[]};return{permissions:{push:true}};},identifyRunner:async()=>({runId:123}),saveSecrets:async()=>{},checkProvider:async()=>{},checkNetlify:async()=>({teamSlug:'test-team',teamName:'Test Team'})};
   const session=seal({token:'github_pat_test_not_real_0123456789',login:'acts2man',expires:Date.now()+100000},SECRET);
   const req=(path:string,method='GET',body?:any,authenticated=true)=>new Request(ORIGIN+'/api/molt/'+path,{method,headers:{origin:ORIGIN,'x-molt-request':'1','content-type':'application/json',...(authenticated?{authorization:'Bearer supabase-test-session'}:{})},...(body?{body:JSON.stringify(body)}:{})});
   return{map,services,calls,req};
@@ -53,7 +54,7 @@ test('a different Molt account cannot enter the bound owner workspace',async()=>
  assert.equal((await handle(s.req('jobs'),s.services)).status,403);
 });
 test('anonymous readers cannot inspect private jobs',async()=>{const s=setup();assert.equal((await handle(s.req('jobs','GET',undefined,false),s.services)).status,401);});
-test('no unconfigured model can start a paid job',async()=>{const s=setup();s.services.github=async()=>({secrets:[]});const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);assert.equal(r.status,409);assert.equal(s.map.size,2);});
+test('no unconfigured model can start a paid job',async()=>{const s=setup();s.services.github=async()=>({secrets:[]});const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);assert.equal(r.status,409);assert.equal(s.map.size,3);});
 test('output repository defaults from the source host and rejects unsafe names',()=>{assert.equal(newJob({id:ID,url:'https://www.example.com'},'acts2man').outputRepo,'example-com-react');assert.throws(()=>newJob({id:ID,url:'https://example.com',outputRepo:'../bad'},'acts2man'));});
 test('dispatch calls the actual workflow and a repeated id is not resubmitted',async()=>{const s=setup();for(let i=0;i<2;i++){const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);assert.ok([200,202].includes(r.status));}assert.equal(s.calls.filter(c=>c.p.includes('dispatches')).length,1);assert.equal(s.map.get('jobs/acts2man/'+ID).status,'queued');});
 test('finished reconstructions can be archived restored and filtered from the default list',async()=>{
@@ -80,7 +81,7 @@ test('GitHub connection stores the owner token server-side and as an encrypted A
 test('settings save checks the new model credential and does not persist it in app data',async()=>{const s=setup();let checked=false,saved=false;s.services.checkProvider=async()=>{checked=true;};s.services.saveSecrets=async(_t,v)=>{saved=!!v.OPENAI_API_KEY;};const r=await handle(s.req('settings','POST',{provider:'openai',model:'model-id',apiKey:'private-test-key-0123456789012345'}),s.services);assert.equal(r.status,200);assert.ok(checked&&saved);assert.ok(!JSON.stringify([...s.map.values()]).includes('private-test-key'));assert.ok(!(await r.text()).includes('private-test-key'));});
 test('unverified model credential changes nothing',async()=>{const s=setup();s.services.checkProvider=async()=>{throw new Error('bad key');};let saved=false;s.services.saveSecrets=async()=>{saved=true;};const r=await handle(s.req('settings','POST',{provider:'openai',model:'m',apiKey:'private-test-key-0123456789'}),s.services);assert.equal(r.status,500);assert.equal(saved,false);});
 test('runner cannot change another workflow run',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),runId:999});const r=await handle(s.req('runner/'+ID),s.services);assert.equal(r.status,409);});
-test('runner data is not accepted without identity verification',async()=>{const s=setup();s.services.identifyRunner=async()=>{throw new Error('invalid identity');};const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'fake'}),s.services);assert.equal(r.status,500);assert.equal(s.map.size,2);});
+test('runner data is not accepted without identity verification',async()=>{const s=setup();s.services.identifyRunner=async()=>{throw new Error('invalid identity');};const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'fake'}),s.services);assert.equal(r.status,500);assert.equal(s.map.size,3);});
 test('runner progress updates existing work and preserves the run identity',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'Capturing desktop'}),s.services);assert.equal(r.status,200);const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.runId,123);assert.equal(job.status,'running');assert.equal(job.events.length,1);});
 test('runner uploads an interactive preview and only the owner session can frame it',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
@@ -94,3 +95,20 @@ test('runner uploads an interactive preview and only the owner session can frame
 test('image callback rejects HTML payloads',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/images/image.png','PUT',{html:'<script>alert(1)</script>'}),s.services);assert.equal(r.status,415);});
 
 test('production jobs cannot use the owner development runner',async()=>{const s=setup();const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com'}),s.services);assert.equal(r.status,400);assert.equal(s.calls.filter(c=>c.p.includes('dispatches')).length,0);});
+
+test('paid development tests are blocked when Netlify deployment is not connected',async()=>{
+ const s=setup();s.map.delete('integrations/owner/netlify-v1');
+ const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);
+ assert.equal(r.status,409);assert.match(await r.text(),/Connect Netlify hosting/);
+});
+test('Netlify connection is verified and saved as GitHub Actions secrets without returning the token',async()=>{
+ const s=setup();let saved:any={};s.services.saveSecrets=async(_t,v)=>{saved={...saved,...v};};
+ const r=await handle(s.req('netlify-connect','POST',{token:'netlify_test_token_not_real_0123456789',teamSlug:'test-team'}),s.services);
+ assert.equal(r.status,200);const body=await r.text();assert.ok(!body.includes('netlify_test_token'));
+ assert.equal(saved.MOLT_NETLIFY_TEAM_SLUG,'test-team');assert.ok(saved.MOLT_NETLIFY_AUTH_TOKEN);
+});
+test('runner handoff preserves repository and live Netlify URLs',async()=>{
+ const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
+ await handle(s.req('runner/'+ID+'/events','POST',{message:'handoff',outputRepoUrl:'https://github.com/acts2man/example-com-react',liveSiteUrl:'https://example-com-react.netlify.app',liveSiteAdminUrl:'https://app.netlify.com/sites/example-com-react'}),s.services);
+ const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.outputRepoUrl,'https://github.com/acts2man/example-com-react');assert.equal(job.liveSiteUrl,'https://example-com-react.netlify.app');
+});

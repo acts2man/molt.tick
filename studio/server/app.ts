@@ -4,6 +4,7 @@ import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './secu
 import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
 import { readSession } from './sessions.ts';
+import { checkNetlify } from './netlify.ts';
 
 export interface Store {
   get(key: string, options?: {type: 'json' | 'arrayBuffer'}): Promise<any>;
@@ -15,7 +16,7 @@ export interface Store {
 export interface Environment { secret: string; origin: string; context: string; ownerUserId?: string }
 export interface Services {
   store: Store; env: Environment; github?: typeof github;
-  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; authenticate?: typeof authenticateAccount;
+  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; checkNetlify?: typeof checkNetlify; authenticate?: typeof authenticateAccount;
 }
 const json = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(JSON.stringify(value), { status, headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra} });
 async function bytes(req: Request, limit: number): Promise<Uint8Array> {
@@ -38,11 +39,17 @@ const OWNER_BINDING_KEY='auth/owner-binding-v1';
 const OWNER_ACCOUNT_HASH='abc25c3918e8fbd2c645255d22971d80d137aac320029169dcf8b6cb4982026a';
 const isConfiguredOwner=(account:AccountUser,env:Environment)=>env.ownerUserId===account.id||createHash('sha256').update(account.id).digest('hex')===OWNER_ACCOUNT_HASH;
 const GITHUB_INTEGRATION_KEY='integrations/owner/github-v1';
+const NETLIFY_INTEGRATION_KEY='integrations/owner/netlify-v1';
 type OwnerBinding={userId:string;email?:string;createdAt:string};
 type GithubIntegration={ciphertext:string;login:string;connectedAt:string};
+type NetlifyIntegration={ciphertext:string;teamSlug:string;teamName:string;connectedAt:string};
 async function ownerBinding(store:Store):Promise<OwnerBinding|null>{return await store.get(OWNER_BINDING_KEY,{type:'json'}) as OwnerBinding|null;}
 async function githubIntegration(store:Store,env:Environment):Promise<{token:string;record:GithubIntegration}|null>{
   const record=await store.get(GITHUB_INTEGRATION_KEY,{type:'json'}) as GithubIntegration|null;if(!record)return null;
+  const token=unsealSecret(record.ciphertext,env.secret);if(!token)return null;return {token,record};
+}
+async function netlifyIntegration(store:Store,env:Environment):Promise<{token:string;record:NetlifyIntegration}|null>{
+  const record=await store.get(NETLIFY_INTEGRATION_KEY,{type:'json'}) as NetlifyIntegration|null;if(!record)return null;
   const token=unsealSecret(record.ciphertext,env.secret);if(!token)return null;return {token,record};
 }
 async function requireOwner(store:Store,user:AccountUser):Promise<OwnerBinding>{
@@ -65,6 +72,7 @@ function safeReport(input: any): any {
   const clip = (value: unknown, n = 2000) => String(value ?? '').slice(0,n);
   const list = (value: unknown) => Array.isArray(value) ? value.slice(0,100).map(v => clip(v)) : [];
   return {status:input.status, reason:clip(input.reason), warnings:list(input.warnings), blockers:list(input.blockers),
+    integrations:Array.isArray(input.integrations)?input.integrations.slice(0,60).map((i:any)=>({kind:clip(i.kind,60),provider:clip(i.provider,120),route:clip(i.route,200),evidence:clip(i.evidence,500),action:clip(i.action,700)})):[],
     usage: safeUsage(input.usage),
     complexity:input.complexity?{version:clip(input.complexity.version,60),binding:false,firstPassCredits:Number(input.complexity.firstPassCredits)||0,pages:Array.isArray(input.complexity.pages)?input.complexity.pages.slice(0,12).map((p:any)=>({route:clip(p.route,200),complexity:clip(p.complexity,20),credits:Number(p.credits)||0,reasons:list(p.reasons)})):[]}:null,
     evaluation:{pass:input.evaluation.pass === true,issues:list(input.evaluation.issues),views:input.evaluation.views.slice(0,72).map((v:any)=>({
@@ -74,6 +82,7 @@ function safeReport(input: any): any {
       issues:list(v.issues), sourceImage:/^[a-z0-9-]+\.png$/.test(v.sourceImage??'')?v.sourceImage:null,
       candidateImage:/^[a-z0-9-]+\.png$/.test(v.candidateImage??'')?v.candidateImage:null,
       diffImage:/^[a-z0-9-]+\.png$/.test(v.diffImage??'')?v.diffImage:null,
+      interactions:Array.isArray(v.interactions)?v.interactions.slice(0,8).map((i:any)=>({id:clip(i.id,120),trigger:{kind:clip(i.trigger?.kind,40),name:clip(i.trigger?.name,180)},pass:i.pass===true,score:typeof i.score==='number'&&Number.isFinite(i.score)?i.score:null,worstBand:typeof i.worstBand==='number'&&Number.isFinite(i.worstBand)?i.worstBand:null,issues:list(i.issues),sourceImage:/^[a-z0-9-]+\.png$/.test(i.sourceImage??'')?i.sourceImage:null,candidateImage:/^[a-z0-9-]+\.png$/.test(i.candidateImage??'')?i.candidateImage:null,diffImage:/^[a-z0-9-]+\.png$/.test(i.diffImage??'')?i.diffImage:null})):[],
     }))}, attempts:Array.isArray(input.attempts)?input.attempts.slice(0,20).map((a:any)=>({round:a.round,accepted:a.accepted===true,summary:clip(a.summary)})):[]};
 }
 export async function handle(req: Request, services: Services): Promise<Response> {
@@ -117,9 +126,12 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(event.usage)job.usage=safeUsage(event.usage);
         if(typeof event.outputRepoUrl==='string'&&/^https:\/\/github\.com\/acts2man\/[a-z0-9._-]+$/i.test(event.outputRepoUrl))job.outputRepoUrl=event.outputRepoUrl;
         if(typeof event.outputRepoError==='string')job.outputRepoError=String(event.outputRepoError).slice(0,1000);
+        if(typeof event.liveSiteUrl==='string'&&/^https:\/\/[a-z0-9.-]+\.netlify\.app\/?$/i.test(event.liveSiteUrl))job.liveSiteUrl=event.liveSiteUrl;
+        if(typeof event.liveSiteAdminUrl==='string'&&/^https:\/\/app\.netlify\.com\/(?:sites|projects)\/[a-z0-9-]+\/?$/i.test(event.liveSiteAdminUrl))job.liveSiteAdminUrl=event.liveSiteAdminUrl;
+        if(typeof event.deploymentError==='string')job.deploymentError=String(event.deploymentError).slice(0,1000);
         if(event.previewReady===true)job.previewReady=true;
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
-        if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
+        if(event.report){job.report=safeReport(event.report);job.status=(event.deploymentError||event.outputRepoError)?'needs-work':job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);return json({saved:true});
       }
       throw new HttpError(404,'Runner route not found.');
@@ -131,6 +143,7 @@ export async function handle(req: Request, services: Services): Promise<Response
       await store.setJSON(OWNER_BINDING_KEY,binding);
     }
     let integration=env.secret.length>=40?await githubIntegration(store,env):null;
+    let hostingIntegration=env.secret.length>=40?await netlifyIntegration(store,env):null;
     if(account&&binding?.userId===account.id&&!integration&&env.secret.length>=40){
       const legacy=await readSession(req,store,env.secret);
       if(legacy){
@@ -147,7 +160,7 @@ export async function handle(req: Request, services: Services): Promise<Response
     if(method==='GET' && path[0]==='session'){
       await store.get('system/studio-health',{type:'json'});
       const authorized=!!account&&!!binding&&binding.userId===account.id,claimable=!!account&&!binding;
-      return json({authenticated:!!account,authorized,claimable,connected:authorized&&!!integration,login:authorized&&integration?integration.record.login:null,email:account?.email??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
+      return json({authenticated:!!account,authorized,claimable,connected:authorized&&!!integration,hostingConnected:authorized&&!!hostingIntegration,hostingTeam:authorized&&hostingIntegration?hostingIntegration.record.teamSlug:null,login:authorized&&integration?integration.record.login:null,email:account?.email??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
     }
     if(!['GET','HEAD'].includes(method))assertMutation(req);
     if(!account)throw new HttpError(401,'Sign in to your Molt account to continue.');
@@ -168,6 +181,16 @@ export async function handle(req: Request, services: Services): Promise<Response
     const owner=OWNER,token=integration?.token??null;
     const requiredGithub=()=>{if(!token)throw new HttpError(409,'Connect the GitHub workspace integration once. After that it is available on every device you sign into.');return token;};
     if(method==='POST' && path[0]==='disconnect'){await store.delete(GITHUB_INTEGRATION_KEY);return json({connected:false});}
+    if(method==='POST' && path[0]==='netlify-connect'){
+      if(env.secret.length<40)throw new HttpError(503,'Secure workspace credential storage is not configured on this deployment.');
+      const input=await body(req),hostingToken=String(input.token??'').trim(),teamSlug=String(input.teamSlug??'').trim();
+      const checked=await (services.checkNetlify??checkNetlify)(hostingToken,teamSlug);
+      await (services.saveSecrets??saveSecrets)(requiredGithub(),{MOLT_NETLIFY_AUTH_TOKEN:hostingToken,MOLT_NETLIFY_TEAM_SLUG:checked.teamSlug});
+      const record:NetlifyIntegration={ciphertext:sealSecret(hostingToken,env.secret),teamSlug:checked.teamSlug,teamName:checked.teamName,connectedAt:new Date().toISOString()};
+      await store.setJSON(NETLIFY_INTEGRATION_KEY,record);hostingIntegration={token:hostingToken,record};
+      return json({connected:true,teamSlug:checked.teamSlug,teamName:checked.teamName});
+    }
+    if(method==='POST' && path[0]==='netlify-disconnect'){await store.delete(NETLIFY_INTEGRATION_KEY);return json({connected:false});}
     if(method==='GET' && path[0]==='preview'){
       const id=uuid(path[1]??''),job=await store.get(dataKey(owner,id),{type:'json'}) as Job|null;
       if(!job||!job.previewReady)throw new HttpError(404,'Interactive preview is not available for this reconstruction.');
@@ -186,7 +209,8 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(token){try{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);names=secrets.secrets.map((s:any)=>s.name);}catch(e){permissionsError=(e as Error).message;}try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}}else permissionsError='GitHub workspace integration is not connected.'
         const provider=settings?.provider??(names.includes('OPENAI_API_KEY')?'openai':names.includes('ANTHROPIC_API_KEY')?'anthropic':'openai');
         const keyPresent=names.includes(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY');
-        const exportReady=names.includes('MOLT_GITHUB_EXPORT_TOKEN');return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,exportReady,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow&&exportReady,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
+        const exportReady=names.includes('MOLT_GITHUB_EXPORT_TOKEN'),hostingReady=names.includes('MOLT_NETLIFY_AUTH_TOKEN')&&names.includes('MOLT_NETLIFY_TEAM_SLUG')&&!!hostingIntegration;
+        return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,exportReady,hostingReady,hostingTeam:hostingIntegration?.record.teamSlug??null,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow&&exportReady&&hostingReady,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
       }
       if(method==='POST') {
         const input=await body(req),provider=input.provider,model=String(input.model??'').trim(),apiKey=String(input.apiKey??'').trim();
@@ -211,7 +235,9 @@ export async function handle(req: Request, services: Services): Promise<Response
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
         const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
-        if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before starting a reconstruction.');if(!names.includes('MOLT_GITHUB_EXPORT_TOKEN'))throw new HttpError(409,'Reconnect the GitHub owner workspace once so Molt can create the output React repository.');
+        if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before starting a reconstruction.');
+        if(!names.includes('MOLT_GITHUB_EXPORT_TOKEN'))throw new HttpError(409,'Reconnect the GitHub owner workspace once so Molt can create the output React repository.');
+        if(!hostingIntegration||!names.includes('MOLT_NETLIFY_AUTH_TOKEN')||!names.includes('MOLT_NETLIFY_TEAM_SLUG'))throw new HttpError(409,'Connect Netlify hosting before starting a paid reconstruction. Molt will not spend model usage without a verified deployment destination.');
         if(job.bundleId){const m=await store.get(`${bundleKey(owner,job.bundleId)}/manifest`,{type:'json'});if(!m?.ready)throw new HttpError(409,'Your page bundle has not finished uploading.');}
         await store.setJSON(key,job);
         try {

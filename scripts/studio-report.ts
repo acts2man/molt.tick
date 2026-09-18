@@ -29,15 +29,20 @@ export function compactStudioReport(input:any){
   }:null;
   return {
     status:clip(input?.status,20),reason:clip(input?.reason,1200),warnings:list(input?.warnings,40,500),
-    blockers:list(input?.blockers,40,500),usage,complexity,
+    blockers:list(input?.blockers,40,500),integrations:Array.isArray(input?.integrations)?input.integrations.slice(0,60).map((i:any)=>({kind:clip(i.kind,60),provider:clip(i.provider,120),route:clip(i.route,200),evidence:clip(i.evidence,500),action:clip(i.action,700)})):[],usage,complexity,
     evaluation:{pass:evaluation.pass===true,issues:list(evaluation.issues,40,500),views},
     attempts:Array.isArray(input?.attempts)?input.attempts.slice(0,20).map((a:any)=>({round:a.round,accepted:a.accepted===true,summary:clip(a.summary,800)})):[]
   };
 }
 export function finalStudioEvent(report:any,handoff:any={}){
-  return {message:report?.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',report:compactStudioReport(report),
+  const handoffFailed=typeof handoff?.deploymentError==='string'||typeof handoff?.outputRepoError==='string';
+  const message=handoffFailed?'The reconstruction is saved, but its repository or live deployment needs attention.':report?.status==='review'?'Measured checks and delivery handoff passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.';
+  return {message,report:compactStudioReport(report),
     ...(handoff?.previewReady===true?{previewReady:true}:{}),
     ...(typeof handoff?.outputRepoUrl==='string'?{outputRepoUrl:clip(handoff.outputRepoUrl,500)}:{}),
     ...(typeof handoff?.outputRepoError==='string'?{outputRepoError:clip(handoff.outputRepoError,1000)}:{}),
+    ...(typeof handoff?.liveSiteUrl==='string'?{liveSiteUrl:clip(handoff.liveSiteUrl,500)}:{}),
+    ...(typeof handoff?.liveSiteAdminUrl==='string'?{liveSiteAdminUrl:clip(handoff.liveSiteAdminUrl,500)}:{}),
+    ...(typeof handoff?.deploymentError==='string'?{deploymentError:clip(handoff.deploymentError,1000)}:{}),
   };
 }
