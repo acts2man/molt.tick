@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { ACTIVE, BRANCH, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
-import { assertMutation, cookie, runnerIdentity } from './security.ts';
-import { createSession, readSession, revokeSession } from './sessions.ts';
+import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './security.ts';
+import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
 
 export interface Store {
@@ -14,7 +14,7 @@ export interface Store {
 export interface Environment { secret: string; origin: string; context: string }
 export interface Services {
   store: Store; env: Environment; github?: typeof github;
-  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider;
+  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; authenticate?: typeof authenticateAccount;
 }
 const json = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(JSON.stringify(value), { status, headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra} });
 async function bytes(req: Request, limit: number): Promise<Uint8Array> {
@@ -33,6 +33,19 @@ const bundleKey = (owner: string, id: string) => `bundles/${owner}/${uuid(id)}`;
 const previewKey = (owner:string,id:string,path:string) => `previews/${owner}/${uuid(id)}/${safePath(path)}`;
 const previewType=(path:string)=>({html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',json:'application/json; charset=utf-8',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml',avif:'image/avif',ico:'image/x-icon',woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'}[path.split('.').pop()?.toLowerCase()??'']??'application/octet-stream');
 const fileKey = (base: string, path: string) => `${base}/files/${createHash('sha256').update(safePath(path)).digest('hex')}`;
+const OWNER_BINDING_KEY='auth/owner-binding-v1';
+const GITHUB_INTEGRATION_KEY='integrations/owner/github-v1';
+type OwnerBinding={userId:string;email?:string;createdAt:string};
+type GithubIntegration={ciphertext:string;login:string;connectedAt:string};
+async function ownerBinding(store:Store):Promise<OwnerBinding|null>{return await store.get(OWNER_BINDING_KEY,{type:'json'}) as OwnerBinding|null;}
+async function githubIntegration(store:Store,env:Environment):Promise<{token:string;record:GithubIntegration}|null>{
+  const record=await store.get(GITHUB_INTEGRATION_KEY,{type:'json'}) as GithubIntegration|null;if(!record)return null;
+  const token=unsealSecret(record.ciphertext,env.secret);if(!token)return null;return {token,record};
+}
+async function requireOwner(store:Store,user:AccountUser):Promise<OwnerBinding>{
+  const binding=await ownerBinding(store);if(!binding)throw new HttpError(403,'This Molt account has not been linked to the owner workspace yet. Connect the GitHub owner integration once to claim it.');
+  if(binding.userId!==user.id)throw new HttpError(403,'This Molt account is not authorized for the owner workspace.');return binding;
+}
 async function deletePrefix(store:Store,prefix:string):Promise<void>{
   const {blobs}=await store.list({prefix});for(const blob of blobs)await store.delete(blob.key);
 }
@@ -108,29 +121,33 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       throw new HttpError(404,'Runner route not found.');
     }
-    const session=await readSession(req,store,env.secret);
+    const account=await (services.authenticate??authenticateAccount)(req);
+    const binding=await ownerBinding(store);
+    const integration=env.secret.length>=40?await githubIntegration(store,env):null;
     if(method==='GET' && path[0]==='session'){
-      // Read the real automatically provisioned backend before reporting readiness.
       await store.get('system/studio-health',{type:'json'});
-      return json({connected:!!session,login:session?.login??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
+      const authorized=!!account&&!!binding&&binding.userId===account.id,claimable=!!account&&!binding;
+      return json({authenticated:!!account,authorized,claimable,connected:authorized&&!!integration,login:authorized&&integration?integration.record.login:null,email:account?.email??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
     }
     if(!['GET','HEAD'].includes(method))assertMutation(req);
+    if(!account)throw new HttpError(401,'Sign in to your Molt account to continue.');
     if(method==='POST' && path[0]==='connect') {
+      if(binding&&binding.userId!==account.id)throw new HttpError(403,'This Molt account is not authorized for the owner workspace.');
+      if(env.secret.length<40)throw new HttpError(503,'Secure workspace credential storage is not configured on this deployment.');
       const input=await body(req),token=String(input.token??'').trim();
       if(token.length<20||token.length>255||/\s/.test(token))throw new HttpError(400,'Enter a valid GitHub fine-grained access token.');
       const user=await gh(token,'/user');if(String(user.login).toLowerCase()!==OWNER)throw new HttpError(403,`This workspace belongs to ${OWNER}. Use that GitHub account.`);
       const repo=await gh(token,`/repos/${REPOSITORY}`);if(!repo.permissions?.push)throw new HttpError(403,'This token must have write access to the Molt repository.');
       await gh(token,`/repos/${REPOSITORY}/actions/workflows?per_page=1`);
-      // Owner mode uses the same fine-grained token to create and push reconstructed site repositories.
-      // It is stored only as an encrypted GitHub Actions secret; the browser receives only the opaque session cookie.
       await (services.saveSecrets??saveSecrets)(token,{MOLT_GITHUB_EXPORT_TOKEN:token});
-      const identifier=await createSession(store,token,OWNER);
-      await revokeSession(req,store);
-      return json({connected:true,login:user.login},200,{'set-cookie':cookie(identifier)});
+      if(!binding)await store.setJSON(OWNER_BINDING_KEY,{userId:account.id,...(account.email?{email:account.email}:{}),createdAt:new Date().toISOString()} satisfies OwnerBinding);
+      await store.setJSON(GITHUB_INTEGRATION_KEY,{ciphertext:sealSecret(token,env.secret),login:OWNER,connectedAt:new Date().toISOString()} satisfies GithubIntegration);
+      return json({connected:true,login:user.login,accountBound:true});
     }
-    if(method==='POST' && path[0]==='disconnect'){await revokeSession(req,store);return json({connected:false},200,{'set-cookie':cookie('',true)});}
-    if(!session)throw new HttpError(401,'Connect your GitHub workspace to continue.');
-    const token=session.token,owner=session.login;
+    await requireOwner(store,account);
+    const owner=OWNER,token=integration?.token??null;
+    const requiredGithub=()=>{if(!token)throw new HttpError(409,'Connect the GitHub workspace integration once. After that it is available on every device you sign into.');return token;};
+    if(method==='POST' && path[0]==='disconnect'){await store.delete(GITHUB_INTEGRATION_KEY);return json({connected:false});}
     if(method==='GET' && path[0]==='preview'){
       const id=uuid(path[1]??''),job=await store.get(dataKey(owner,id),{type:'json'}) as Job|null;
       if(!job||!job.previewReady)throw new HttpError(404,'Interactive preview is not available for this reconstruction.');
@@ -146,8 +163,7 @@ export async function handle(req: Request, services: Services): Promise<Response
       if(method==='GET') {
         const settings=await store.get(`settings/${owner}`,{type:'json'}) as Settings|null;
         let permissionsError='',names:string[]=[],workflow=false;
-        try{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);names=secrets.secrets.map((s:any)=>s.name);}catch(e){permissionsError=(e as Error).message;}
-        try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}
+        if(token){try{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);names=secrets.secrets.map((s:any)=>s.name);}catch(e){permissionsError=(e as Error).message;}try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}}else permissionsError='GitHub workspace integration is not connected.'
         const provider=settings?.provider??(names.includes('OPENAI_API_KEY')?'openai':names.includes('ANTHROPIC_API_KEY')?'anthropic':'openai');
         const keyPresent=names.includes(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY');
         const exportReady=names.includes('MOLT_GITHUB_EXPORT_TOKEN');return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,exportReady,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow&&exportReady,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
@@ -157,8 +173,8 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(!['openai','anthropic'].includes(provider)||!model||model.length>100||!/^[\w.:-]+$/.test(model))throw new HttpError(400,'Choose a provider and enter its exact API model ID.');
         const values:Record<string,string>={MOLT_MODEL_PROVIDER:provider,MOLT_AI_MODEL:model};
         if(apiKey){if(apiKey.length<20||apiKey.length>512||/\s/.test(apiKey))throw new HttpError(400,'The API key format is invalid.');await (services.checkProvider??checkProvider)(provider,model,apiKey);values[provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY']=apiKey;}
-        else{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);if(!secrets.secrets.some((s:any)=>s.name===(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY')))throw new HttpError(400,'Enter an API key for the selected provider.');}
-        await (services.saveSecrets??saveSecrets)(token,values);
+        else{const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`);if(!secrets.secrets.some((s:any)=>s.name===(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY')))throw new HttpError(400,'Enter an API key for the selected provider.');}
+        await (services.saveSecrets??saveSecrets)(requiredGithub(),values);
         const settings:Settings={provider,model,configuredAt:new Date().toISOString(),accessChecked:!!apiKey};await store.setJSON(`settings/${owner}`,settings);return json({saved:true,...settings});
       }
     }
@@ -174,12 +190,12 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.model!==job.model||existing.reasoningEffort!==job.reasoningEffort||existing.outputRepo!==job.outputRepo||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
-        const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
+        const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
         if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before starting a reconstruction.');if(!names.includes('MOLT_GITHUB_EXPORT_TOKEN'))throw new HttpError(409,'Reconnect the GitHub owner workspace once so Molt can create the output React repository.');
         if(job.bundleId){const m=await store.get(`${bundleKey(owner,job.bundleId)}/manifest`,{type:'json'});if(!m?.ready)throw new HttpError(409,'Your page bundle has not finished uploading.');}
         await store.setJSON(key,job);
         try {
-          const dispatch=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:job.id}})});
+          const dispatch=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:job.id}})});
           const latest=await store.get(key,{type:'json'}) as Job;
           if(latest.status==='dispatching'){latest.status='queued';latest.message='Waiting for a GitHub Actions runner';if(dispatch?.workflow_run_id){latest.runId=dispatch.workflow_run_id;latest.runUrl=dispatch.html_url;}await store.setJSON(key,latest);}return json(latest,202);
         }catch(e){job.status='error';job.error=(e as Error).message;job.message='The runner could not be started';await store.setJSON(key,job);throw e;}
@@ -192,12 +208,12 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       if(method==='GET' && path.length===2) {
         let workflow:any=null,artifacts:any[]=[];
-        if(job.runId){
+        if(job.runId&&token){
           try {workflow=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}`);
             if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();await store.setJSON(key,job);}
             if(workflow.status==='completed'){const a=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/artifacts`);artifacts=a.artifacts.filter((f:any)=>!f.expired).map((f:any)=>({name:f.name,size:f.size_in_bytes,url:`https://github.com/${REPOSITORY}/actions/runs/${job!.runId}/artifacts/${f.id}`}));}
           }catch{}
-        }else if(ACTIVE.has(job.status)) {
+        }else if(ACTIVE.has(job.status)&&token) {
           const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);
           const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));
           if(run){job.runId=run.id;job.runUrl=run.html_url;await store.setJSON(key,job);}else if(Date.now()-Date.parse(job.createdAt)>600000){job.status='error';job.message='No runner started within ten minutes. Check GitHub Actions permissions and availability.';await store.setJSON(key,job);}
@@ -221,13 +237,13 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       if(method==='POST' && path[2]==='cancel') {
         if(!ACTIVE.has(job.status))throw new HttpError(409,'This job has already finished.');
-        if(!job.runId){const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));if(run)job.runId=run.id;}
+        if(!job.runId){const runs=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));if(run)job.runId=run.id;}
         if(!job.runId)throw new HttpError(409,'The runner has not assigned an ID yet. Refresh in a few seconds.');
-        await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/cancel`,{method:'POST'});job.status='cancelling';job.message='Cancellation requested; waiting for the runner to stop';await store.setJSON(key,job);return json(job,202);
+        await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/runs/${job.runId}/cancel`,{method:'POST'});job.status='cancelling';job.message='Cancellation requested; waiting for the runner to stop';await store.setJSON(key,job);return json(job,202);
       }
     }
     if(path[0]==='activity' && method==='GET') {
-      const result=await gh(token,`/repos/${REPOSITORY}/actions/runs?per_page=40`);
+      const result=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/runs?per_page=40`);
       return json({runs:result.workflow_runs.map((r:any)=>({id:r.id,name:r.name,title:r.display_title,status:r.status,conclusion:r.conclusion,createdAt:r.created_at,url:r.html_url,branch:r.head_branch,commit:r.head_sha.slice(0,7)}))});
     }
     if(path[0]==='bundles') {
