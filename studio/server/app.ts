@@ -30,6 +30,8 @@ async function body(req: Request, limit = 65536): Promise<any> {
 }
 const dataKey = (owner: string, id: string) => `jobs/${owner}/${uuid(id)}`;
 const bundleKey = (owner: string, id: string) => `bundles/${owner}/${uuid(id)}`;
+const previewKey = (owner:string,id:string,path:string) => `previews/${owner}/${uuid(id)}/${safePath(path)}`;
+const previewType=(path:string)=>({html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',json:'application/json; charset=utf-8',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml',avif:'image/avif',ico:'image/x-icon',woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'}[path.split('.').pop()?.toLowerCase()??'']??'application/octet-stream');
 const fileKey = (base: string, path: string) => `${base}/files/${createHash('sha256').update(safePath(path)).digest('hex')}`;
 async function jobs(store: Store, owner: string): Promise<Job[]> {
   const {blobs} = await store.list({prefix: `jobs/${owner}/`});
@@ -77,6 +79,12 @@ export async function handle(req: Request, services: Services): Promise<Response
         const buffer=await store.get(fileKey(base,name),{type:'arrayBuffer'});if(!buffer)throw new HttpError(404,'Bundle file not found.');
         return new Response(buffer,{headers:{'content-type':'application/octet-stream','cache-control':'no-store'}});
       }
+      if(method==='PUT' && path[2]==='preview') {
+        const name=url.searchParams.get('file')??'';safePath(name);
+        const file=await bytes(req,8_000_000);
+        await store.set(previewKey(OWNER,id,name),file.buffer as ArrayBuffer);
+        return json({saved:true,path:name});
+      }
       if(method==='PUT' && path[2]==='images') {
         const name=path[3]??'';if(!/^[a-z0-9-]{1,80}\.png$/.test(name))throw new HttpError(400,'Invalid image identifier.');
         const image=await bytes(req,4_000_000);if(Buffer.from(image.subarray(0,8)).toString('hex')!=='89504e470d0a1a0a')throw new HttpError(415,'Only PNG screenshots are accepted.');
@@ -90,6 +98,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(event.usage)job.usage=safeUsage(event.usage);
         if(typeof event.outputRepoUrl==='string'&&/^https:\/\/github\.com\/acts2man\/[a-z0-9._-]+$/i.test(event.outputRepoUrl))job.outputRepoUrl=event.outputRepoUrl;
         if(typeof event.outputRepoError==='string')job.outputRepoError=String(event.outputRepoError).slice(0,1000);
+        if(event.previewReady===true)job.previewReady=true;
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
         if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);return json({saved:true});
@@ -119,6 +128,17 @@ export async function handle(req: Request, services: Services): Promise<Response
     if(method==='POST' && path[0]==='disconnect'){await revokeSession(req,store);return json({connected:false},200,{'set-cookie':cookie('',true)});}
     if(!session)throw new HttpError(401,'Connect your GitHub workspace to continue.');
     const token=session.token,owner=session.login;
+    if(method==='GET' && path[0]==='preview'){
+      const id=uuid(path[1]??''),job=await store.get(dataKey(owner,id),{type:'json'}) as Job|null;
+      if(!job||!job.previewReady)throw new HttpError(404,'Interactive preview is not available for this reconstruction.');
+      const name=path.slice(2).join('/')||'index.html';safePath(name);
+      const file=await store.get(previewKey(owner,id,name),{type:'arrayBuffer'});
+      if(!file)throw new HttpError(404,'Preview file not found.');
+      return new Response(file,{headers:{
+        'content-type':previewType(name),'cache-control':'private, max-age=300','x-content-type-options':'nosniff','x-frame-options':'SAMEORIGIN',
+        'content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'none'"
+      }});
+    }
     if(path[0]==='settings') {
       if(method==='GET') {
         const settings=await store.get(`settings/${owner}`,{type:'json'}) as Settings|null;

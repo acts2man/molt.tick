@@ -38,7 +38,7 @@ const GEOMETRY = `(() => {
  for(const el of nodes){
   const tag=el.tagName.toLowerCase(); if(/^(script|style|noscript|link|meta)$/.test(tag)) continue;
   const b=el.getBoundingClientRect(),s=getComputedStyle(el);
-  if(!b.width||!b.height||s.display==='none'||s.visibility==='hidden') continue;
+  if(!b.width||!b.height||b.right<=0||b.left>=innerWidth||s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0) continue;
   if(elements.length>=1400){truncated=true;break;}
   const e={key:index.get(el),parent:index.get(el.parentElement),tag,text:/^h[1-6]$/.test(tag)?el.innerText:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(' ').trim(),x:b.x+scrollX,y:b.y+scrollY,width:b.width,height:b.height,style:read(s),attributes:attrs(el)};
   if(tag==='img') e.src=el.currentSrc||el.src;
@@ -50,7 +50,7 @@ const GEOMETRY = `(() => {
  const fontFaces=[],mediaQueries=[];
  const rules=(list)=>{for(const r of Array.from(list||[])){if(r.type===5)fontFaces.push(r.cssText);else if(r.type===4)mediaQueries.push(r.conditionText);if(r.cssRules)rules(r.cssRules);}};
  for(const s of Array.from(document.styleSheets)){try{rules(s.cssRules);}catch{}}
- const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n return {text:document.body.innerText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
+ const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n const visibleText=elements.map(e=>e.text).filter(Boolean).join(' ');\n return {text:visibleText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
  brokenImages:Array.from(document.images).filter(i=>{const b=i.getBoundingClientRect(),s=getComputedStyle(i);return b.width>0&&b.height>0&&b.right>0&&b.left<innerWidth&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&i.naturalWidth===0;}).length,
  elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),platformHints:Array.from(new Set(platformHints)),truncated};
 })()`;

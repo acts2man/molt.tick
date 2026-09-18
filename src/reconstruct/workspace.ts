@@ -84,7 +84,7 @@ export async function scaffold(root: string, evidence: Evidence): Promise<void> 
   const write = async (p: string, s: string) => { await mkdir(dirname(join(root,p)), {recursive:true}); await writeFile(join(root,p), s); };
   const pkg = { name: 'molt-reconstruction', private: true, type: 'module', scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' }, dependencies: { react:'18.3.1','react-dom':'18.3.1' }, devDependencies: { vite:'5.4.10','@vitejs/plugin-react':'4.3.3',tailwindcss:'3.4.14',postcss:'8.4.47',autoprefixer:'10.4.20' } };
   await write('package.json', JSON.stringify(pkg,null,2));
-  await write('vite.config.ts', "import {defineConfig} from 'vite'; import react from '@vitejs/plugin-react'; export default defineConfig({plugins:[react()]});");
+  await write('vite.config.ts', "import {defineConfig} from 'vite'; import react from '@vitejs/plugin-react'; export default defineConfig({base:process.env.MOLT_PREVIEW_BASE||'/',plugins:[react()]});");
   await write('tailwind.config.js', "export default {content:['./src/**/*.{ts,tsx}'],theme:{extend:{}},plugins:[]};");
   await write('postcss.config.js', "export default {plugins:{tailwindcss:{},autoprefixer:{}}};");
   await write('index.html', '<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>');
@@ -94,7 +94,7 @@ export async function scaffold(root: string, evidence: Evidence): Promise<void> 
   const imports = evidence.pages.map((p,i)=>`import P${i} from './pages/${routeFile(p.route).split('/').pop()!.replace('.tsx','')}';`).join('\n');
   const routes = evidence.pages.map((p,i)=>`${JSON.stringify(p.route)}:P${i}`).join(',');
   const titles = Object.fromEntries(evidence.pages.map(p=>[p.route,p.title]));
-  await write('src/main.tsx', `import React from 'react';import {createRoot} from 'react-dom/client';import './index.css';import './fonts.css';import './site.css';\n${imports}\nconst routes:Record<string,React.ComponentType>={${routes}};const titles:Record<string,string>=${JSON.stringify(titles)};const path=location.pathname.replace(/\\/+$/,'')||'/';const Page=routes[path];document.title=titles[path]||'Page not found';createRoot(document.getElementById('root')!).render(Page?<Page/>:<main><h1>Page not found</h1></main>);`);
+  await write('src/main.tsx', `import React from 'react';import {createRoot} from 'react-dom/client';import './index.css';import './fonts.css';import './site.css';\n${imports}\nconst routes:Record<string,React.ComponentType>={${routes}};const titles:Record<string,string>=${JSON.stringify(titles)};const requested=new URLSearchParams(location.search).get('__molt_route');const path=(requested||location.pathname).replace(/\\/+$/,'')||'/';const Page=routes[path];document.title=titles[path]||'Page not found';createRoot(document.getElementById('root')!).render(Page?<Page/>:<main><h1>Page not found</h1></main>);`);
   for (const a of evidence.assets) {
     if (!/^\/assets\/[a-f\d]{24}\.[a-z0-9]+$/.test(a.publicPath)) throw new Error('Unexpected asset path');
     await mkdir(join(root,'public/assets'),{recursive:true}); await copyFile(a.file,join(root,'public',a.publicPath));

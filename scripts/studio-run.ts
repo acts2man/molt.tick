@@ -1,22 +1,24 @@
 /** The runner authenticates to Netlify with GitHub OIDC, never a token in workflow inputs. */
-import { readFile, writeFile, mkdir, cp } from 'node:fs/promises';
-import { join, resolve, dirname, relative } from 'node:path';
+import { readFile, writeFile, mkdir, cp, readdir, stat } from 'node:fs/promises';
+import { join, resolve, dirname, relative, extname } from 'node:path';
+import { spawn } from 'node:child_process';
 import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { publishOutputRepository } from './publish-output.js';
-let liveModel:Model|undefined;
+let liveModel:Model|undefined,runnerToken:string|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
 const artifacts=resolve('studio-artifacts');await mkdir(artifacts,{recursive:true});
 async function identityToken():Promise<string>{
+  if(runnerToken)return runnerToken;
   const endpoint=process.env.ACTIONS_ID_TOKEN_REQUEST_URL,secret=process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if(!endpoint||!secret)throw new Error('The workflow needs GitHub id-token: write permission.');
   const response=await fetch(`${endpoint}&audience=${encodeURIComponent(origin)}`,{headers:{Authorization:`Bearer ${secret}`},signal:AbortSignal.timeout(15000)});
   if(!response.ok)throw new Error('Could not obtain the runner identity.');
-  const data=await response.json() as {value:string};return data.value;
+  const data=await response.json() as {value:string};runnerToken=data.value;return runnerToken;
 }
 async function studio(path:string,init:RequestInit={}):Promise<Response>{
   const token=await identityToken();
@@ -32,6 +34,31 @@ async function progress(message:string,extra:object={}):Promise<void>{
 function pathIn(root:string,file:string):string{
   if(file.startsWith('/')||file.includes('\\')||file.split('/').some(p=>!p||p.startsWith('.')))throw new Error('Unsafe saved-page path');
   const full=resolve(root,file),r=relative(root,full);if(r.startsWith('..'))throw new Error('Saved file escaped the bundle');return full;
+}
+async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={}):Promise<void>{
+  await new Promise<void>((resolveRun,reject)=>{
+    const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let err='';
+    child.stderr.on('data',b=>{if(err.length<8000)err+=String(b);});
+    child.on('error',reject);child.on('close',code=>code===0?resolveRun():reject(new Error(`${command} failed (exit ${code}): ${err.slice(0,1200)}`)));
+  });
+}
+async function previewFiles(root:string):Promise<Array<{path:string;file:string;size:number}>>{
+  const out:Array<{path:string;file:string;size:number}>=[],walk=async(dir:string)=>{
+    for(const entry of await readdir(dir,{withFileTypes:true})){const full=join(dir,entry.name);if(entry.isDirectory())await walk(full);else if(entry.isFile()){
+      const path=relative(root,full).split('\\').join('/');const size=(await stat(full)).size;
+      if(size>8_000_000)throw new Error(`Preview file is too large: ${path}`);out.push({path,file:full,size});
+    }}
+  };await walk(root);return out;
+}
+async function uploadInteractivePreview(outDir:string):Promise<void>{
+  const base=`/api/molt/preview/${id}/`;
+  await progress('Building the interactive preview.');
+  await run('npm',['run','build'],outDir,{MOLT_PREVIEW_BASE:base});
+  const root=join(outDir,'dist'),files=await previewFiles(root);
+  const total=files.reduce((n,f)=>n+f.size,0);if(files.length>400||total>35_000_000)throw new Error('Interactive preview exceeds the safe upload budget.');
+  await progress(`Uploading interactive preview (${files.length} files).`);
+  for(const item of files){const data=await readFile(item.file);await studio(`/preview?file=${encodeURIComponent(item.path)}`,{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new Uint8Array(data)});}
+  await progress('Interactive preview is ready inside Molt.',{previewReady:true});
 }
 async function preview(file:string,name:string):Promise<string|null>{
   try{
@@ -73,6 +100,7 @@ try{
     }
   }
   await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
+  try{await uploadInteractivePreview(result.outDir);}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)));}
   try{
     await progress(`Publishing retained React source to acts2man/${job.outputRepo}`);
     const published=await publishOutputRepository(result.outDir,'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
