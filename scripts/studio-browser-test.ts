@@ -33,7 +33,7 @@ try{
  }
  const ctx=await engine.newContext({viewport:{width:1440,height:1000}}),page=await ctx.newPage();
  await ctx.route('**/api/molt/session',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({authenticated:true,authorized:true,claimable:false,connected:true,login:'acts2man',email:'owner@example.test',serverReady:true,repository:'acts2man/molt.tick',branch:'main'})}));
- await ctx.route('**/api/molt/settings',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({provider:'openai',model:'gpt-6-astra',keyPresent:false,modelConfigured:false,workflow:true,ready:false})}));
+ await ctx.route('**/api/molt/settings',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({provider:'openai',model:'gpt-5.6-sol',keyPresent:false,modelConfigured:false,workflow:true,ready:false})}));
  await ctx.route('**/api/molt/jobs**',r=>r.fulfill({contentType:'application/json',body:'{"jobs":[]}'}));
  await page.goto(host.origin+'/connections');await page.getByLabel('OpenAI model preset').waitFor();assert.equal(await page.getByLabel('Exact API model ID').inputValue(),'gpt-5.6-sol');
  await page.screenshot({path:out+'/owner-setup-1440.png',fullPage:true});await ctx.close();
