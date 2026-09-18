@@ -31,6 +31,11 @@ test('configured owner account automatically reclaims the existing owner workspa
  const binding=s.map.get('auth/owner-binding-v1');assert.equal(binding.userId,USER);
  const rows=await (await handle(s.req('jobs'),s.services)).json();assert.equal(rows.jobs.length,1);
 });
+test('configured owner account repairs a stale workspace binding',async()=>{
+ const s=setup();s.map.set('auth/owner-binding-v1',{userId:'22222222-2222-4222-8222-222222222222',createdAt:new Date().toISOString()});s.services.env.ownerUserId=USER;
+ const session=await handle(s.req('session'),s.services);const info=await session.json();assert.equal(info.authorized,true);
+ assert.equal(s.map.get('auth/owner-binding-v1').userId,USER);
+});
 test('a signed-in device sees the same persisted runs without a browser GitHub session',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'needs-work'});
  const r=await handle(s.req('jobs'),s.services);assert.equal(r.status,200);const data=await r.json();assert.equal(data.jobs.length,1);
