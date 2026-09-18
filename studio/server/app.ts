@@ -146,6 +146,7 @@ export async function handle(req: Request, services: Services): Promise<Response
     }
     await requireOwner(store,account);
     const owner=OWNER,token=integration?.token??null;
+    const requiredGithub=()=>{if(!token)throw new HttpError(409,'Connect the GitHub workspace integration once. After that it is available on every device you sign into.');return token;};
     if(method==='POST' && path[0]==='disconnect'){await store.delete(GITHUB_INTEGRATION_KEY);return json({connected:false});}
     if(method==='GET' && path[0]==='preview'){
       const id=uuid(path[1]??''),job=await store.get(dataKey(owner,id),{type:'json'}) as Job|null;
@@ -162,8 +163,7 @@ export async function handle(req: Request, services: Services): Promise<Response
       if(method==='GET') {
         const settings=await store.get(`settings/${owner}`,{type:'json'}) as Settings|null;
         let permissionsError='',names:string[]=[],workflow=false;
-        try{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);names=secrets.secrets.map((s:any)=>s.name);}catch(e){permissionsError=(e as Error).message;}
-        try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}
+        if(token){try{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);names=secrets.secrets.map((s:any)=>s.name);}catch(e){permissionsError=(e as Error).message;}try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}}else permissionsError='GitHub workspace integration is not connected.'
         const provider=settings?.provider??(names.includes('OPENAI_API_KEY')?'openai':names.includes('ANTHROPIC_API_KEY')?'anthropic':'openai');
         const keyPresent=names.includes(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY');
         const exportReady=names.includes('MOLT_GITHUB_EXPORT_TOKEN');return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,exportReady,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow&&exportReady,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
@@ -173,8 +173,8 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(!['openai','anthropic'].includes(provider)||!model||model.length>100||!/^[\w.:-]+$/.test(model))throw new HttpError(400,'Choose a provider and enter its exact API model ID.');
         const values:Record<string,string>={MOLT_MODEL_PROVIDER:provider,MOLT_AI_MODEL:model};
         if(apiKey){if(apiKey.length<20||apiKey.length>512||/\s/.test(apiKey))throw new HttpError(400,'The API key format is invalid.');await (services.checkProvider??checkProvider)(provider,model,apiKey);values[provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY']=apiKey;}
-        else{const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`);if(!secrets.secrets.some((s:any)=>s.name===(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY')))throw new HttpError(400,'Enter an API key for the selected provider.');}
-        await (services.saveSecrets??saveSecrets)(token,values);
+        else{const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`);if(!secrets.secrets.some((s:any)=>s.name===(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY')))throw new HttpError(400,'Enter an API key for the selected provider.');}
+        await (services.saveSecrets??saveSecrets)(requiredGithub(),values);
         const settings:Settings={provider,model,configuredAt:new Date().toISOString(),accessChecked:!!apiKey};await store.setJSON(`settings/${owner}`,settings);return json({saved:true,...settings});
       }
     }
@@ -190,12 +190,12 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.model!==job.model||existing.reasoningEffort!==job.reasoningEffort||existing.outputRepo!==job.outputRepo||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
-        const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
+        const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
         if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before starting a reconstruction.');if(!names.includes('MOLT_GITHUB_EXPORT_TOKEN'))throw new HttpError(409,'Reconnect the GitHub owner workspace once so Molt can create the output React repository.');
         if(job.bundleId){const m=await store.get(`${bundleKey(owner,job.bundleId)}/manifest`,{type:'json'});if(!m?.ready)throw new HttpError(409,'Your page bundle has not finished uploading.');}
         await store.setJSON(key,job);
         try {
-          const dispatch=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:job.id}})});
+          const dispatch=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:job.id}})});
           const latest=await store.get(key,{type:'json'}) as Job;
           if(latest.status==='dispatching'){latest.status='queued';latest.message='Waiting for a GitHub Actions runner';if(dispatch?.workflow_run_id){latest.runId=dispatch.workflow_run_id;latest.runUrl=dispatch.html_url;}await store.setJSON(key,latest);}return json(latest,202);
         }catch(e){job.status='error';job.error=(e as Error).message;job.message='The runner could not be started';await store.setJSON(key,job);throw e;}
@@ -208,12 +208,12 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       if(method==='GET' && path.length===2) {
         let workflow:any=null,artifacts:any[]=[];
-        if(job.runId){
+        if(job.runId&&token){
           try {workflow=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}`);
             if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();await store.setJSON(key,job);}
             if(workflow.status==='completed'){const a=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/artifacts`);artifacts=a.artifacts.filter((f:any)=>!f.expired).map((f:any)=>({name:f.name,size:f.size_in_bytes,url:`https://github.com/${REPOSITORY}/actions/runs/${job!.runId}/artifacts/${f.id}`}));}
           }catch{}
-        }else if(ACTIVE.has(job.status)) {
+        }else if(ACTIVE.has(job.status)&&token) {
           const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);
           const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));
           if(run){job.runId=run.id;job.runUrl=run.html_url;await store.setJSON(key,job);}else if(Date.now()-Date.parse(job.createdAt)>600000){job.status='error';job.message='No runner started within ten minutes. Check GitHub Actions permissions and availability.';await store.setJSON(key,job);}
@@ -237,13 +237,13 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       if(method==='POST' && path[2]==='cancel') {
         if(!ACTIVE.has(job.status))throw new HttpError(409,'This job has already finished.');
-        if(!job.runId){const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));if(run)job.runId=run.id;}
+        if(!job.runId){const runs=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));if(run)job.runId=run.id;}
         if(!job.runId)throw new HttpError(409,'The runner has not assigned an ID yet. Refresh in a few seconds.');
-        await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/cancel`,{method:'POST'});job.status='cancelling';job.message='Cancellation requested; waiting for the runner to stop';await store.setJSON(key,job);return json(job,202);
+        await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/runs/${job.runId}/cancel`,{method:'POST'});job.status='cancelling';job.message='Cancellation requested; waiting for the runner to stop';await store.setJSON(key,job);return json(job,202);
       }
     }
     if(path[0]==='activity' && method==='GET') {
-      const result=await gh(token,`/repos/${REPOSITORY}/actions/runs?per_page=40`);
+      const result=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/runs?per_page=40`);
       return json({runs:result.workflow_runs.map((r:any)=>({id:r.id,name:r.name,title:r.display_title,status:r.status,conclusion:r.conclusion,createdAt:r.created_at,url:r.html_url,branch:r.head_branch,commit:r.head_sha.slice(0,7)}))});
     }
     if(path[0]==='bundles') {
