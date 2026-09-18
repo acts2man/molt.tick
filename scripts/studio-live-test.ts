@@ -19,7 +19,8 @@ while (Date.now() < deadline) {
   await new Promise(r => setTimeout(r, 10_000));
 }
 assert.equal(session?.serverReady, true, 'Netlify must serve the real configured Studio API');
-assert.equal(session.connected, false, 'An anonymous visitor must not inherit a workspace session');
+assert.equal(session.authenticated, false, 'An anonymous visitor must not inherit a Molt account session');
+assert.equal(session.connected, false, 'An anonymous visitor must not inherit the owner GitHub integration');
 const privateResponse = await fetch(`${origin}/api/molt/jobs`, { signal: AbortSignal.timeout(15_000) });
 assert.equal(privateResponse.status, 401, 'Private job data must require authentication');
 const engine = await browser();
@@ -30,25 +31,25 @@ try {
     try {
       const page = await ctx.newPage();
       page.on('pageerror', e => errors.push(e.message));
-      for (const route of ['/', '/studio', '/connections', '/activity', '/guide', '/plans', '/how-it-works', '/migration-guide', '/usage']) {
+      for (const route of ['/', '/plans', '/how-it-works', '/migration-guide', '/login']) {
         const response = await page.goto(origin + route, { waitUntil: 'networkidle', timeout: 30_000 });
         assert.equal(response?.status(), 200, `Live route ${route}`);
         await page.locator('main h1').waitFor();
         assert.equal(await page.evaluate('document.documentElement.scrollWidth > innerWidth + 1'), false, `${route} at ${width}: no horizontal overflow`);
         await page.screenshot({ path: `${out}/${route === '/' ? 'landing' : route.slice(1)}-${width}.png`, fullPage: true });
       }
-      await page.goto(origin+'/studio');
-      await page.getByRole('button', { name: 'Connect GitHub', exact: true }).click();
-      await page.locator('dialog[open]').waitFor();
-      assert.equal(await page.locator('dialog input').getAttribute('type'), 'password');
-      await page.keyboard.press('Escape');
-      await page.locator('dialog[open]').waitFor({ state: 'hidden' });
+      for (const route of ['/studio','/connections','/activity','/guide','/usage']) {
+        await page.goto(origin + route, { waitUntil: 'networkidle', timeout: 30_000 });
+        await page.waitForURL(/\/login\?return=/,{timeout:15_000});
+        await page.getByLabel('Email').waitFor();
+        assert.match(page.url(),/\/login\?return=/,`Private route ${route} must redirect to Molt sign-in`);
+      }
     } finally { await ctx.close(); }
   }
   assert.deepEqual(errors, []);
   await writeFile(`${out}/live-check.json`, JSON.stringify({
     passed: true, origin, session, privateJobsStatus: privateResponse.status,
-    viewports: [1440, 768, 390], routes: ['/', '/studio', '/connections', '/activity', '/guide', '/plans', '/how-it-works', '/migration-guide', '/usage'],
-    boundary: 'Read-only deployed checks. No authentication bypass, credentials, paid model calls, or client reconstructions were used.',
+    viewports: [1440, 768, 390], publicRoutes: ['/', '/plans', '/how-it-works', '/migration-guide', '/login'], privateRoutes: ['/studio','/connections','/activity','/guide','/usage'],
+    boundary: 'Read-only deployed checks. Anonymous visitors must be redirected to account sign-in for private Studio routes. No credentials, paid model calls, or client reconstructions were used.',
   }, null, 2));
 } finally { await engine.close(); }
