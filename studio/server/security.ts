@@ -7,6 +7,22 @@ function key(secret: string): Buffer {
   if (secret.length < 40) throw new HttpError(503, 'Session encryption is not configured on this deployment.');
   return createHash('sha256').update(secret).digest();
 }
+export function sealSecret(value:string,secret:string):string {
+  if(!value)throw new HttpError(400,'Cannot encrypt an empty credential.');
+  const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key(secret),iv);
+  const encrypted=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);
+  return Buffer.concat([iv,encrypted,cipher.getAuthTag()]).toString('base64url');
+}
+export function unsealSecret(value:string,secret:string):string|null {
+  try{
+    if(!value||value.length>4096)return null;
+    const bytes=Buffer.from(value,'base64url');if(bytes.length<30)return null;
+    const decipher=createDecipheriv('aes-256-gcm',key(secret),bytes.subarray(0,12));
+    decipher.setAuthTag(bytes.subarray(-16));
+    return Buffer.concat([decipher.update(bytes.subarray(12,-16)),decipher.final()]).toString('utf8');
+  }catch{return null;}
+}
+
 export function seal(value: Session, secret: string): string {
   const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key(secret), iv);
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]);
