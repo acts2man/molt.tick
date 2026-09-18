@@ -33,6 +33,15 @@ test('unverified model credential changes nothing',async()=>{const s=setup();s.s
 test('runner cannot change another workflow run',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),runId:999});const r=await handle(s.req('runner/'+ID),s.services);assert.equal(r.status,409);});
 test('runner data is not accepted without identity verification',async()=>{const s=setup();s.services.identifyRunner=async()=>{throw new Error('invalid identity');};const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'fake'}),s.services);assert.equal(r.status,500);assert.equal(s.map.size,0);});
 test('runner progress updates existing work and preserves the run identity',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'Capturing desktop'}),s.services);assert.equal(r.status,200);const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.runId,123);assert.equal(job.status,'running');assert.equal(job.events.length,1);});
+test('runner uploads an interactive preview and only the owner session can frame it',async()=>{
+ const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
+ const upload=new Request(ORIGIN+'/api/molt/runner/'+ID+'/preview?file=index.html',{method:'PUT',body:new TextEncoder().encode('<!doctype html><title>Preview</title>')});
+ assert.equal((await handle(upload,s.services)).status,200);
+ await handle(s.req('runner/'+ID+'/events','POST',{message:'preview ready',previewReady:true}),s.services);
+ const r=await handle(s.req('preview/'+ID+'/'),s.services);
+ assert.equal(r.status,200);assert.match(r.headers.get('content-type')??'',/text\\/html/);assert.equal(r.headers.get('x-frame-options'),'SAMEORIGIN');assert.match(r.headers.get('content-security-policy')??'',/frame-ancestors 'self'/);assert.match(await r.text(),/Preview/);
+ assert.equal((await handle(s.req('preview/'+ID+'/','GET',undefined,false),s.services)).status,401);
+});
 test('image callback rejects HTML payloads',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/images/image.png','PUT',{html:'<script>alert(1)</script>'}),s.services);assert.equal(r.status,415);});
 
 test('production jobs cannot use the owner development runner',async()=>{const s=setup();const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com'}),s.services);assert.equal(r.status,400);assert.equal(s.calls.filter(c=>c.p.includes('dispatches')).length,0);});
