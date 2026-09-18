@@ -3,6 +3,7 @@ import { getStore } from '@netlify/blobs';
 import { handle, type Store } from '../../server/app.ts';
 declare const Netlify: { env: { get(name: string): string | undefined } };
 export default async (req: Request, context: Context) => {
+  // Runtime secrets are supplied by Netlify environment configuration.
   const deployContext = context.deploy?.context ?? 'dev';
   const deployId = context.deploy?.id ?? 'local';
   const store = getStore({
