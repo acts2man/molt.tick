@@ -8,6 +8,7 @@ import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { publishOutputRepository, preflightOutputRepository } from './publish-output.js';
 import { finalStudioEvent } from './studio-report.js';
+import { runnerFetch } from './runner-callback.js';
 let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
@@ -26,16 +27,7 @@ async function identityToken(force=false):Promise<string>{
   runnerIdentityCache={token:data.value,expiresAt};return data.value;
 }
 async function studio(path:string,init:RequestInit={}):Promise<Response>{
-  let last='';
-  for(let attempt=0;attempt<3;attempt++){
-    const token=await identityToken(attempt>0);
-    const response=await fetch(`${origin}/api/molt/runner/${id}${path}`,{...init,redirect:'error',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${token}`,...init.headers}});
-    if(response.ok)return response;
-    last=`Studio callback failed (HTTP ${response.status}): ${(await response.text()).slice(0,400)}`;
-    if(![401,403,429,500,502,503,504].includes(response.status)||attempt===2)break;
-    runnerIdentityCache=undefined;await new Promise(resolve=>setTimeout(resolve,350*(attempt+1)));
-  }
-  throw new Error(last||'Studio callback failed.');
+  return runnerFetch({origin,id,path,init,getToken:async force=>{if(force)runnerIdentityCache=undefined;return identityToken(force);}});
 }
 function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
 async function progress(message:string,extra:object={},required=true):Promise<void>{
