@@ -88,6 +88,8 @@ export async function handle(req: Request, services: Services): Promise<Response
         const now=new Date().toISOString();job.updatedAt=now;job.runId=identity.runId;job.runUrl=`https://github.com/${REPOSITORY}/actions/runs/${identity.runId}`;
         job.message=String(event.message??'Processing').slice(0,4000);
         if(event.usage)job.usage=safeUsage(event.usage);
+        if(typeof event.outputRepoUrl==='string'&&/^https:\/\/github\.com\/acts2man\/[a-z0-9._-]+$/i.test(event.outputRepoUrl))job.outputRepoUrl=event.outputRepoUrl;
+        if(typeof event.outputRepoError==='string')job.outputRepoError=String(event.outputRepoError).slice(0,1000);
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
         if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);return json({saved:true});
@@ -105,8 +107,11 @@ export async function handle(req: Request, services: Services): Promise<Response
       const input=await body(req),token=String(input.token??'').trim();
       if(token.length<20||token.length>255||/\s/.test(token))throw new HttpError(400,'Enter a valid GitHub fine-grained access token.');
       const user=await gh(token,'/user');if(String(user.login).toLowerCase()!==OWNER)throw new HttpError(403,`This workspace belongs to ${OWNER}. Use that GitHub account.`);
-      const repo=await gh(token,`/repos/${REPOSITORY}`);if(!repo.permissions?.push)throw new HttpError(403,'This token must have access to the Molt repository.');
+      const repo=await gh(token,`/repos/${REPOSITORY}`);if(!repo.permissions?.push)throw new HttpError(403,'This token must have write access to the Molt repository.');
       await gh(token,`/repos/${REPOSITORY}/actions/workflows?per_page=1`);
+      // Owner mode uses the same fine-grained token to create and push reconstructed site repositories.
+      // It is stored only as an encrypted GitHub Actions secret; the browser receives only the opaque session cookie.
+      await (services.saveSecrets??saveSecrets)(token,{MOLT_GITHUB_EXPORT_TOKEN:token});
       const identifier=await createSession(store,token,OWNER);
       await revokeSession(req,store);
       return json({connected:true,login:user.login},200,{'set-cookie':cookie(identifier)});
@@ -143,7 +148,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(configured?.provider==='openai'&&!OPENAI_JOB_MODELS.has(job.model))throw new HttpError(400,'Choose one of the supported OpenAI reconstruction models.');
         if(configured?.provider==='anthropic'&&job.model!==configured.model)throw new HttpError(400,'Anthropic jobs must use the model configured in Owner setup.');
         const key=dataKey(owner,job.id),existing=await store.get(key,{type:'json'});
-        if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.model!==job.model||existing.reasoningEffort!==job.reasoningEffort||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
+        if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.model!==job.model||existing.reasoningEffort!==job.reasoningEffort||existing.outputRepo!==job.outputRepo||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
         const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
