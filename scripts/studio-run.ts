@@ -43,9 +43,10 @@ async function run(command:string,args:string[],cwd:string,env:Record<string,str
   });
 }
 async function previewFiles(root:string):Promise<Array<{path:string;file:string;size:number}>>{
-  const out:Array<{path:string;file:string;size:number}>=[],walk=async(dir:string)=>{
+  const out:Array<{path:string;file:string;size:number}>=[],allowed=/\.(html?|css|js|json|png|jpe?g|svg|webp|gif|avif|ico|woff2?|ttf|otf)$/i,walk=async(dir:string)=>{
     for(const entry of await readdir(dir,{withFileTypes:true})){const full=join(dir,entry.name);if(entry.isDirectory())await walk(full);else if(entry.isFile()){
-      const path=relative(root,full).split('\\').join('/');const size=(await stat(full)).size;
+      const path=relative(root,full).split('\\').join('/');if(!allowed.test(path))continue;
+      const size=(await stat(full)).size;
       if(size>8_000_000)throw new Error(`Preview file is too large: ${path}`);out.push({path,file:full,size});
     }}
   };await walk(root);return out;
