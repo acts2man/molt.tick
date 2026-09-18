@@ -17,17 +17,28 @@ export interface AgentOptions {
   maxPages?:number; maxRepairs?:number; model?:Model; signal?:AbortSignal;
   onProgress?:(message:string)=>void|Promise<void>;
 }
-function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=360):unknown{
+const ESSENTIAL_STYLE_KEYS=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','opacity','overflow'] as const;
+function clipped(value:string|undefined,limit:number){if(!value)return value;return value.length>limit?value.slice(0,limit)+'…':value;}
+function compactElement(e:any){
+  const style=Object.fromEntries(ESSENTIAL_STYLE_KEYS.map(k=>[k,e.style?.[k]]).filter(([,v])=>v&&v!=='none'&&v!=='auto'&&v!=='normal'&&v!=='0px'));
+  return {tag:e.tag,text:clipped(e.text,260),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
+    ...(Object.keys(style).length?{style}:{}),...(e.src?{src:clipped(e.src,500)}:{}),...(e.href?{href:clipped(e.href,500)}:{}),
+    ...(e.svg?{svg:clipped(e.svg,4000)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{}),
+    ...(e.before?{before:e.before}:{}),...(e.after?{after:e.after}:{})};
+}
+function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
-  const desktopText=page.views[0]?.geometry.text??'';
-  const mediaQueries=[...new Set(page.views.flatMap(v=>v.geometry.mediaQueries))];
+  const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
+  const mediaQueries=[...new Set(page.views.flatMap(v=>v.geometry.mediaQueries))].slice(0,120);
+  const select=(elements:any[],limit:number)=>elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|h[1-6])$/.test(e.tag)||e.style?.['background-image']!=='none')
+    .slice(0,limit).map(e=>JSON.parse(remap(JSON.stringify(compactElement(e)))));
   return {route:page.route,title:page.title,file:routeFile(page.route),fullVisibleText:desktopText,mediaQueries,
     views:page.views.map((v,index)=>({
       viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,
-      ...(index>0&&v.geometry.text!==desktopText?{visibleTextOverride:v.geometry.text}:{}),
-      interactions:(v.interactions??[]).map(state=>({id:state.id,trigger:state.trigger,visibleText:state.geometry.text,pageHeight:state.geometry.height,
-        geometry:state.geometry.elements.filter(e=>e.text||e.src||e.svg||e.attributes?.['aria-expanded']||e.attributes?.['aria-selected']||/^(nav|dialog|details)$/.test(e.tag)).slice(0,Math.min(120,geometryLimit)).map(e=>JSON.parse(remap(JSON.stringify(e))))})),
-      geometry:v.geometry.elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav)$/.test(e.tag)||e.style['background-image']!=='none').slice(0,geometryLimit).map(e=>JSON.parse(remap(JSON.stringify(e)))),
+      ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
+      interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
+        geometry:select(state.geometry.elements,Math.min(70,geometryLimit))})),
+      geometry:select(v.geometry.elements,geometryLimit),
     }))};
 }
 function relevantFiles(files:FileChange[],page:EvidencePage):FileChange[]{
@@ -38,16 +49,18 @@ function relevantAssets(evidence:Evidence,page:EvidencePage){
   const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),interactions:(v.interactions??[]).map(i=>i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})))})));
   return evidence.assets.filter(a=>haystack.includes(a.original)).map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath}));
 }
-function prompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string):string{
-  const build=(limit:number)=>JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+function boundedFiles(files:FileChange[],page:EvidencePage,perFile=55000){
+  return relevantFiles(files,page).map(f=>({path:f.path,content:clipped(f.content,perFile)}));
+}
+export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string):string{
+  const build=(geometryLimit:number,textLimit:number,fileLimit:number)=>JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
-    fonts:evidence.fontFaces,assets:relevantAssets(evidence,page),
-    reference:pageContext(evidence,page,limit),currentFiles:relevantFiles(files,page),warnings:evidence.warnings,unresolvedIntegrations:evidence.blockers,integrationInventory:evidence.integrations.filter(i=>i.route===page.route)});
-  let text=build(360);
-  if(text.length>390000)text=build(220);
-  if(text.length>390000)text=build(120);
-  if(text.length>390000)throw new Error('Page evidence still exceeds the context budget after safe compaction; split this source into smaller page routes');
-  return text;
+    fonts:evidence.fontFaces.slice(0,80),assets:relevantAssets(evidence,page),
+    reference:pageContext(evidence,page,geometryLimit,textLimit),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,80),unresolvedIntegrations:evidence.blockers.slice(0,80),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,80)});
+  for(const [g,t,f] of [[240,50000,55000],[160,38000,38000],[100,26000,26000],[70,18000,18000]] as const){
+    const text=build(g,t,f); if(text.length<=330000)return text;
+  }
+  throw new Error('Page evidence could not be reduced below the model safety budget');
 }
 /** One browser-evidence contract, one shared React workspace, one measured repair loop. */
 export async function runReconstruction(options:AgentOptions):Promise<ReconstructionResult>{
@@ -66,7 +79,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const allowed=new Set(evidence.pages.map(p=>routeFile(p.route)));
   for(const page of evidence.pages){
     signal.throwIfAborted();await progress(`Reconstructing ${page.route} with shared components`);
-    const files=await snapshot(outDir),request={prompt:prompt(evidence,page,files,'Implement this page. Reuse shared components and styles; preserve previously implemented routes. Reproduce the observed menu, disclosure, accordion and tab states with accessible React behavior when interaction evidence is supplied.'),images:await referenceImages(page.views)};
+    const files=await snapshot(outDir),request={prompt:reconstructionPrompt(evidence,page,files,'Implement this page. Reuse shared components and styles; preserve previously implemented routes. Reproduce the observed menu, disclosure, accordion and tab states with accessible React behavior when interaction evidence is supplied.'),images:await referenceImages(page.views)};
     // A malformed first reply gets one self-correction opportunity with its exact validation error.
     let error='';let done=false;
     for(let attempt=0;attempt<2&&!done;attempt++){
@@ -83,7 +96,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const page=evidence.pages.find(p=>p.route===worst?.route)??evidence.pages[0];
       await progress(`Repairing ${page.route}; keeping passing pages and viewports intact`);
       const checks=best.views.filter(v=>v.route===page.route);
-      return model.complete({prompt:prompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Measured results: ${JSON.stringify(best)}. Previous attempts: ${JSON.stringify(history.map(a=>({round:a.round,accepted:a.accepted,summary:a.summary})))}. Fix compile errors first, then the worst mismatch. Do not change correct pages.`),images:await repairImages(checks)},signal);
+      return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Measured results: ${JSON.stringify(best)}. Previous attempts: ${JSON.stringify(history.map(a=>({round:a.round,accepted:a.accepted,summary:a.summary})))}. Fix compile errors first, then the worst mismatch. Do not change correct pages.`),images:await repairImages(checks)},signal);
     },
     apply:reply=>apply(outDir,reply.files,allowed),
     save:async(best,attempts)=>{await writeFile(reportPath,JSON.stringify({status:best.pass&&!evidence.blockers.length?'review':'needs-work',outDir,evaluation:best,attempts,warnings:evidence.warnings,blockers:evidence.blockers,usage:model.usage},null,2));},
