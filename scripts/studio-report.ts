@@ -35,7 +35,9 @@ export function compactStudioReport(input:any){
   };
 }
 export function finalStudioEvent(report:any,handoff:any={}){
-  return {message:report?.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',report:compactStudioReport(report),
+  const handoffFailed=typeof handoff?.deploymentError==='string'||typeof handoff?.outputRepoError==='string';
+  const message=handoffFailed?'The reconstruction is saved, but its repository or live deployment needs attention.':report?.status==='review'?'Measured checks and delivery handoff passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.';
+  return {message,report:compactStudioReport(report),
     ...(handoff?.previewReady===true?{previewReady:true}:{}),
     ...(typeof handoff?.outputRepoUrl==='string'?{outputRepoUrl:clip(handoff.outputRepoUrl,500)}:{}),
     ...(typeof handoff?.outputRepoError==='string'?{outputRepoError:clip(handoff.outputRepoError,1000)}:{}),
