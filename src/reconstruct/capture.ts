@@ -61,7 +61,7 @@ export async function geometry(page: Page): Promise<Geometry> {
 /** Observe only bounded, reversible interaction states. Links, submit buttons and arbitrary clicks are excluded. */
 const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
- const name=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+ const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
  const out=[],seen=new Set();
  const push=(kind,el)=>{const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');if(!n||seen.has(key))return;seen.add(key);out.push({kind,name:n,controls});};
  for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const s=d.querySelector(':scope > summary');if(s)push('details',s);}
