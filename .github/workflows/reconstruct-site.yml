@@ -44,6 +44,7 @@ jobs:
           MOLT_REASONING_EFFORT: high
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MOLT_GITHUB_EXPORT_TOKEN: ${{ secrets.MOLT_GITHUB_EXPORT_TOKEN }}
           MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
           MOLT_MAX_MODEL_CALLS: '24'
           MOLT_AI_MAX_TOKENS: '16000'
