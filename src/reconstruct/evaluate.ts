@@ -19,7 +19,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     if(index<0){problems.push(`Missing heading: ${original.text}`);continue;}
     const actual=headings.splice(index,1)[0];
     const mismatches=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
-    for(const property of ['font-size','font-weight','line-height'])if(original.style[property]!==actual.style[property])mismatches.push(property);
+    for(const property of ['font-family','font-size','font-weight','line-height','letter-spacing'])if(original.style[property]!==actual.style[property])mismatches.push(property);
     if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
   }
   if(Math.abs(source.height-candidate.height)>Math.max(3,source.height*0.005))problems.push(`Page height differs: source ${source.height}px, generated ${candidate.height}px`);
