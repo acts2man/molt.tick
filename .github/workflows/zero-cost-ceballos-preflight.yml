@@ -12,6 +12,7 @@ on:
       - 'scripts/runner-callback.ts'
       - 'scripts/studio-report.ts'
       - 'scripts/ceballos-zero-cost-preflight.ts'
+      - 'scripts/delivery-zero-cost-preflight.ts'
       - '.github/workflows/reconstruct-site.yml'
       - '.github/workflows/zero-cost-ceballos-preflight.yml'
   push:
@@ -71,5 +72,37 @@ jobs:
             !zero-cost-preflight/**/*.woff2
             !zero-cost-preflight/**/*.ttf
             !zero-cost-preflight/**/*.otf
+          retention-days: 7
+          if-no-files-found: warn
+
+  delivery:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MOLT_GITHUB_EXPORT_TOKEN: ${{ secrets.MOLT_GITHUB_EXPORT_TOKEN }}
+      MOLT_NETLIFY_AUTH_TOKEN: ${{ secrets.MOLT_NETLIFY_AUTH_TOKEN }}
+      MOLT_NETLIFY_TEAM_SLUG: ${{ secrets.MOLT_NETLIFY_TEAM_SLUG }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install engine
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prove GitHub + Netlify delivery without provider/model usage
+        env:
+          OPENAI_API_KEY: ''
+          ANTHROPIC_API_KEY: ''
+        run: ./node_modules/.bin/tsx scripts/delivery-zero-cost-preflight.ts
+      - name: Preserve delivery proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero-cost-delivery-preflight
+          path: delivery-zero-cost-preflight/
           retention-days: 7
           if-no-files-found: warn
