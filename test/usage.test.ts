@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { usageRecord,usageSummary } from '../src/reconstruct/usage.js';
 test('Astra estimate uses actual input/cache/output and does not double-count reasoning',()=>{const r=usageRecord(1,'openai','gpt-6-astra',{input_tokens:100000,input_tokens_details:{cached_tokens:20000},output_tokens:10000,output_tokens_details:{reasoning_tokens:5000}},'completed');assert.equal(r.estimatedUsd,1.32);});
 test('large contexts use the documented long-context rates',()=>{const r=usageRecord(1,'openai','gpt-6-astra',{input_tokens:300000,output_tokens:10000},'completed');assert.equal(r.estimatedUsd,6.75);});
+test('Sol, Terra, and Luna use their documented standard rates',()=>{
+ const usage={input_tokens:100000,input_tokens_details:{cached_tokens:20000},output_tokens:10000};
+ assert.equal(usageRecord(1,'openai','gpt-5.6-sol',usage,'completed').estimatedUsd,.528);
+ assert.equal(usageRecord(1,'openai','gpt-5.6-terra',usage,'completed').estimatedUsd,.276);
+ assert.equal(usageRecord(1,'openai','gpt-5.6-luna',usage,'completed').estimatedUsd,.0276);
+});
 test('unreported failures and unknown model pricing are not marked free',()=>{assert.equal(usageRecord(1,'openai','gpt-6-astra',null,'transport-error').estimatedUsd,null);assert.equal(usageRecord(1,'anthropic','other',{input_tokens:10,output_tokens:10},'end_turn').estimatedUsd,null);assert.equal(usageSummary([usageRecord(1,'openai','gpt-6-astra',null,'error')]).complete,false);});
 test('invalid provider usage does not fabricate a charge',()=>{for(const value of [-1,Infinity,NaN])assert.equal(usageRecord(1,'openai','gpt-6-astra',{input_tokens:value,output_tokens:10},'response').reported,false);assert.equal(usageRecord(1,'openai','gpt-6-astra',{input_tokens:10,input_tokens_details:{cached_tokens:20},output_tokens:10},'response').estimatedUsd,null);});
 test('usage records never include payloads or credentials',()=>{const record=usageRecord(1,'openai','gpt-6-astra',{input_tokens:100,output_tokens:100,key:'private',prompt:'secret'},'completed');assert.ok(!JSON.stringify(record).includes('private'));assert.ok(!JSON.stringify(record).includes('secret'));});
