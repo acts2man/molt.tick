@@ -37,7 +37,7 @@ export function sourcePages(source: string, text: string): string[] {
 export interface Settings { provider: 'openai' | 'anthropic'; model: string; configuredAt: string; accessChecked: boolean }
 export interface Job {
   id: string; owner: string; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
-  model: string; reasoningEffort: 'low'|'medium'|'high'; outputRepo: string; outputRepoUrl?: string; outputRepoError?: string;
+  model: string; reasoningEffort: 'low'|'medium'|'high'; outputRepo: string; outputRepoUrl?: string; outputRepoError?: string; previewReady?: boolean;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
   report?: any; usage?: any; error?: string;
