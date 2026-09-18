@@ -37,9 +37,10 @@ async function studio(path:string,init:RequestInit={}):Promise<Response>{
   throw new Error(last||'Studio callback failed.');
 }
 function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
-async function progress(message:string,extra:object={}):Promise<void>{
+async function progress(message:string,extra:object={},required=true):Promise<void>{
   const clean=redacted(message);console.log(clean);
-  await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,...extra})});
+  try{await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,...extra})});}
+  catch(error){const note='Studio callback warning: '+redacted(error instanceof Error?error.message:String(error));console.warn(note);if(required)throw error;}
 }
 function pathIn(root:string,file:string):string{
   if(file.startsWith('/')||file.includes('\\')||file.split('/').some(p=>!p||p.startsWith('.')))throw new Error('Unsafe saved-page path');
@@ -98,8 +99,12 @@ try{
     for(const f of manifest.files){if(f.size>4_000_000||(total+=f.size)>50_000_000)throw new Error('Bundle size limit exceeded');const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});const bytes=await (await studio(`/bundle?file=${encodeURIComponent(f.path)}`)).arrayBuffer();if(bytes.byteLength!==f.size)throw new Error('Bundle file size mismatch');await writeFile(dest,Buffer.from(bytes));}
   }
   liveModel=modelFromEnv();
-  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message)});
-  await progress('Preparing comparison images and the retained React source.');
+  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
+  // Checkpoint the expensive work before any nonessential callback, preview, or export step.
+  await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
+  await writeFile(join(artifacts,'report.json'),JSON.stringify(result,null,2));
+  await writeFile(join(artifacts,'READ-ME.txt'),'This is actual Molt output. Review report.json before using it. Passing pixel metrics do not migrate form backends, identity, payment services or other integrations. The downloadable artifact excludes font binaries; obtain any required fonts from their original authorized source. The runner retained the best measured React source, not a claimed universally exact result.\n');
+  await progress('Core React reconstruction checkpointed; preparing review assets.',{},false);
   const report=JSON.parse(JSON.stringify(result));
   for(let i=0;i<report.evaluation.views.length;i++){
     const view=report.evaluation.views[i];view.sourceImage=view.source?await preview(view.source,`view-${i}-source.png`):null;view.candidateImage=view.candidate?await preview(view.candidate,`view-${i}-react.png`):null;view.diffImage=view.diff?await preview(view.diff,`view-${i}-diff.png`):null;
@@ -110,19 +115,21 @@ try{
       state.diffImage=state.diff?await preview(state.diff,`${prefix}-diff.png`):null;
     }
   }
-  await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
-  try{await uploadInteractivePreview(result.outDir);}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)));}
+  await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
+  const finalExtras:{previewReady?:boolean;outputRepoUrl?:string;outputRepoError?:string}={};
+  try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
   try{
-    await progress(`Publishing retained React source to acts2man/${job.outputRepo}`);
+    await progress(`Publishing retained React source to acts2man/${job.outputRepo}`,{},false);
     const published=await publishOutputRepository(result.outDir,'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
-    await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url});
+    finalExtras.outputRepoUrl=published.url;
+    await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url},false);
   }catch(exportError){
     const outputRepoError='React source was built, but GitHub repository export failed: '+redacted(exportError instanceof Error?exportError.message:String(exportError));
-    await progress(outputRepoError,{outputRepoError});
+    finalExtras.outputRepoError=outputRepoError;
+    await progress(outputRepoError,{outputRepoError},false);
   }
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
-  await writeFile(join(artifacts,'READ-ME.txt'),'This is actual Molt output. Review report.json before using it. Passing pixel metrics do not migrate form backends, identity, payment services or other integrations. The downloadable artifact excludes font binaries; obtain any required fonts from their original authorized source. The runner retained the best measured React source, not a claimed universally exact result.\n');
-  await progress(result.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',{report});
+  await progress(result.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',{report,...finalExtras});
   if(result.status!=='review')process.exitCode=2;
 }catch(error){
   const message=redacted(error instanceof Error?error.message:String(error));
