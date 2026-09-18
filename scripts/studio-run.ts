@@ -6,7 +6,8 @@ import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
-import { publishOutputRepository, preflightOutputRepository } from './publish-output.js';
+import { reserveOutputRepository, publishReservedOutputRepository } from './publish-output.js';
+import { preflightNetlify, createNetlifySite, configureContinuousNetlifyDeploy } from './publish-netlify.js';
 import { finalStudioEvent } from './studio-report.js';
 import { runnerFetch } from './runner-callback.js';
 let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
@@ -29,7 +30,7 @@ async function identityToken(force=false):Promise<string>{
 async function studio(path:string,init:RequestInit={}):Promise<Response>{
   return runnerFetch({origin,id,path,init,getToken:async force=>{if(force)runnerIdentityCache=undefined;return identityToken(force);}});
 }
-function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
+function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN','MOLT_GITHUB_EXPORT_TOKEN','MOLT_NETLIFY_AUTH_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
 async function progress(message:string,extra:object={},required=true):Promise<void>{
   const clean=redacted(message);console.log(clean);
   try{await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,...extra})});}
@@ -88,8 +89,9 @@ try{
   runnerIdentityCache=undefined;
   await progress('Zero-cost preflight: fresh runner identity verified.');
   await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
-  const plannedRepo=await preflightOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
-  await progress(`Zero-cost preflight passed. Output will publish to ${plannedRepo.repository}; no model usage has occurred yet.`);
+  const plannedRepo=await reserveOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+  await preflightNetlify(process.env.MOLT_NETLIFY_TEAM_SLUG??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+  await progress(`Zero-cost preflight passed. Reserved ${plannedRepo.repository} and verified Netlify hosting access; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url});
   const requestedCallCap=Math.min(24,Math.max(2,job.maxPages*2+job.maxRepairs));
   process.env.MOLT_MAX_MODEL_CALLS=String(requestedCallCap);
   await progress(`Paid-model guard armed: at most ${requestedCallCap} model calls for this scope.`);
@@ -118,17 +120,23 @@ try{
     }
   }
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
-  const finalExtras:{previewReady?:boolean;outputRepoUrl?:string;outputRepoError?:string}={};
+  const finalExtras:{previewReady?:boolean;outputRepoUrl?:string;outputRepoError?:string;liveSiteUrl?:string;liveSiteAdminUrl?:string;deploymentError?:string}={outputRepoUrl:plannedRepo.url};
   try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
   try{
-    await progress(`Publishing retained React source to acts2man/${job.outputRepo}`,{},false);
-    const published=await publishOutputRepository(result.outDir,'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+    await progress(`Publishing retained React source to ${plannedRepo.repository}`,{},false);
+    const published=await publishReservedOutputRepository(result.outDir,plannedRepo.repository,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
     finalExtras.outputRepoUrl=published.url;
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
-    await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url},false);
+    await progress(`GitHub repository published: ${published.repository}`,{outputRepoUrl:published.url},false);
+    await progress('Creating the connected Netlify production site.',{},false);
+    const site=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',published.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+    const deployed=await configureContinuousNetlifyDeploy(result.outDir,published.repository,site,process.env.MOLT_GITHUB_EXPORT_TOKEN??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+    finalExtras.liveSiteUrl=deployed.url;finalExtras.liveSiteAdminUrl=deployed.adminUrl;
+    await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
+    await progress(`Live site deployed and connected: ${deployed.url}`,{liveSiteUrl:deployed.url,liveSiteAdminUrl:deployed.adminUrl},false);
   }catch(exportError){
-    const outputRepoError='React source was built, but GitHub repository export failed: '+redacted(exportError instanceof Error?exportError.message:String(exportError));
-    finalExtras.outputRepoError=outputRepoError;
+    const outputRepoError='React source was built, but the repository/deployment handoff failed: '+redacted(exportError instanceof Error?exportError.message:String(exportError));
+    finalExtras.outputRepoError=outputRepoError;finalExtras.deploymentError=outputRepoError;
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(outputRepoError,{outputRepoError},false);
   }
