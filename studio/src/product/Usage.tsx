@@ -6,6 +6,7 @@ export function UsagePage({jobs,connected}:{jobs:Job[];connected:boolean}){
  const input=recorded.reduce((n,j)=>n+((j.report?.usage??j.usage).inputTokens??0),0);
  const output=recorded.reduce((n,j)=>n+((j.report?.usage??j.usage).outputTokens??0),0);
  const calls=recorded.reduce((n,j)=>n+((j.report?.usage??j.usage).calls??0),0);
+ const cached=recorded.reduce((n,j)=>n+((j.report?.usage??j.usage).records??[]).reduce((m:any,r:any)=>m+(r.cachedInputTokens??0),0),0);
  const estimated=recorded.reduce((n,j)=>n+((j.report?.usage??j.usage).costEstimate?.estimatedUsd??0),0);
  const priced=recorded.filter(j=>(j.report?.usage??j.usage).costEstimate?.complete).length;
  return <>
@@ -21,7 +22,7 @@ export function UsagePage({jobs,connected}:{jobs:Job[];connected:boolean}){
   <div className="usage-summary">
    <div><small>Reported model calls</small><strong>{connected?calls.toLocaleString():'--'}</strong><p>Retained reports, including reported failures.</p></div>
    <div><small>Reported input tokens</small><strong>{connected?input.toLocaleString():'--'}</strong><p>Source evidence and requests, not page counts.</p></div>
-   <div><small>Reported output tokens</small><strong>{connected?output.toLocaleString():'--'}</strong><p>Provider-reported output, including applicable reasoning usage.</p></div>
+   <div><small>Reported output tokens</small><strong>{connected?output.toLocaleString():'--'}</strong><p>Provider-reported output, including applicable reasoning usage.</p></div><div><small>Cached input tokens</small><strong>{connected?cached.toLocaleString():'--'}</strong><p>Lower-cost reused context when the provider reports it.</p></div>
    <div><small>Estimated API spend</small><strong>{connected?'$'+estimated.toFixed(2):'--'}</strong><p>{priced} fully priced job{priced===1?'':'s'} in retained history.</p></div>
   </div>
   <p className="readiness-note">{connected?`${recorded.length} jobs with reports in the retrieved history.`:'Connect the owner workspace to read recorded usage.'} Missing or unfinished reports are not zero-cost proof. Use the provider dashboard for authoritative account charges.</p>
@@ -32,6 +33,14 @@ export function UsagePage({jobs,connected}:{jobs:Job[];connected:boolean}){
     <small className="fine-print">{u.costEstimate?.complete?'All retained call records were priced.':'Some usage may be missing or unpriced.'} Estimates use standard API rates and exclude compute, storage, fast-mode/regional adjustments and taxes; the provider invoice is authoritative.</small>
    </div>;})}
   </section>}
+  <section className="panel issues-panel">
+   <h2>Model cost reference</h2>
+   <p className="readiness-note">Standard API rates under 272K input tokens. These are reference rates, not a promise of what one site will cost.</p>
+   <div className="wizard-summary"><div><dt>GPT-5.6 Sol</dt><dd>$4 input / $20 output per 1M tokens · recommended default</dd></div></div>
+   <div className="wizard-summary"><div><dt>GPT-5.6 Terra</dt><dd>$2 input / $12 output per 1M tokens · lower-cost option</dd></div></div>
+   <div className="wizard-summary"><div><dt>GPT-5.6 Luna</dt><dd>$0.20 input / $1.20 output per 1M tokens · experimental low-cost option</dd></div></div>
+   <div className="wizard-summary"><div><dt>GPT-6 Astra</dt><dd>$10 input / $50 output per 1M tokens · reserve for hardest sites</dd></div></div>
+  </section>
   <h2>Preview a project estimate</h2>
   <CreditPlanner/>
   <p className="readiness-note">Planning only. Complexity is self-selected, not detected. In the customer product, a measured server-side assessment must generate a versioned quote before any credits are reserved.</p>
