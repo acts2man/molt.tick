@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { handle, type Services, type Store } from '../server/app.ts';
-import { sourceUrl, sourcePages, safePath, newJob } from '../server/contracts.ts';
+import { HttpError, sourceUrl, sourcePages, safePath, newJob } from '../server/contracts.ts';
 import { seal, unseal, cookie, assertMutation, sealSecret } from '../server/security.ts';
 const SECRET='a-secure-test-only-value-012345678901234567890123456789';
 const ORIGIN='https://moltick.netlify.app';
@@ -11,9 +11,9 @@ function setup(){
   const map=new Map<string,any>();const store:Store={get:async(k)=>map.get(k)??null,setJSON:async(k,v)=>{map.set(k,structuredClone(v));},set:async(k,v)=>{map.set(k,v);},list:async({prefix})=>({blobs:[...map.keys()].filter(k=>k.startsWith(prefix)).map(key=>({key}))}),delete:async(k)=>{map.delete(k);}};
   const calls:any[]=[];
   map.set('auth/owner-binding-v1',{userId:USER,email:'owner@example.test',createdAt:new Date().toISOString()});
-  map.set('integrations/owner/github-v1',{ciphertext:sealSecret('github_pat_test_not_real_0123456789',SECRET),login:'acts2man',connectedAt:new Date().toISOString()});
+  map.set('integrations/owner/github-v1',{ciphertext:sealSecret('github_pat_test_not_real_0123456789',SECRET),login:'acts2man',connectedAt:new Date().toISOString(),deliveryVerifiedAt:new Date().toISOString(),deliveryVersion:1});
   map.set('integrations/owner/netlify-v1',{ciphertext:sealSecret('netlify_test_token_not_real_0123456789',SECRET),teamSlug:'test-team',teamName:'Test Team',connectedAt:new Date().toISOString()});
-  const services:Services={store,env:{secret:SECRET,origin:ORIGIN,context:'production'},authenticate:async req=>req.headers.get('authorization')?{id:USER,email:'owner@example.test'}:null,github:async(_t,p,init)=>{calls.push({p,init});if(p==='/user')return{login:'acts2man'};if(p.endsWith('/actions/secrets?per_page=100'))return{secrets:['OPENAI_API_KEY','MOLT_AI_MODEL','MOLT_GITHUB_EXPORT_TOKEN','MOLT_NETLIFY_AUTH_TOKEN','MOLT_NETLIFY_TEAM_SLUG'].map(name=>({name}))};if(p.endsWith('/actions/workflows/reconstruct-site.yml'))return{state:'active'};if(p.includes('dispatches'))return null;if(p.includes('workflows?'))return{workflows:[]};return{permissions:{push:true}};},identifyRunner:async()=>({runId:123}),saveSecrets:async()=>{},checkProvider:async()=>{},checkNetlify:async()=>({teamSlug:'test-team',teamName:'Test Team'})};
+  const services:Services={store,env:{secret:SECRET,origin:ORIGIN,context:'production'},authenticate:async req=>req.headers.get('authorization')?{id:USER,email:'owner@example.test'}:null,github:async(_t,p,init)=>{calls.push({p,init});if(p==='/user')return{login:'acts2man'};if(p.endsWith('/actions/secrets?per_page=100'))return{secrets:['OPENAI_API_KEY','MOLT_AI_MODEL','MOLT_GITHUB_EXPORT_TOKEN','MOLT_NETLIFY_AUTH_TOKEN','MOLT_NETLIFY_TEAM_SLUG'].map(name=>({name}))};if(p.endsWith('/actions/workflows/reconstruct-site.yml'))return{state:'active'};if(p.includes('dispatches'))return null;if(p.includes('workflows?'))return{workflows:[]};return{permissions:{push:true}};},identifyRunner:async()=>({runId:123}),saveSecrets:async()=>{},checkProvider:async()=>{},checkGithubDelivery:async()=>({verifiedAt:new Date().toISOString()}),checkNetlify:async()=>({teamSlug:'test-team',teamName:'Test Team'})};
   const session=seal({token:'github_pat_test_not_real_0123456789',login:'acts2man',expires:Date.now()+100000},SECRET);
   const req=(path:string,method='GET',body?:any,authenticated=true)=>new Request(ORIGIN+'/api/molt/'+path,{method,headers:{origin:ORIGIN,'x-molt-request':'1','content-type':'application/json',...(authenticated?{authorization:'Bearer supabase-test-session'}:{})},...(body?{body:JSON.stringify(body)}:{})});
   return{map,services,calls,req};
@@ -111,4 +111,21 @@ test('runner handoff preserves repository and live Netlify URLs',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
  await handle(s.req('runner/'+ID+'/events','POST',{message:'handoff',outputRepoUrl:'https://github.com/acts2man/example-com-react',liveSiteUrl:'https://example-com-react.netlify.app',liveSiteAdminUrl:'https://app.netlify.com/sites/example-com-react'}),s.services);
  const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.outputRepoUrl,'https://github.com/acts2man/example-com-react');assert.equal(job.liveSiteUrl,'https://example-com-react.netlify.app');
+});
+
+test('old GitHub connections are not run-ready until delivery permissions are verified',async()=>{
+ const s=setup();const record=s.map.get('integrations/owner/github-v1');delete record.deliveryVerifiedAt;delete record.deliveryVersion;s.map.set('integrations/owner/github-v1',record);
+ const settings=await (await handle(s.req('settings'),s.services)).json();assert.equal(settings.githubDeliveryReady,false);assert.equal(settings.ready,false);
+ const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);
+ assert.equal(r.status,409);assert.match(await r.text(),/Verify GitHub delivery permissions/);assert.equal(s.calls.filter(c=>c.p.includes('dispatches')).length,0);
+});
+test('GitHub delivery verification upgrades the stored connection before any job is submitted',async()=>{
+ const s=setup();const record=s.map.get('integrations/owner/github-v1');delete record.deliveryVerifiedAt;delete record.deliveryVersion;s.map.set('integrations/owner/github-v1',record);
+ const r=await handle(s.req('github-delivery-check','POST'),s.services);assert.equal(r.status,200);
+ const stored=s.map.get('integrations/owner/github-v1');assert.equal(stored.deliveryVersion,1);assert.ok(stored.deliveryVerifiedAt);
+});
+test('failed GitHub delivery verification clears readiness and returns the exact verification error',async()=>{
+ const s=setup();s.services.checkGithubDelivery=async()=>{throw new HttpError(409,'GitHub delivery verification failed at workflow file write. Set Workflows to Read & write.');};
+ const r=await handle(s.req('github-delivery-check','POST'),s.services);assert.equal(r.status,409);assert.match(await r.text(),/Workflows to Read & write/);
+ const stored=s.map.get('integrations/owner/github-v1');assert.equal(stored.deliveryVerifiedAt,undefined);assert.equal(stored.deliveryVersion,undefined);
 });
