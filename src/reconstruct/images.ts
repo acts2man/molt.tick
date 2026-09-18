@@ -22,7 +22,21 @@ function overview(image:PNG):PNG {
     image.data.copy(out.data,(y*width+x)*4,source,source+4);
   }return out;
 }
-const input=(label:string,png:PNG):ImageInput=>({label,base64:PNG.sync.write(png).toString('base64')});
+function compactPng(png:PNG,maxBytes=900_000):Buffer{
+  let current=png,bytes=PNG.sync.write(current);
+  for(let attempt=0;bytes.length>maxBytes&&attempt<4;attempt++){
+    const scale=Math.max(0.45,Math.min(0.9,Math.sqrt(maxBytes/bytes.length)*0.92));
+    const width=Math.max(1,Math.round(current.width*scale)),height=Math.max(1,Math.round(current.height*scale));
+    const next=new PNG({width,height});
+    for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+      const source=(Math.min(current.height-1,Math.floor(y/scale))*current.width+Math.min(current.width-1,Math.floor(x/scale)))*4;
+      current.data.copy(next.data,(y*width+x)*4,source,source+4);
+    }
+    current=next;bytes=PNG.sync.write(current);
+  }
+  return bytes;
+}
+const input=(label:string,png:PNG):ImageInput=>({label,base64:compactPng(png).toString('base64')});
 export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[]>{
   const result:ImageInput[]=[];
   for(const v of views){const png=await loadPng(v.screenshot);
