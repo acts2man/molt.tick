@@ -122,7 +122,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         try{const w=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}`);workflow=w.state==='active';}catch{}
         const provider=settings?.provider??(names.includes('OPENAI_API_KEY')?'openai':names.includes('ANTHROPIC_API_KEY')?'anthropic':'openai');
         const keyPresent=names.includes(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY');
-        return json({provider,model:settings?.model??(provider==='openai'?'gpt-6-astra':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
+        return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
       }
       if(method==='POST') {
         const input=await body(req),provider=input.provider,model=String(input.model??'').trim(),apiKey=String(input.apiKey??'').trim();
