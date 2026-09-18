@@ -7,24 +7,34 @@ import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { publishOutputRepository } from './publish-output.js';
-let liveModel:Model|undefined,runnerToken:string|undefined;
+let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
 const artifacts=resolve('studio-artifacts');await mkdir(artifacts,{recursive:true});
-async function identityToken():Promise<string>{
-  if(runnerToken)return runnerToken;
+function jwtExpiry(token:string):number{
+  try{const payload=JSON.parse(Buffer.from(token.split('.')[1]??'','base64url').toString('utf8')) as {exp?:number};return Number.isFinite(payload.exp)?Number(payload.exp)*1000:0;}catch{return 0;}
+}
+async function identityToken(force=false):Promise<string>{
+  if(!force&&runnerIdentityCache&&runnerIdentityCache.expiresAt>Date.now()+60_000)return runnerIdentityCache.token;
   const endpoint=process.env.ACTIONS_ID_TOKEN_REQUEST_URL,secret=process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if(!endpoint||!secret)throw new Error('The workflow needs GitHub id-token: write permission.');
   const response=await fetch(`${endpoint}&audience=${encodeURIComponent(origin)}`,{headers:{Authorization:`Bearer ${secret}`},signal:AbortSignal.timeout(15000)});
   if(!response.ok)throw new Error('Could not obtain the runner identity.');
-  const data=await response.json() as {value:string};runnerToken=data.value;return runnerToken;
+  const data=await response.json() as {value:string};const expiresAt=jwtExpiry(data.value)||Date.now()+120_000;
+  runnerIdentityCache={token:data.value,expiresAt};return data.value;
 }
 async function studio(path:string,init:RequestInit={}):Promise<Response>{
-  const token=await identityToken();
-  const response=await fetch(`${origin}/api/molt/runner/${id}${path}`,{...init,redirect:'error',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${token}`,...init.headers}});
-  if(!response.ok)throw new Error(`Studio callback failed (HTTP ${response.status}): ${(await response.text()).slice(0,400)}`);
-  return response;
+  let last='';
+  for(let attempt=0;attempt<3;attempt++){
+    const token=await identityToken(attempt>0);
+    const response=await fetch(`${origin}/api/molt/runner/${id}${path}`,{...init,redirect:'error',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${token}`,...init.headers}});
+    if(response.ok)return response;
+    last=`Studio callback failed (HTTP ${response.status}): ${(await response.text()).slice(0,400)}`;
+    if(![401,403,429,500,502,503,504].includes(response.status)||attempt===2)break;
+    runnerIdentityCache=undefined;await new Promise(resolve=>setTimeout(resolve,350*(attempt+1)));
+  }
+  throw new Error(last||'Studio callback failed.');
 }
 function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
 async function progress(message:string,extra:object={}):Promise<void>{
