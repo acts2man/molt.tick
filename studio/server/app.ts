@@ -3,6 +3,7 @@ import { ACTIVE, BRANCH, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, S
 import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './security.ts';
 import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
+import { readSession } from './sessions.ts';
 
 export interface Store {
   get(key: string, options?: {type: 'json' | 'arrayBuffer'}): Promise<any>;
@@ -129,7 +130,20 @@ export async function handle(req: Request, services: Services): Promise<Response
       binding={userId:account.id,...(account.email?{email:account.email}:{}),createdAt:binding?.createdAt??new Date().toISOString()};
       await store.setJSON(OWNER_BINDING_KEY,binding);
     }
-    const integration=env.secret.length>=40?await githubIntegration(store,env):null;
+    let integration=env.secret.length>=40?await githubIntegration(store,env):null;
+    if(account&&binding?.userId===account.id&&!integration&&env.secret.length>=40){
+      const legacy=await readSession(req,store,env.secret);
+      if(legacy){
+        try{
+          const user=await gh(legacy.token,'/user');
+          if(String(user.login).toLowerCase()===OWNER){
+            const record:GithubIntegration={ciphertext:sealSecret(legacy.token,env.secret),login:OWNER,connectedAt:new Date().toISOString()};
+            await store.setJSON(GITHUB_INTEGRATION_KEY,record);
+            integration={token:legacy.token,record};
+          }
+        }catch{}
+      }
+    }
     if(method==='GET' && path[0]==='session'){
       await store.get('system/studio-health',{type:'json'});
       const authorized=!!account&&!!binding&&binding.userId===account.id,claimable=!!account&&!binding;
