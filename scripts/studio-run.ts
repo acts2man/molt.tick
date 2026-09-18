@@ -90,10 +90,11 @@ try{
   await progress('Zero-cost preflight: fresh runner identity verified.');
   await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
   const plannedRepo=await reserveOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
-  await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url},null,2));
-  await progress(`Reserved output repository: ${plannedRepo.repository}`,{outputRepoUrl:plannedRepo.url});
+  await progress(`Reserved output repository and proved workflow/secret access: ${plannedRepo.repository}`,{outputRepoUrl:plannedRepo.url});
   await preflightNetlify(process.env.MOLT_NETLIFY_TEAM_SLUG??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
-  await progress(`Zero-cost preflight passed. Reserved ${plannedRepo.repository} and verified Netlify hosting access; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url});
+  const plannedSite=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',plannedRepo.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+  await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url,reservedNetlifySite:plannedSite},null,2));
+  await progress(`Zero-cost preflight passed. Reserved ${plannedRepo.repository} and Netlify site ${plannedSite.name}; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url});
   const requestedCallCap=Math.min(24,Math.max(2,job.maxPages*2+job.maxRepairs));
   process.env.MOLT_MAX_MODEL_CALLS=String(requestedCallCap);
   await progress(`Paid-model guard armed: at most ${requestedCallCap} model calls for this scope.`);
@@ -130,9 +131,8 @@ try{
     finalExtras.outputRepoUrl=published.url;
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(`GitHub repository published: ${published.repository}`,{outputRepoUrl:published.url},false);
-    await progress('Creating the connected Netlify production site.',{},false);
-    const site=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',published.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
-    const deployed=await configureContinuousNetlifyDeploy(result.outDir,published.repository,site,process.env.MOLT_GITHUB_EXPORT_TOKEN??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+    await progress('Connecting the reserved Netlify production site to the generated repository.',{},false);
+    const deployed=await configureContinuousNetlifyDeploy(result.outDir,published.repository,plannedSite,process.env.MOLT_GITHUB_EXPORT_TOKEN??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
     finalExtras.liveSiteUrl=deployed.url;finalExtras.liveSiteAdminUrl=deployed.adminUrl;
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(`Live site deployed and connected: ${deployed.url}`,{liveSiteUrl:deployed.url,liveSiteAdminUrl:deployed.adminUrl},false);
