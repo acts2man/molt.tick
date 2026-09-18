@@ -28,7 +28,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
 export function emptyEvaluation(evidence:Evidence,issue:string):Evaluation{
   return {pass:false,issues:[issue],views:evidence.pages.flatMap(p=>p.views.map(v=>({route:p.route,viewport:v.viewport.name,score:null,worstBand:null,pass:false,issues:[issue],source:v.screenshot})))};
 }
-export async function evaluate(outDir:string,evidence:Evidence,directory:string,signal:AbortSignal,threshold=95,bandThreshold=85):Promise<Evaluation>{
+export async function evaluate(outDir:string,evidence:Evidence,directory:string,signal:AbortSignal,threshold=97,bandThreshold=92):Promise<Evaluation>{
   if(!Number.isFinite(threshold)||threshold<=0||threshold>100||!Number.isFinite(bandThreshold)||bandThreshold<=0||bandThreshold>100)throw new Error('Invalid visual acceptance thresholds');
   await mkdir(directory,{recursive:true});
   // A failed compilation must never reuse an earlier dist directory.
