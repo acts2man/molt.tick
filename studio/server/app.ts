@@ -5,6 +5,7 @@ import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkGithubDelivery, checkProvider, github, saveSecrets } from './github.ts';
 import { readSession } from './sessions.ts';
 import { checkNetlify } from './netlify.ts';
+import { createMediaSession, mediaCookie, readMediaSession } from './media-session.ts';
 
 export interface Store {
   get(key: string, options?: {type: 'json' | 'arrayBuffer'}): Promise<any>;
@@ -136,7 +137,12 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       throw new HttpError(404,'Runner route not found.');
     }
-    const account=await (services.authenticate??authenticateAccount)(req);
+    const mediaEligible=method==='GET'&&(path[0]==='preview'||(path[0]==='jobs'&&path[2]==='images'));
+    let account=await (services.authenticate??authenticateAccount)(req);
+    if(!account&&mediaEligible){
+      const media=readMediaSession(req,env.secret);
+      if(media)account={id:media.userId};
+    }
     let binding=await ownerBinding(store);
     if(account&&isConfiguredOwner(account,env)&&binding?.userId!==account.id){
       binding={userId:account.id,...(account.email?{email:account.email}:{}),createdAt:binding?.createdAt??new Date().toISOString()};
@@ -184,6 +190,9 @@ export async function handle(req: Request, services: Services): Promise<Response
     const owner=OWNER,token=integration?.token??null;
     const requiredGithub=()=>{if(!token)throw new HttpError(409,'Connect the GitHub workspace integration once. After that it is available on every device you sign into.');return token;};
     if(method==='POST' && path[0]==='disconnect'){await store.delete(GITHUB_INTEGRATION_KEY);return json({connected:false});}
+    if(method==='POST' && path[0]==='media-session'){
+      return json({ready:true},200,{'set-cookie':mediaCookie(createMediaSession(account.id,env.secret))});
+    }
     if(method==='POST' && path[0]==='github-delivery-check'){
       const current=integration;if(!current)throw new HttpError(409,'Connect GitHub before verifying delivery permissions.');
       try{
