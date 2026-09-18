@@ -28,6 +28,10 @@ export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[
   for(const v of views){const png=await loadPng(v.screenshot);
     result.push(input(`${v.viewport.name} complete source overview; native dimensions ${png.width}x${png.height}`,overview(png)));
     result.push(input(`${v.viewport.name} source y=0 at native resolution`,crop(png,0,1100)));
+    if(png.height>2200){
+      const middle=Math.max(0,Math.round(png.height/2)-550);
+      result.push(input(`${v.viewport.name} source middle y=${middle} at native resolution`,crop(png,middle,1100)));
+    }
     if(png.height>1100)result.push(input(`${v.viewport.name} source bottom y=${png.height-1100}`,crop(png,png.height-1100,1100)));
     for(const state of (v.interactions??[]).slice(0,2)){
       const opened=await loadPng(state.screenshot);
@@ -42,6 +46,7 @@ export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
     result.push(input(`${v.viewport} SOURCE complete overview`,overview(source)));
     result.push(input(`${v.viewport} SOURCE detail y=${y}`,crop(source,y,1100)));
     if(v.candidate){const target=await loadPng(v.candidate);result.push(input(`${v.viewport} CANDIDATE complete overview`,overview(target)));result.push(input(`${v.viewport} CANDIDATE detail y=${y}`,crop(target,y,1100)));}
+    if(v.diff){const diff=await loadPng(v.diff);result.push(input(`${v.viewport} DIFF heatmap detail y=${y}; bright pixels are mismatches`,crop(diff,y,1100)));}
     const failed=(v.interactions??[]).find(state=>!state.pass);
     if(failed){
       const opened=await loadPng(failed.source);
