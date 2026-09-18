@@ -24,6 +24,13 @@ test('sessions are encrypted, authenticated, owner-scoped and expiring',()=>{con
 test('cookie has security attributes',()=>{for(const flag of ['HttpOnly','Secure','SameSite=Strict','Path=/'])assert.ok(cookie('opaque').includes(flag));});
 test('cross-origin writes are denied',()=>{assert.throws(()=>assertMutation(new Request(ORIGIN,{method:'POST',headers:{origin:'https://evil.test','x-molt-request':'1'}})));});
 test('account session health never returns a credential and reports the shared workspace integration',async()=>{const s=setup();const r=await handle(s.req('session'),s.services);const text=await r.text();assert.ok(!text.includes('github_pat'));const data=JSON.parse(text);assert.equal(data.authenticated,true);assert.equal(data.authorized,true);assert.equal(data.connected,true);assert.equal(data.email,'owner@example.test');});
+test('legacy desktop GitHub session migrates into the account-bound workspace without re-entering the token',async()=>{
+ const s=setup();s.map.delete('integrations/owner/github-v1');
+ const legacy=seal({token:'github_pat_test_not_real_0123456789',login:'acts2man',expires:Date.now()+100000},SECRET);
+ const req=new Request(ORIGIN+'/api/molt/session',{headers:{authorization:'Bearer supabase-test-session',cookie:cookie(legacy)}});
+ const r=await handle(req,s.services);assert.equal(r.status,200);const info=await r.json();assert.equal(info.connected,true);
+ const stored=s.map.get('integrations/owner/github-v1');assert.ok(stored?.ciphertext);assert.ok(!stored.ciphertext.includes('github_pat_test_not_real'));
+});
 test('configured owner account automatically reclaims the existing owner workspace history',async()=>{
  const s=setup();s.map.delete('auth/owner-binding-v1');s.services.env.ownerUserId=USER;
  s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'needs-work'});
