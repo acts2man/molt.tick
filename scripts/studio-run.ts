@@ -46,8 +46,10 @@ async function preview(file:string,name:string):Promise<string|null>{
   }catch(error){console.warn(`Preview upload unavailable: ${redacted((error as Error).message)}`);return null;}
 }
 try{
-  const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;maxPages:number;maxRepairs:number};
-  await progress('Runner connected. Checking model configuration.');
+  const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;model:string;reasoningEffort:'low'|'medium'|'high';maxPages:number;maxRepairs:number};
+  if(job.model)process.env.MOLT_AI_MODEL=job.model;
+  if(job.reasoningEffort)process.env.MOLT_REASONING_EFFORT=job.reasoningEffort;
+  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning.`);
   if(!process.env.MOLT_AI_MODEL||!(process.env.MOLT_MODEL_PROVIDER==='anthropic'?process.env.ANTHROPIC_API_KEY:process.env.OPENAI_API_KEY))throw new Error('Model configuration is missing. Open Connections in Molt Studio.');
   let bundleDir:string|undefined;
   if(job.bundleId){
