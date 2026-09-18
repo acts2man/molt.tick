@@ -3,6 +3,7 @@ export const OWNER = 'acts2man';
 export const WORKFLOW = 'reconstruct-site.yml';
 export const BRANCH = 'main';
 export const ACTIVE = new Set(['dispatching', 'queued', 'running', 'cancelling']);
+export const OPENAI_JOB_MODELS = new Set(['gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-6-astra']);
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 export function uuid(value: string): string {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)) throw new HttpError(400, 'Invalid request identifier.');
@@ -36,6 +37,7 @@ export function sourcePages(source: string, text: string): string[] {
 export interface Settings { provider: 'openai' | 'anthropic'; model: string; configuredAt: string; accessChecked: boolean }
 export interface Job {
   id: string; owner: string; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
+  model: string; reasoningEffort: 'low'|'medium'|'high';
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
   report?: any; usage?: any; error?: string;
@@ -44,8 +46,10 @@ export function newJob(input: any, owner: string): Job {
   const id = uuid(input.id), source = sourceUrl(String(input.url || ''));
   const pages = sourcePages(source, String(input.pages || ''));
   const maxPages = Number(input.maxPages ?? 5), maxRepairs = Number(input.maxRepairs ?? 3);
+  const model=String(input.model??'gpt-5.6-sol').trim(), reasoningEffort=String(input.reasoningEffort??'medium') as Job['reasoningEffort'];
+  if (!/^[\w.:-]{1,100}$/.test(model) || !['low','medium','high'].includes(reasoningEffort)) throw new HttpError(400,'Invalid model selection.');
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 12 || !Number.isInteger(maxRepairs) || maxRepairs < 0 || maxRepairs > 6) throw new HttpError(400, 'Invalid reconstruction limits.');
   if (pages.length > maxPages) throw new HttpError(400, 'Your explicit page list exceeds the page limit.');
   const now = new Date().toISOString();
-  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
+  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), model, reasoningEffort, maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
 }

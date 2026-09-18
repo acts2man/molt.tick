@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { ACTIVE, BRANCH, HttpError, Job, OWNER, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
+import { ACTIVE, BRANCH, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
 import { assertMutation, cookie, runnerIdentity } from './security.ts';
 import { createSession, readSession, revokeSession } from './sessions.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
@@ -37,7 +37,7 @@ async function jobs(store: Store, owner: string): Promise<Job[]> {
   return rows.filter(Boolean).sort((a,b) => b.createdAt.localeCompare(a.createdAt));
 }
 function safeUsage(value:any):any {const clip=(v:unknown,n=2000)=>String(v??'').slice(0,n);return { calls:Number(value?.calls)||0,inputTokens:Number(value?.inputTokens)||0,outputTokens:Number(value?.outputTokens)||0,
-      records:Array.isArray(value?.records)?value.records.slice(0,200).map((r:any)=>({call:Number(r.call)||0,provider:clip(r.provider,30),model:clip(r.model,100),inputTokens:typeof r.inputTokens==='number'&&Number.isSafeInteger(r.inputTokens)&&r.inputTokens>=0?r.inputTokens:null,outputTokens:typeof r.outputTokens==='number'&&Number.isSafeInteger(r.outputTokens)&&r.outputTokens>=0?r.outputTokens:null,estimatedUsd:typeof r.estimatedUsd==='number'&&Number.isFinite(r.estimatedUsd)&&r.estimatedUsd>=0?r.estimatedUsd:null,reported:r.reported===true,outcome:clip(r.outcome,60),pricingReviewed:clip(r.pricingReviewed,30)})):[],
+      records:Array.isArray(value?.records)?value.records.slice(0,200).map((r:any)=>({call:Number(r.call)||0,provider:clip(r.provider,30),model:clip(r.model,100),inputTokens:typeof r.inputTokens==='number'&&Number.isSafeInteger(r.inputTokens)&&r.inputTokens>=0?r.inputTokens:null,cachedInputTokens:typeof r.cachedInputTokens==='number'&&Number.isSafeInteger(r.cachedInputTokens)&&r.cachedInputTokens>=0?r.cachedInputTokens:null,cacheWriteTokens:typeof r.cacheWriteTokens==='number'&&Number.isSafeInteger(r.cacheWriteTokens)&&r.cacheWriteTokens>=0?r.cacheWriteTokens:null,outputTokens:typeof r.outputTokens==='number'&&Number.isSafeInteger(r.outputTokens)&&r.outputTokens>=0?r.outputTokens:null,estimatedUsd:typeof r.estimatedUsd==='number'&&Number.isFinite(r.estimatedUsd)&&r.estimatedUsd>=0?r.estimatedUsd:null,reported:r.reported===true,outcome:clip(r.outcome,60),pricingReviewed:clip(r.pricingReviewed,30)})):[],
       costEstimate:value?.costEstimate?{estimatedUsd:typeof value.costEstimate.estimatedUsd==='number'&&Number.isFinite(value.costEstimate.estimatedUsd)?value.costEstimate.estimatedUsd:null,complete:value.costEstimate.complete===true,unpricedCalls:Number(value.costEstimate.unpricedCalls)||0,excludes:clip(value.costEstimate.excludes)}:null };}
 function safeReport(input: any): any {
   if (!input || !['review','needs-work'].includes(input.status) || !Array.isArray(input.evaluation?.views)) throw new HttpError(400, 'Invalid reconstruction report.');
@@ -137,8 +137,13 @@ export async function handle(req: Request, services: Services): Promise<Response
     if(path[0]==='jobs') {
       if(method==='GET' && path.length===1)return json({jobs:await jobs(store,owner)});
       if(method==='POST' && path.length===1) {
-        const input=await body(req);if(input.developmentTest!==true)throw new HttpError(400,'This runner is for owner development tests, not customer production jobs. Confirm the test scope in Studio.');const job=newJob(input,owner),key=dataKey(owner,job.id),existing=await store.get(key,{type:'json'});
-        if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
+        const input=await body(req);if(input.developmentTest!==true)throw new HttpError(400,'This runner is for owner development tests, not customer production jobs. Confirm the test scope in Studio.');
+        const configured=await store.get(`settings/${owner}`,{type:'json'}) as Settings|null;
+        const job=newJob(input,owner);
+        if(configured?.provider==='openai'&&!OPENAI_JOB_MODELS.has(job.model))throw new HttpError(400,'Choose one of the supported OpenAI reconstruction models.');
+        if(configured?.provider==='anthropic'&&job.model!==configured.model)throw new HttpError(400,'Anthropic jobs must use the model configured in Owner setup.');
+        const key=dataKey(owner,job.id),existing=await store.get(key,{type:'json'});
+        if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.model!==job.model||existing.reasoningEffort!==job.reasoningEffort||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
         const secrets=await gh(token,`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
