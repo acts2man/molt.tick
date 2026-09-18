@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { appendFile, readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
 
 export interface PublishResult { url:string; repository:string }
 
