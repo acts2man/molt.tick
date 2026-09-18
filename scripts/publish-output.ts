@@ -22,9 +22,15 @@ async function exists(owner:string,repo:string,token:string,cwd:string):Promise<
   try{await run('gh',['repo','view',`${owner}/${repo}`,'--json','name'],cwd,{GH_TOKEN:token});return true;}catch{return false;}
 }
 export async function publishOutputRepository(directory:string,owner:string,name:string,token:string):Promise<PublishResult>{
-  const repo=validRepo(name);
+  const requested=validRepo(name);
   if(!token||token.length<20)throw new Error('GitHub export token is missing. Reconnect Molt with repository creation permissions.');
-  if(await exists(owner,repo,token,directory))throw new Error(`GitHub repository ${owner}/${repo} already exists. Choose a different output repository name and run again.`);
+  let repo=requested;
+  if(await exists(owner,repo,token,directory)){
+    let found='';
+    for(let version=2;version<=30;version++){const candidate=validRepo(`${requested}-v${version}`);if(!(await exists(owner,candidate,token,directory))){found=candidate;break;}}
+    if(!found)throw new Error(`Could not find an available GitHub repository name after ${owner}/${requested}-v30.`);
+    repo=found;
+  }
   const ignore='\n# Molt excludes font binaries from generated repositories\n*.woff\n*.woff2\n*.ttf\n*.otf\nnode_modules/\ndist/\n';
   await appendFile(`${directory}/.gitignore`,ignore);
   const readmePath=`${directory}/README.md`;
