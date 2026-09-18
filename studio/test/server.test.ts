@@ -39,7 +39,7 @@ test('runner uploads an interactive preview and only the owner session can frame
  assert.equal((await handle(upload,s.services)).status,200);
  await handle(s.req('runner/'+ID+'/events','POST',{message:'preview ready',previewReady:true}),s.services);
  const r=await handle(s.req('preview/'+ID+'/'),s.services);
- assert.equal(r.status,200);assert.match(r.headers.get('content-type')??'',/text\\/html/);assert.equal(r.headers.get('x-frame-options'),'SAMEORIGIN');assert.match(r.headers.get('content-security-policy')??'',/frame-ancestors 'self'/);assert.match(await r.text(),/Preview/);
+ assert.equal(r.status,200);assert.match(r.headers.get('content-type')??'',/text\/html/);assert.equal(r.headers.get('x-frame-options'),'SAMEORIGIN');assert.match(r.headers.get('content-security-policy')??'',/frame-ancestors 'self'/);assert.match(await r.text(),/Preview/);
  assert.equal((await handle(s.req('preview/'+ID+'/','GET',undefined,false),s.services)).status,401);
 });
 test('image callback rejects HTML payloads',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/images/image.png','PUT',{html:'<script>alert(1)</script>'}),s.services);assert.equal(r.status,415);});
