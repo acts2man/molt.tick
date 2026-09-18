@@ -40,7 +40,7 @@ export async function reserveOutputRepository(directory:string,owner:string,name
 export async function publishReservedOutputRepository(directory:string,repository:string,token:string):Promise<PublishResult>{
   if(!token||token.length<20)throw new Error('GitHub export token is missing.');
   if(!/^acts2man\/[a-z0-9][a-z0-9._-]{0,99}$/i.test(repository))throw new Error('Invalid reserved output repository.');
-  const ignore='\n# Molt excludes font binaries from generated repositories\n*.woff\n*.woff2\n*.ttf\n*.otf\nnode_modules/\ndist/\n';
+  const ignore='\n# Generated repository hygiene\nnode_modules/\ndist/\n';
   await appendFile(`${directory}/.gitignore`,ignore);
   const readmePath=`${directory}/README.md`;
   let readme='';try{readme=await readFile(readmePath,'utf8');}catch{}
