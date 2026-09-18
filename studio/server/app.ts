@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { ACTIVE, BRANCH, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
-import { assertMutation, cookie, runnerIdentity } from './security.ts';
-import { createSession, readSession, revokeSession } from './sessions.ts';
+import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './security.ts';
+import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkProvider, github, saveSecrets } from './github.ts';
 
 export interface Store {
@@ -14,7 +14,7 @@ export interface Store {
 export interface Environment { secret: string; origin: string; context: string }
 export interface Services {
   store: Store; env: Environment; github?: typeof github;
-  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider;
+  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; authenticate?: typeof authenticateAccount;
 }
 const json = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(JSON.stringify(value), { status, headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra} });
 async function bytes(req: Request, limit: number): Promise<Uint8Array> {
@@ -33,6 +33,19 @@ const bundleKey = (owner: string, id: string) => `bundles/${owner}/${uuid(id)}`;
 const previewKey = (owner:string,id:string,path:string) => `previews/${owner}/${uuid(id)}/${safePath(path)}`;
 const previewType=(path:string)=>({html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',json:'application/json; charset=utf-8',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml',avif:'image/avif',ico:'image/x-icon',woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'}[path.split('.').pop()?.toLowerCase()??'']??'application/octet-stream');
 const fileKey = (base: string, path: string) => `${base}/files/${createHash('sha256').update(safePath(path)).digest('hex')}`;
+const OWNER_BINDING_KEY='auth/owner-binding-v1';
+const GITHUB_INTEGRATION_KEY='integrations/owner/github-v1';
+type OwnerBinding={userId:string;email?:string;createdAt:string};
+type GithubIntegration={ciphertext:string;login:string;connectedAt:string};
+async function ownerBinding(store:Store):Promise<OwnerBinding|null>{return await store.get(OWNER_BINDING_KEY,{type:'json'}) as OwnerBinding|null;}
+async function githubIntegration(store:Store,env:Environment):Promise<{token:string;record:GithubIntegration}|null>{
+  const record=await store.get(GITHUB_INTEGRATION_KEY,{type:'json'}) as GithubIntegration|null;if(!record)return null;
+  const token=unsealSecret(record.ciphertext,env.secret);if(!token)return null;return {token,record};
+}
+async function requireOwner(store:Store,user:AccountUser):Promise<OwnerBinding>{
+  const binding=await ownerBinding(store);if(!binding)throw new HttpError(403,'This Molt account has not been linked to the owner workspace yet. Connect the GitHub owner integration once to claim it.');
+  if(binding.userId!==user.id)throw new HttpError(403,'This Molt account is not authorized for the owner workspace.');return binding;
+}
 async function deletePrefix(store:Store,prefix:string):Promise<void>{
   const {blobs}=await store.list({prefix});for(const blob of blobs)await store.delete(blob.key);
 }
