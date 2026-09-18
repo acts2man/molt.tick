@@ -52,15 +52,46 @@ function relevantAssets(evidence:Evidence,page:EvidencePage){
 function boundedFiles(files:FileChange[],page:EvidencePage,perFile=55000){
   return relevantFiles(files,page).map(f=>({path:f.path,content:clipped(f.content,perFile)}));
 }
+function visionFirstContext(evidence:Evidence,page:EvidencePage){
+  const remap=(value:string|undefined)=>{let out=value??'';for(const asset of evidence.assets)if(out.includes(asset.original))out=out.split(asset.original).join(asset.publicPath);return clipped(out,260);};
+  const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a)$/.test(e.tag))
+    .slice(0,36).map(e=>({tag:e.tag,text:clipped(e.text,180),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),...(e.src?{src:remap(e.src)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{})}));
+  return {
+    route:page.route,title:page.title,file:routeFile(page.route),
+    fullVisibleText:clipped(page.views[0]?.geometry.text??'',14000),
+    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,outline:outline(v.geometry.elements),
+      ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,5000)}:{}),
+      interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500)}))}))
+  };
+}
 export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string):string{
+  const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number)=>JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
-    fonts:evidence.fontFaces.slice(0,80),assets:relevantAssets(evidence,page),
-    reference:pageContext(evidence,page,geometryLimit,textLimit),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,80),unresolvedIntegrations:evidence.blockers.slice(0,80),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,80)});
-  for(const [g,t,f] of [[240,50000,55000],[160,38000,38000],[100,26000,26000],[70,18000,18000]] as const){
-    const text=build(g,t,f); if(text.length<=330000)return text;
+    fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
+    reference:pageContext(evidence,page,geometryLimit,textLimit),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
+  for(const [g,t,f] of [[180,42000,42000],[110,28000,30000],[64,18000,20000],[36,12000,14000]] as const){
+    const text=build(g,t,f); if(text.length<=300000)return text;
   }
-  throw new Error('Page evidence could not be reduced below the model safety budget');
+  const visionFirst=JSON.stringify({
+    task:task+' The attached desktop, tablet and mobile screenshots are the primary visual authority. Implement from the screenshots plus this compact structural outline.',
+    sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+    editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
+    reference:visionFirstContext(evidence,page),
+    assets:assets.slice(0,100).map(a=>a.path),
+    fonts:evidence.fontFaces.slice(0,16).map(f=>clipped(f,900)),
+    currentFiles:boundedFiles(files,page,12000).slice(0,8),
+    warnings:evidence.warnings.slice(0,20),unresolvedIntegrations:evidence.blockers.slice(0,20),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,20)
+  });
+  if(visionFirst.length<=300000)return visionFirst;
+  return JSON.stringify({
+    task:task+' Use the attached screenshots as the primary visual authority. This source required an ultra-compact evidence fallback; prioritize visual fidelity, visible copy, responsive layout and local assets.',
+    sourceSite:evidence.site,route:page.route,file:routeFile(page.route),title:page.title,
+    visibleText:clipped(page.views[0]?.geometry.text??'',9000),
+    viewports:page.views.map(v=>({viewport:v.viewport,pageHeight:v.geometry.height})),
+    assets:assets.slice(0,60).map(a=>a.path),
+    currentFiles:boundedFiles(files,page,8000).slice(0,6)
+  });
 }
 /** One browser-evidence contract, one shared React workspace, one measured repair loop. */
 export async function runReconstruction(options:AgentOptions):Promise<ReconstructionResult>{

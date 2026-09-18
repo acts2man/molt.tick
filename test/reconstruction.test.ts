@@ -50,13 +50,17 @@ test('pre-aborted run starts no effects',async()=>{const c=new AbortController()
 
 test('large page evidence compacts below the provider safety budget',()=>{
   const style={display:'block','font-family':'Inter','font-size':'16px','line-height':'24px',padding:'24px',margin:'12px',color:'rgb(1, 2, 3)',background:'rgb(255,255,255)','background-image':'none',width:'1200px',height:'40px'};
-  const elements=Array.from({length:1400},(_,i)=>({key:String(i),tag:i%10===0?'section':'div',text:'Repeated visible website copy '.repeat(8)+i,x:0,y:i*40,width:1200,height:40,style,attributes:{}}));
-  const geometry={text:'Homepage text '.repeat(7000),title:'Large site',height:56000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:['(max-width: 768px)'],truncated:false};
+  const hugeSvg='<svg>'+('<path d="M0 0h10v10z"/>'.repeat(700))+'</svg>';
+  const pseudo={content:'"decorative"',background:'linear-gradient(red, blue)','box-shadow':('0 0 1px #000,'.repeat(400))};
+  const elements=Array.from({length:1400},(_,i)=>({key:String(i),tag:i%9===0?'svg':i%10===0?'section':'div',text:'Repeated visible website copy '.repeat(8)+i,x:0,y:i*40,width:1200,height:40,style,attributes:{'aria-label':'x'.repeat(200)},svg:i%9===0?hugeSvg:undefined,before:i%7===0?pseudo:undefined,after:i%11===0?pseudo:undefined}));
+  const geometry={text:'Homepage text '.repeat(9000),title:'Large site',height:56000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:Array.from({length:120},(_,i)=>'@font-face{font-family:F'+i+';src:url(https://example.com/'+('x'.repeat(800))+'.woff2)}'),mediaQueries:Array.from({length:180},(_,i)=>'(max-width: '+(300+i)+'px)'),truncated:false};
   const page={route:'/',url:'https://example.com/',title:'Large site',views:[{viewport:{name:'desktop',width:1440,height:900},screenshot:'source.png',geometry},{viewport:{name:'tablet',width:768,height:1024},screenshot:'tablet.png',geometry},{viewport:{name:'mobile',width:390,height:844},screenshot:'mobile.png',geometry}]};
-  const evidence:Evidence={site:'https://example.com',directory:'/tmp',pages:[page],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[]};
-  const text=reconstructionPrompt(evidence,page,[{path:'src/site.css',content:'a{display:block}'.repeat(20000)}],'Implement this page');
-  assert.ok(text.length<=330000,'compacted prompt was '+text.length+' chars');
+  const assets=Array.from({length:180},(_,i)=>({original:'https://example.com/assets/'+('very-long-original-'+i+'-').repeat(18)+'.png',file:'/tmp/'+i+'.png',publicPath:'/assets/'+i+'.png'}));
+  const evidence:Evidence={site:'https://example.com',directory:'/tmp',pages:[page],assets,fontFaces:geometry.fontFaces,warnings:Array(100).fill('warning '.repeat(80)),blockers:Array(100).fill('blocker '.repeat(80)),integrations:[]};
+  const text=reconstructionPrompt(evidence,page,[{path:'src/site.css',content:'a{display:block}'.repeat(30000)},{path:'src/components/Huge.tsx',content:'export const x="'+('y'.repeat(90000))+'"'}],'Implement this page');
+  assert.ok(text.length<=300000,'compacted prompt was '+text.length+' chars');
   assert.match(text,/Large site/);
+  assert.match(text,/screenshots|visual authority/i);
 });
 test('provider response must contain real files',()=>{assert.throws(()=>parseReply('{"summary":"done","files":[]}'));assert.equal(parseReply('```json\n{"summary":"x","files":[{"path":"src/site.css","content":"body{}"}]}\n```').files.length,1);});
 const reply:ModelReply={summary:'test',files:[change('export default()=> <main>Text</main>')]};
