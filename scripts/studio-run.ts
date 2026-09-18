@@ -90,6 +90,8 @@ try{
   await progress('Zero-cost preflight: fresh runner identity verified.');
   await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
   const plannedRepo=await reserveOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+  await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url},null,2));
+  await progress(`Reserved output repository: ${plannedRepo.repository}`,{outputRepoUrl:plannedRepo.url});
   await preflightNetlify(process.env.MOLT_NETLIFY_TEAM_SLUG??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
   await progress(`Zero-cost preflight passed. Reserved ${plannedRepo.repository} and verified Netlify hosting access; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url});
   const requestedCallCap=Math.min(24,Math.max(2,job.maxPages*2+job.maxRepairs));
