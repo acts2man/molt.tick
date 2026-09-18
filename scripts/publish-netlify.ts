@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 export interface NetlifySite { id:string; name:string; url:string; adminUrl:string }
@@ -18,9 +21,9 @@ async function run(command:string,args:string[],cwd:string,env:Record<string,str
     child.on('close',code=>code===0?resolve(out.trim()):reject(new Error(`${command} failed (exit ${code}): ${(err||out).trim().slice(0,1600)}`)));
   });
 }
-async function call(token:string,path:string,init:RequestInit={}):Promise<{status:number,data:any,text:string}>{
-  const response=await fetch(`https://api.netlify.com${path}`,{
-    ...init,redirect:'error',signal:AbortSignal.timeout(20000),
+async function call(token:string,path:string,init:RequestInit={},fetcher:typeof fetch=fetch):Promise<{status:number,data:any,text:string}>{
+  const response=await fetcher(`https://api.netlify.com${path}`,{
+    ...init,redirect:'error',signal:AbortSignal.timeout(30000),
     headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...init.headers}
   });
   const text=await response.text();let data:any=null;try{data=text?JSON.parse(text):null;}catch{}
@@ -48,6 +51,70 @@ export async function createNetlifySite(teamSlug:string,repoName:string,token:st
   }
   throw new Error('Could not find an available Netlify site name after 30 attempts.');
 }
+
+type DeployFile={path:string;absolute:string;sha:string};
+async function collectDeployFiles(root:string):Promise<DeployFile[]>{
+  const rows:DeployFile[]=[];
+  async function walk(directory:string,prefix=''):Promise<void>{
+    for(const entry of await readdir(directory,{withFileTypes:true})){
+      if(entry.isSymbolicLink())continue;
+      const relative=prefix?`${prefix}/${entry.name}`:entry.name,absolute=join(directory,entry.name);
+      if(entry.isDirectory())await walk(absolute,relative);
+      else if(entry.isFile()){
+        const body=await readFile(absolute);
+        rows.push({path:relative.split('\\').join('/'),absolute,sha:createHash('sha1').update(body).digest('hex')});
+      }
+    }
+  }
+  await walk(root);return rows;
+}
+export async function deployNetlifyDirectory(directory:string,siteId:string,token:string,fetcher:typeof fetch=fetch,wait:(ms:number)=>Promise<void>=ms=>new Promise(r=>setTimeout(r,ms))):Promise<{deployId:string}>{
+  if(!siteId||!token)throw new Error('Netlify direct deploy is missing its site ID or token.');
+  const files=await collectDeployFiles(directory);if(!files.length)throw new Error('Netlify direct deploy has no files to publish.');
+  const manifest:Record<string,string>={};for(const file of files)manifest['/'+file.path]=file.sha;
+  const created=await call(token,`/api/v1/sites/${encodeURIComponent(siteId)}/deploys`,{method:'POST',body:JSON.stringify({files:manifest})},fetcher);
+  if(created.status<200||created.status>=300)throw new Error(`Netlify deploy manifest failed (HTTP ${created.status}): ${created.text.slice(0,700)}`);
+  const deployId=String(created.data?.id??'');if(!deployId)throw new Error('Netlify deploy manifest did not return a deploy ID.');
+  const required=new Set(Array.isArray(created.data?.required)?created.data.required.map(String):[]);
+  for(const file of files){
+    if(!required.has(file.sha))continue;
+    const body=await readFile(file.absolute),encoded=file.path.split('/').map(encodeURIComponent).join('/');
+    const response=await fetcher(`https://api.netlify.com/api/v1/deploys/${encodeURIComponent(deployId)}/files/${encoded}`,{
+      method:'PUT',redirect:'error',signal:AbortSignal.timeout(30000),
+      headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/octet-stream'},body:new Uint8Array(body)
+    });
+    if(!response.ok)throw new Error(`Netlify file upload failed for ${file.path} (HTTP ${response.status}): ${(await response.text()).slice(0,500)}`);
+  }
+  for(let attempt=0;attempt<45;attempt++){
+    const status=await call(token,`/api/v1/deploys/${encodeURIComponent(deployId)}`,{},fetcher);
+    if(status.status<200||status.status>=300)throw new Error(`Netlify deploy status check failed (HTTP ${status.status}).`);
+    const state=String(status.data?.state??'');
+    if(state==='ready')return {deployId};
+    if(['error','failed'].includes(state))throw new Error(`Netlify deploy entered ${state} state: ${String(status.data?.error_message??'unknown error').slice(0,700)}`);
+    await wait(2000);
+  }
+  throw new Error('Timed out waiting for the Netlify API deploy to become ready.');
+}
+
+function deployScript():string{
+  return `import { createHash } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+const root=process.argv[2]||'dist',site=process.env.NETLIFY_SITE_ID,token=process.env.NETLIFY_AUTH_TOKEN;
+if(!site||!token)throw new Error('NETLIFY_SITE_ID and NETLIFY_AUTH_TOKEN are required.');
+const rows=[];
+async function walk(dir,prefix=''){for(const e of await readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink())continue;const rel=prefix?prefix+'/'+e.name:e.name,abs=join(dir,e.name);if(e.isDirectory())await walk(abs,rel);else if(e.isFile()){const b=await readFile(abs);rows.push({path:rel.split('\\\\').join('/'),abs,sha:createHash('sha1').update(b).digest('hex')});}}}
+await walk(root);if(!rows.length)throw new Error('No built files found.');
+async function req(path,init={}){const r=await fetch('https://api.netlify.com'+path,{...init,headers:{Authorization:'Bearer '+token,...init.headers}});const text=await r.text();let data=null;try{data=text?JSON.parse(text):null}catch{};if(!r.ok)throw new Error('Netlify API '+r.status+': '+text.slice(0,700));return data;}
+const files={};for(const f of rows)files['/'+f.path]=f.sha;
+const created=await req('/api/v1/sites/'+encodeURIComponent(site)+'/deploys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files})});
+const id=String(created?.id||'');if(!id)throw new Error('Netlify did not return a deploy ID.');
+const required=new Set(Array.isArray(created?.required)?created.required.map(String):[]);
+for(const f of rows){if(!required.has(f.sha))continue;const b=await readFile(f.abs),encoded=f.path.split('/').map(encodeURIComponent).join('/');await req('/api/v1/deploys/'+encodeURIComponent(id)+'/files/'+encoded,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:new Uint8Array(b)});}
+for(let i=0;i<45;i++){const d=await req('/api/v1/deploys/'+encodeURIComponent(id));if(d?.state==='ready'){console.log('Netlify production deploy ready:',id);process.exit(0);}if(['error','failed'].includes(String(d?.state)))throw new Error('Netlify deploy failed: '+String(d?.error_message||d?.state));await new Promise(r=>setTimeout(r,2000));}
+throw new Error('Timed out waiting for Netlify production deploy.');
+`;
+}
 function workflow():string{
   return `name: Deploy to Netlify
 on:
@@ -72,11 +139,11 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Build React site
         run: npm run build
-      - name: Deploy production site
+      - name: Deploy production site through Netlify API
         env:
           NETLIFY_AUTH_TOKEN: \${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: \${{ secrets.NETLIFY_SITE_ID }}
-        run: npx --yes netlify-cli@27.8.0 deploy --prod --dir=dist --site="$NETLIFY_SITE_ID" --auth="$NETLIFY_AUTH_TOKEN" --message="GitHub \${GITHUB_SHA}"
+        run: node .github/scripts/netlify-deploy.mjs dist
 `;
 }
 async function waitForRun(repo:string,commitSha:string,token:string,cwd:string):Promise<{url?:string}>{
@@ -108,8 +175,10 @@ export async function configureContinuousNetlifyDeploy(directory:string,reposito
   if(!githubToken||githubToken.length<20)throw new Error('GitHub export token is missing while configuring continuous deployment.');
   await run('gh',['secret','set','NETLIFY_AUTH_TOKEN','--repo',repository,'--body',netlifyToken],directory,{GH_TOKEN:githubToken});
   await run('gh',['secret','set','NETLIFY_SITE_ID','--repo',repository,'--body',site.id],directory,{GH_TOKEN:githubToken});
-  const encoded=Buffer.from(workflow(),'utf8').toString('base64');
-  const commitSha=await run('gh',['api',`repos/${repository}/contents/.github/workflows/netlify-deploy.yml`,'--method','PUT','--field','message=Connect generated site to Netlify','--field',`content=${encoded}`,'--jq','.commit.sha'],directory,{GH_TOKEN:githubToken});
+  const scriptEncoded=Buffer.from(deployScript(),'utf8').toString('base64');
+  await run('gh',['api',`repos/${repository}/contents/.github/scripts/netlify-deploy.mjs`,'--method','PUT','--field','message=Add Netlify API deploy helper','--field',`content=${scriptEncoded}`],directory,{GH_TOKEN:githubToken});
+  const workflowEncoded=Buffer.from(workflow(),'utf8').toString('base64');
+  const commitSha=await run('gh',['api',`repos/${repository}/contents/.github/workflows/netlify-deploy.yml`,'--method','PUT','--field','message=Connect generated site to Netlify','--field',`content=${workflowEncoded}`,'--jq','.commit.sha'],directory,{GH_TOKEN:githubToken});
   const runInfo=await waitForRun(repository,commitSha.trim(),githubToken,directory);
   await verifyLive(site.url);
   return {...site,workflowUrl:runInfo.url};
