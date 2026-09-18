@@ -34,7 +34,7 @@ try{
  await ctx.route('**/api/molt/session',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({connected:true,login:'acts2man',serverReady:true,repository:'acts2man/molt.tick',branch:'main'})}));
  await ctx.route('**/api/molt/settings',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({provider:'openai',model:'gpt-6-astra',keyPresent:false,modelConfigured:false,workflow:true,ready:false})}));
  await ctx.route('**/api/molt/jobs',r=>r.fulfill({contentType:'application/json',body:'{"jobs":[]}'}));
- await page.goto(host.origin+'/connections');await page.getByLabel('OpenAI model preset').waitFor();assert.equal(await page.getByLabel('Exact API model ID').inputValue(),'gpt-6-astra');
+ await page.goto(host.origin+'/connections');await page.getByLabel('OpenAI model preset').waitFor();assert.equal(await page.getByLabel('Exact API model ID').inputValue(),'gpt-5.6-sol');
  await page.screenshot({path:out+'/owner-setup-1440.png',fullPage:true});await ctx.close();
  assert.deepEqual(errors,[]);await writeFile(out+'/result.json',JSON.stringify({passed:true,viewports:[1440,768,390],routes,checks:['public landing','model preset','owner-only wizard','credit calculator including decimal input','local migration checklist','no overflow','keyboard dialog','no runtime errors'],boundary:'API data mocked. No real authentication, model charges, subscription payments, or client reconstruction quality was tested.'},null,2));
 }finally{await engine.close();await host.close();}
