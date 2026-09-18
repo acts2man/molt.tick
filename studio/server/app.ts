@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { ACTIVE, BRANCH, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
 import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './security.ts';
 import { authenticateAccount, type AccountUser } from './account-auth.ts';
-import { checkProvider, github, saveSecrets } from './github.ts';
+import { checkGithubDelivery, checkProvider, github, saveSecrets } from './github.ts';
 import { readSession } from './sessions.ts';
 import { checkNetlify } from './netlify.ts';
 
@@ -16,7 +16,7 @@ export interface Store {
 export interface Environment { secret: string; origin: string; context: string; ownerUserId?: string }
 export interface Services {
   store: Store; env: Environment; github?: typeof github;
-  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; checkNetlify?: typeof checkNetlify; authenticate?: typeof authenticateAccount;
+  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; checkGithubDelivery?: typeof checkGithubDelivery; checkNetlify?: typeof checkNetlify; authenticate?: typeof authenticateAccount;
 }
 const json = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(JSON.stringify(value), { status, headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra} });
 async function bytes(req: Request, limit: number): Promise<Uint8Array> {
@@ -41,7 +41,7 @@ const isConfiguredOwner=(account:AccountUser,env:Environment)=>env.ownerUserId==
 const GITHUB_INTEGRATION_KEY='integrations/owner/github-v1';
 const NETLIFY_INTEGRATION_KEY='integrations/owner/netlify-v1';
 type OwnerBinding={userId:string;email?:string;createdAt:string};
-type GithubIntegration={ciphertext:string;login:string;connectedAt:string};
+type GithubIntegration={ciphertext:string;login:string;connectedAt:string;deliveryVerifiedAt?:string;deliveryVersion?:number};
 type NetlifyIntegration={ciphertext:string;teamSlug:string;teamName:string;connectedAt:string};
 async function ownerBinding(store:Store):Promise<OwnerBinding|null>{return await store.get(OWNER_BINDING_KEY,{type:'json'}) as OwnerBinding|null;}
 async function githubIntegration(store:Store,env:Environment):Promise<{token:string;record:GithubIntegration}|null>{
@@ -173,14 +173,30 @@ export async function handle(req: Request, services: Services): Promise<Response
       const repo=await gh(token,`/repos/${REPOSITORY}`);if(!repo.permissions?.push)throw new HttpError(403,'This token must have write access to the Molt repository.');
       await gh(token,`/repos/${REPOSITORY}/actions/workflows?per_page=1`);
       await (services.saveSecrets??saveSecrets)(token,{MOLT_GITHUB_EXPORT_TOKEN:token});
+      let deliveryVerifiedAt:string|undefined,deliveryError:string|undefined;
+      try{deliveryVerifiedAt=(await (services.checkGithubDelivery??checkGithubDelivery)(token)).verifiedAt;}catch(e){deliveryError=(e as Error).message;}
       if(!binding)await store.setJSON(OWNER_BINDING_KEY,{userId:account.id,...(account.email?{email:account.email}:{}),createdAt:new Date().toISOString()} satisfies OwnerBinding);
-      await store.setJSON(GITHUB_INTEGRATION_KEY,{ciphertext:sealSecret(token,env.secret),login:OWNER,connectedAt:new Date().toISOString()} satisfies GithubIntegration);
-      return json({connected:true,login:user.login,accountBound:true});
+      const record:GithubIntegration={ciphertext:sealSecret(token,env.secret),login:OWNER,connectedAt:new Date().toISOString(),...(deliveryVerifiedAt?{deliveryVerifiedAt,deliveryVersion:1}:{})};
+      await store.setJSON(GITHUB_INTEGRATION_KEY,record);integration={token,record};
+      return json({connected:true,login:user.login,accountBound:true,deliveryReady:!!deliveryVerifiedAt,...(deliveryError?{deliveryError}:{})});
     }
     await requireOwner(store,account);
     const owner=OWNER,token=integration?.token??null;
     const requiredGithub=()=>{if(!token)throw new HttpError(409,'Connect the GitHub workspace integration once. After that it is available on every device you sign into.');return token;};
     if(method==='POST' && path[0]==='disconnect'){await store.delete(GITHUB_INTEGRATION_KEY);return json({connected:false});}
+    if(method==='POST' && path[0]==='github-delivery-check'){
+      const current=integration;if(!current)throw new HttpError(409,'Connect GitHub before verifying delivery permissions.');
+      try{
+        const checked=await (services.checkGithubDelivery??checkGithubDelivery)(current.token);
+        current.record.deliveryVerifiedAt=checked.verifiedAt;current.record.deliveryVersion=1;
+        await store.setJSON(GITHUB_INTEGRATION_KEY,current.record);integration=current;
+        return json({verified:true,verifiedAt:checked.verifiedAt});
+      }catch(e){
+        delete current.record.deliveryVerifiedAt;delete current.record.deliveryVersion;
+        await store.setJSON(GITHUB_INTEGRATION_KEY,current.record);integration=current;
+        throw e;
+      }
+    }
     if(method==='POST' && path[0]==='netlify-connect'){
       if(env.secret.length<40)throw new HttpError(503,'Secure workspace credential storage is not configured on this deployment.');
       const input=await body(req),hostingToken=String(input.token??'').trim(),teamSlug=String(input.teamSlug??'').trim();
@@ -210,7 +226,8 @@ export async function handle(req: Request, services: Services): Promise<Response
         const provider=settings?.provider??(names.includes('OPENAI_API_KEY')?'openai':names.includes('ANTHROPIC_API_KEY')?'anthropic':'openai');
         const keyPresent=names.includes(provider==='openai'?'OPENAI_API_KEY':'ANTHROPIC_API_KEY');
         const exportReady=names.includes('MOLT_GITHUB_EXPORT_TOKEN'),hostingReady=names.includes('MOLT_NETLIFY_AUTH_TOKEN')&&names.includes('MOLT_NETLIFY_TEAM_SLUG')&&!!hostingIntegration;
-        return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,exportReady,hostingReady,hostingTeam:hostingIntegration?.record.teamSlug??null,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow&&exportReady&&hostingReady,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
+        const githubDeliveryReady=integration?.record.deliveryVersion===1&&!!integration.record.deliveryVerifiedAt;
+        return json({provider,model:settings?.model??(provider==='openai'?'gpt-5.6-sol':''),keyPresent,modelConfigured:names.includes('MOLT_AI_MODEL'),workflow,exportReady,githubDeliveryReady,githubDeliveryVerifiedAt:integration?.record.deliveryVerifiedAt??null,hostingReady,hostingTeam:hostingIntegration?.record.teamSlug??null,permissionsError,ready:keyPresent&&names.includes('MOLT_AI_MODEL')&&workflow&&exportReady&&githubDeliveryReady&&hostingReady,configuredAt:settings?.configuredAt??null,accessChecked:settings?.accessChecked??false});
       }
       if(method==='POST') {
         const input=await body(req),provider=input.provider,model=String(input.model??'').trim(),apiKey=String(input.apiKey??'').trim();
@@ -234,6 +251,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(existing){if(existing.sourceUrl!==job.sourceUrl||JSON.stringify(existing.pages)!==JSON.stringify(job.pages)||existing.bundleId!==job.bundleId||existing.model!==job.model||existing.reasoningEffort!==job.reasoningEffort||existing.outputRepo!==job.outputRepo||existing.maxPages!==job.maxPages||existing.maxRepairs!==job.maxRepairs)throw new HttpError(409,'This request ID was already used for another website.');return json(existing);}
         const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'A reconstruction is already active. Finish or cancel it before starting another.');
         if(recent.filter(j=>Date.now()-Date.parse(j.createdAt)<3600000).length>=5)throw new HttpError(429,'This workspace allows five new jobs per hour to limit accidental usage.');
+        if(integration?.record.deliveryVersion!==1||!integration.record.deliveryVerifiedAt)throw new HttpError(409,'Verify GitHub delivery permissions in Owner Setup before starting a reconstruction. No model usage has occurred.');
         const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
         if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before starting a reconstruction.');
         if(!names.includes('MOLT_GITHUB_EXPORT_TOKEN'))throw new HttpError(409,'Reconnect the GitHub owner workspace once so Molt can create the output React repository.');
