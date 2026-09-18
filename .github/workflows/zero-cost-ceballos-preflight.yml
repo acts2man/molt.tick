@@ -1,0 +1,69 @@
+name: Zero-cost Ceballos preflight
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/reconstruct/**'
+      - 'scripts/studio-run.ts'
+      - 'scripts/studio-finalize.ts'
+      - 'scripts/runner-callback.ts'
+      - 'scripts/studio-report.ts'
+      - 'scripts/ceballos-zero-cost-preflight.ts'
+      - '.github/workflows/reconstruct-site.yml'
+      - '.github/workflows/zero-cost-ceballos-preflight.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/reconstruct/**'
+      - 'scripts/studio-run.ts'
+      - 'scripts/studio-finalize.ts'
+      - 'scripts/runner-callback.ts'
+      - 'scripts/studio-report.ts'
+      - 'scripts/ceballos-zero-cost-preflight.ts'
+      - '.github/workflows/reconstruct-site.yml'
+      - '.github/workflows/zero-cost-ceballos-preflight.yml'
+permissions:
+  contents: read
+concurrency:
+  group: zero-cost-ceballos-preflight-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ceballos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install engine
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install trusted React render toolchain
+        run: npm --prefix render-toolchain install --no-audit --no-fund
+      - name: Install Chromium
+        run: npx --no-install playwright-core install --with-deps chromium
+      - name: Run real-site deterministic reconstruction without provider credentials
+        env:
+          MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
+          MOLT_NO_SANDBOX: '1'
+          MOLT_AGENT_MINUTES: '12'
+          OPENAI_API_KEY: ''
+          ANTHROPIC_API_KEY: ''
+        run: ./node_modules/.bin/tsx scripts/ceballos-zero-cost-preflight.ts
+      - name: Preserve preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero-cost-ceballos-preflight
+          path: |
+            zero-cost-preflight/
+            !zero-cost-preflight/**/node_modules/**
+            !zero-cost-preflight/**/*.woff
+            !zero-cost-preflight/**/*.woff2
+            !zero-cost-preflight/**/*.ttf
+            !zero-cost-preflight/**/*.otf
+          retention-days: 7
+          if-no-files-found: warn

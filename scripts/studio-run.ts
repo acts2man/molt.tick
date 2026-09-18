@@ -6,7 +6,9 @@ import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
-import { publishOutputRepository } from './publish-output.js';
+import { publishOutputRepository, preflightOutputRepository } from './publish-output.js';
+import { finalStudioEvent } from './studio-report.js';
+import { runnerFetch } from './runner-callback.js';
 let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
@@ -25,16 +27,7 @@ async function identityToken(force=false):Promise<string>{
   runnerIdentityCache={token:data.value,expiresAt};return data.value;
 }
 async function studio(path:string,init:RequestInit={}):Promise<Response>{
-  let last='';
-  for(let attempt=0;attempt<3;attempt++){
-    const token=await identityToken(attempt>0);
-    const response=await fetch(`${origin}/api/molt/runner/${id}${path}`,{...init,redirect:'error',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${token}`,...init.headers}});
-    if(response.ok)return response;
-    last=`Studio callback failed (HTTP ${response.status}): ${(await response.text()).slice(0,400)}`;
-    if(![401,403,429,500,502,503,504].includes(response.status)||attempt===2)break;
-    runnerIdentityCache=undefined;await new Promise(resolve=>setTimeout(resolve,350*(attempt+1)));
-  }
-  throw new Error(last||'Studio callback failed.');
+  return runnerFetch({origin,id,path,init,getToken:async force=>{if(force)runnerIdentityCache=undefined;return identityToken(force);}});
 }
 function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
 async function progress(message:string,extra:object={},required=true):Promise<void>{
@@ -91,6 +84,15 @@ try{
   if(job.reasoningEffort)process.env.MOLT_REASONING_EFFORT=job.reasoningEffort;
   await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning.`);
   if(!process.env.MOLT_AI_MODEL||!(process.env.MOLT_MODEL_PROVIDER==='anthropic'?process.env.ANTHROPIC_API_KEY:process.env.OPENAI_API_KEY))throw new Error('Model configuration is missing. Open Connections in Molt Studio.');
+  // Everything below this preflight is still zero-cost. Prove runner rotation, Blob writes and GitHub export access before the first model request.
+  runnerIdentityCache=undefined;
+  await progress('Zero-cost preflight: fresh runner identity verified.');
+  await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
+  const plannedRepo=await preflightOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+  await progress(`Zero-cost preflight passed. Output will publish to ${plannedRepo.repository}; no model usage has occurred yet.`);
+  const requestedCallCap=Math.min(24,Math.max(2,job.maxPages*2+job.maxRepairs));
+  process.env.MOLT_MAX_MODEL_CALLS=String(requestedCallCap);
+  await progress(`Paid-model guard armed: at most ${requestedCallCap} model calls for this scope.`);
   let bundleDir:string|undefined;
   if(job.bundleId){
     await progress('Retrieving the saved-page bundle.');bundleDir=resolve('studio-work/bundle');await mkdir(bundleDir,{recursive:true});
@@ -117,23 +119,27 @@ try{
   }
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
   const finalExtras:{previewReady?:boolean;outputRepoUrl?:string;outputRepoError?:string}={};
-  try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
+  try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
   try{
     await progress(`Publishing retained React source to acts2man/${job.outputRepo}`,{},false);
     const published=await publishOutputRepository(result.outDir,'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
     finalExtras.outputRepoUrl=published.url;
+    await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url},false);
   }catch(exportError){
     const outputRepoError='React source was built, but GitHub repository export failed: '+redacted(exportError instanceof Error?exportError.message:String(exportError));
     finalExtras.outputRepoError=outputRepoError;
+    await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(outputRepoError,{outputRepoError},false);
   }
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
-  await progress(result.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',{report,...finalExtras});
+  await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
+  const {message:finalMessage,...finalPayload}=finalStudioEvent(report,finalExtras);
+  await progress(finalMessage,finalPayload,false);
   if(result.status!=='review')process.exitCode=2;
 }catch(error){
   const message=redacted(error instanceof Error?error.message:String(error));
   await writeFile(join(artifacts,'error.json'),JSON.stringify({error:message,usage:liveModel?.usage},null,2));
-  try{await progress(message,{error:message,usage:liveModel?.usage});}catch(callbackError){console.error('Could not persist final status:',redacted((callbackError as Error).message));}
+  await progress(message,{error:message,usage:liveModel?.usage},false);
   console.error(message);process.exitCode=1;
 }

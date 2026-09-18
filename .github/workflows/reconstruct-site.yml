@@ -50,6 +50,12 @@ jobs:
           MOLT_AI_MAX_TOKENS: '16000'
           MOLT_AGENT_MINUTES: '25'
         run: ./node_modules/.bin/tsx scripts/studio-run.ts
+      - name: Finalize Studio from checkpoint with a fresh runner identity
+        if: always()
+        env:
+          MOLT_JOB_ID: ${{ inputs.job_id }}
+          MOLT_STUDIO_ORIGIN: https://moltick.netlify.app
+        run: ./node_modules/.bin/tsx scripts/studio-finalize.ts
       - name: Preserve the actual reconstruction artifacts
         if: always()
         uses: actions/upload-artifact@v4
