@@ -27,7 +27,7 @@ export function parseReply(text:string):ModelReply{
 export interface ProviderOptions {
   provider:'anthropic'|'openai'; model:string; key:string;
   maxCalls?:number; maxOutputTokens?:number; requestMs?:number;
-  reasoningEffort?:'low'|'medium'|'high'; fetcher?:typeof fetch;
+  reasoningEffort?:'low'|'medium'|'high'|'xhigh'|'max'; fetcher?:typeof fetch;
 }
 export function createModel(options:ProviderOptions):Model{
   if(!options.key.trim()||!options.model.trim())throw new Error('Provider API key and explicit model ID are required');
@@ -88,6 +88,6 @@ export function modelFromEnv():Model{
   const model=process.env.MOLT_AI_MODEL??'';
   const key=process.env[provider==='anthropic'?'ANTHROPIC_API_KEY':'OPENAI_API_KEY']??'';
   const effort=process.env.MOLT_REASONING_EFFORT;
-  if(effort&&!['low','medium','high'].includes(effort))throw new Error('Unsupported reasoning effort');
+  if(effort&&!['low','medium','high','xhigh','max'].includes(effort))throw new Error('Unsupported reasoning effort');
   return createModel({provider,model,key,maxCalls:integer(process.env.MOLT_MAX_MODEL_CALLS,40,1,200),maxOutputTokens:integer(process.env.MOLT_AI_MAX_TOKENS,16000,1000,64000),requestMs:integer(process.env.MOLT_MODEL_TIMEOUT_MS,180000,1000,600000),reasoningEffort:effort as ProviderOptions['reasoningEffort']});
 }
