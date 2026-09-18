@@ -33,6 +33,9 @@ const bundleKey = (owner: string, id: string) => `bundles/${owner}/${uuid(id)}`;
 const previewKey = (owner:string,id:string,path:string) => `previews/${owner}/${uuid(id)}/${safePath(path)}`;
 const previewType=(path:string)=>({html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',json:'application/json; charset=utf-8',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml',avif:'image/avif',ico:'image/x-icon',woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'}[path.split('.').pop()?.toLowerCase()??'']??'application/octet-stream');
 const fileKey = (base: string, path: string) => `${base}/files/${createHash('sha256').update(safePath(path)).digest('hex')}`;
+async function deletePrefix(store:Store,prefix:string):Promise<void>{
+  const {blobs}=await store.list({prefix});for(const blob of blobs)await store.delete(blob.key);
+}
 async function jobs(store: Store, owner: string): Promise<Job[]> {
   const {blobs} = await store.list({prefix: `jobs/${owner}/`});
   const rows = await Promise.all(blobs.filter(b => b.key.split('/').length === 3).slice(-100).map(b => store.get(b.key, {type: 'json'})));
@@ -160,7 +163,7 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
     }
     if(path[0]==='jobs') {
-      if(method==='GET' && path.length===1)return json({jobs:await jobs(store,owner)});
+      if(method==='GET' && path.length===1){const includeArchived=url.searchParams.get('includeArchived')==='1';const rows=await jobs(store,owner);return json({jobs:includeArchived?rows:rows.filter(j=>!j.archivedAt)});}
       if(method==='POST' && path.length===1) {
         const input=await body(req);if(input.developmentTest!==true)throw new HttpError(400,'This runner is for owner development tests, not customer production jobs. Confirm the test scope in Studio.');
         const configured=await store.get(`settings/${owner}`,{type:'json'}) as Settings|null;
@@ -200,6 +203,21 @@ export async function handle(req: Request, services: Services): Promise<Response
           if(run){job.runId=run.id;job.runUrl=run.html_url;await store.setJSON(key,job);}else if(Date.now()-Date.parse(job.createdAt)>600000){job.status='error';job.message='No runner started within ten minutes. Check GitHub Actions permissions and availability.';await store.setJSON(key,job);}
         }
         return json({...job,artifacts,runnerConclusion:workflow?.conclusion??null});
+      }
+      if(method==='POST' && path[2]==='archive'){
+        if(ACTIVE.has(job.status))throw new HttpError(409,'Stop the active reconstruction before archiving it.');
+        job.archivedAt=job.archivedAt??new Date().toISOString();job.updatedAt=new Date().toISOString();await store.setJSON(key,job);return json(job);
+      }
+      if(method==='POST' && path[2]==='restore'){
+        delete job.archivedAt;job.updatedAt=new Date().toISOString();await store.setJSON(key,job);return json(job);
+      }
+      if(method==='DELETE' && path.length===2){
+        if(ACTIVE.has(job.status))throw new HttpError(409,'Stop the active reconstruction before deleting it.');
+        const outputRepoUrl=job.outputRepoUrl??null;
+        await store.delete(key);
+        await deletePrefix(store,`images/${owner}/${id}/`);
+        await deletePrefix(store,`previews/${owner}/${id}/`);
+        return json({deleted:true,outputRepoUrl,note:outputRepoUrl?'The generated GitHub repository was not deleted.':null});
       }
       if(method==='POST' && path[2]==='cancel') {
         if(!ACTIVE.has(job.status))throw new HttpError(409,'This job has already finished.');
