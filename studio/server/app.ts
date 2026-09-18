@@ -72,6 +72,7 @@ function safeReport(input: any): any {
   const clip = (value: unknown, n = 2000) => String(value ?? '').slice(0,n);
   const list = (value: unknown) => Array.isArray(value) ? value.slice(0,100).map(v => clip(v)) : [];
   return {status:input.status, reason:clip(input.reason), warnings:list(input.warnings), blockers:list(input.blockers),
+    integrations:Array.isArray(input.integrations)?input.integrations.slice(0,60).map((i:any)=>({kind:clip(i.kind,60),provider:clip(i.provider,120),route:clip(i.route,200),evidence:clip(i.evidence,500),action:clip(i.action,700)})):[],
     usage: safeUsage(input.usage),
     complexity:input.complexity?{version:clip(input.complexity.version,60),binding:false,firstPassCredits:Number(input.complexity.firstPassCredits)||0,pages:Array.isArray(input.complexity.pages)?input.complexity.pages.slice(0,12).map((p:any)=>({route:clip(p.route,200),complexity:clip(p.complexity,20),credits:Number(p.credits)||0,reasons:list(p.reasons)})):[]}:null,
     evaluation:{pass:input.evaluation.pass === true,issues:list(input.evaluation.issues),views:input.evaluation.views.slice(0,72).map((v:any)=>({
@@ -81,6 +82,7 @@ function safeReport(input: any): any {
       issues:list(v.issues), sourceImage:/^[a-z0-9-]+\.png$/.test(v.sourceImage??'')?v.sourceImage:null,
       candidateImage:/^[a-z0-9-]+\.png$/.test(v.candidateImage??'')?v.candidateImage:null,
       diffImage:/^[a-z0-9-]+\.png$/.test(v.diffImage??'')?v.diffImage:null,
+      interactions:Array.isArray(v.interactions)?v.interactions.slice(0,8).map((i:any)=>({id:clip(i.id,120),trigger:{kind:clip(i.trigger?.kind,40),name:clip(i.trigger?.name,180)},pass:i.pass===true,score:typeof i.score==='number'&&Number.isFinite(i.score)?i.score:null,worstBand:typeof i.worstBand==='number'&&Number.isFinite(i.worstBand)?i.worstBand:null,issues:list(i.issues),sourceImage:/^[a-z0-9-]+\.png$/.test(i.sourceImage??'')?i.sourceImage:null,candidateImage:/^[a-z0-9-]+\.png$/.test(i.candidateImage??'')?i.candidateImage:null,diffImage:/^[a-z0-9-]+\.png$/.test(i.diffImage??'')?i.diffImage:null})):[],
     }))}, attempts:Array.isArray(input.attempts)?input.attempts.slice(0,20).map((a:any)=>({round:a.round,accepted:a.accepted===true,summary:clip(a.summary)})):[]};
 }
 export async function handle(req: Request, services: Services): Promise<Response> {
