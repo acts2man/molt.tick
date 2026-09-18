@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { handle, type Services, type Store } from '../server/app.ts';
 import { HttpError, sourceUrl, sourcePages, safePath, newJob } from '../server/contracts.ts';
 import { seal, unseal, cookie, assertMutation, sealSecret } from '../server/security.ts';
+import { createMediaSession, mediaCookie } from '../server/media-session.ts';
 const SECRET='a-secure-test-only-value-012345678901234567890123456789';
 const ORIGIN='https://moltick.netlify.app';
 const ID='3bc27a4d-0bd2-4c1e-a688-97399545bc12';
@@ -83,7 +84,7 @@ test('unverified model credential changes nothing',async()=>{const s=setup();s.s
 test('runner cannot change another workflow run',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),runId:999});const r=await handle(s.req('runner/'+ID),s.services);assert.equal(r.status,409);});
 test('runner data is not accepted without identity verification',async()=>{const s=setup();s.services.identifyRunner=async()=>{throw new Error('invalid identity');};const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'fake'}),s.services);assert.equal(r.status,500);assert.equal(s.map.size,3);});
 test('runner progress updates existing work and preserves the run identity',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'Capturing desktop'}),s.services);assert.equal(r.status,200);const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.runId,123);assert.equal(job.status,'running');assert.equal(job.events.length,1);});
-test('runner uploads an interactive preview and only the owner session can frame it',async()=>{
+test('runner uploads an interactive preview and embedded media uses a short-lived owner cookie',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
  const upload=new Request(ORIGIN+'/api/molt/runner/'+ID+'/preview?file=index.html',{method:'PUT',body:new TextEncoder().encode('<!doctype html><title>Preview</title>')});
  assert.equal((await handle(upload,s.services)).status,200);
@@ -91,6 +92,10 @@ test('runner uploads an interactive preview and only the owner session can frame
  const r=await handle(s.req('preview/'+ID+'/'),s.services);
  assert.equal(r.status,200);assert.match(r.headers.get('content-type')??'',/text\/html/);assert.equal(r.headers.get('x-frame-options'),'SAMEORIGIN');assert.match(r.headers.get('content-security-policy')??'',/frame-ancestors 'self'/);assert.match(await r.text(),/Preview/);
  assert.equal((await handle(s.req('preview/'+ID+'/','GET',undefined,false),s.services)).status,401);
+ const issued=await handle(s.req('media-session','POST',{}),s.services);assert.equal(issued.status,200);assert.match(issued.headers.get('set-cookie')??'',/__Host-molt-media=/);
+ const token=mediaCookie(createMediaSession(USER,SECRET));
+ const embedded=new Request(ORIGIN+'/api/molt/preview/'+ID+'/',{headers:{cookie:token}});
+ const framed=await handle(embedded,s.services);assert.equal(framed.status,200);assert.match(await framed.text(),/Preview/);
 });
 test('image callback rejects HTML payloads',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/images/image.png','PUT',{html:'<script>alert(1)</script>'}),s.services);assert.equal(r.status,415);});
 
