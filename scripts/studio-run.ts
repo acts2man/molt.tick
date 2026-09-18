@@ -5,6 +5,7 @@ import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
+import { publishOutputRepository } from './publish-output.js';
 let liveModel:Model|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
@@ -46,7 +47,7 @@ async function preview(file:string,name:string):Promise<string|null>{
   }catch(error){console.warn(`Preview upload unavailable: ${redacted((error as Error).message)}`);return null;}
 }
 try{
-  const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;model:string;reasoningEffort:'low'|'medium'|'high';maxPages:number;maxRepairs:number};
+  const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;model:string;reasoningEffort:'low'|'medium'|'high';outputRepo:string;maxPages:number;maxRepairs:number};
   if(job.model)process.env.MOLT_AI_MODEL=job.model;
   if(job.reasoningEffort)process.env.MOLT_REASONING_EFFORT=job.reasoningEffort;
   await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning.`);
@@ -72,6 +73,14 @@ try{
     }
   }
   await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
+  try{
+    await progress(`Publishing retained React source to acts2man/${job.outputRepo}`);
+    const published=await publishOutputRepository(result.outDir,'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+    await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url});
+  }catch(exportError){
+    const outputRepoError='React source was built, but GitHub repository export failed: '+redacted(exportError instanceof Error?exportError.message:String(exportError));
+    await progress(outputRepoError,{outputRepoError});
+  }
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
   await writeFile(join(artifacts,'READ-ME.txt'),'This is actual Molt output. Review report.json before using it. Passing pixel metrics do not migrate form backends, identity, payment services or other integrations. The downloadable artifact excludes font binaries; obtain any required fonts from their original authorized source. The runner retained the best measured React source, not a claimed universally exact result.\n');
   await progress(result.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',{report});

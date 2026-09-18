@@ -37,7 +37,7 @@ export function sourcePages(source: string, text: string): string[] {
 export interface Settings { provider: 'openai' | 'anthropic'; model: string; configuredAt: string; accessChecked: boolean }
 export interface Job {
   id: string; owner: string; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
-  model: string; reasoningEffort: 'low'|'medium'|'high';
+  model: string; reasoningEffort: 'low'|'medium'|'high'; outputRepo: string; outputRepoUrl?: string; outputRepoError?: string;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
   report?: any; usage?: any; error?: string;
@@ -47,9 +47,12 @@ export function newJob(input: any, owner: string): Job {
   const pages = sourcePages(source, String(input.pages || ''));
   const maxPages = Number(input.maxPages ?? 5), maxRepairs = Number(input.maxRepairs ?? 3);
   const model=String(input.model??'gpt-5.6-sol').trim(), reasoningEffort=String(input.reasoningEffort??'medium') as Job['reasoningEffort'];
+  const suggestedRepo=new URL(source).hostname.replace(/^www\./,'').replace(/[^a-z0-9.-]+/gi,'-').replace(/\./g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()+'-react';
+  const outputRepo=String(input.outputRepo??suggestedRepo).trim().toLowerCase();
   if (!/^[\w.:-]{1,100}$/.test(model) || !['low','medium','high'].includes(reasoningEffort)) throw new HttpError(400,'Invalid model selection.');
+  if (!/^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/.test(outputRepo)||outputRepo.includes('..')) throw new HttpError(400,'Choose a valid GitHub repository name for the React output.');
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 12 || !Number.isInteger(maxRepairs) || maxRepairs < 0 || maxRepairs > 6) throw new HttpError(400, 'Invalid reconstruction limits.');
   if (pages.length > maxPages) throw new HttpError(400, 'Your explicit page list exceeds the page limit.');
   const now = new Date().toISOString();
-  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), model, reasoningEffort, maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
+  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), model, reasoningEffort, outputRepo, maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
 }

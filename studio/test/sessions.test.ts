@@ -7,7 +7,7 @@ const ORIGIN='https://moltick.netlify.app';
 function setup(){
  const map=new Map<string,any>();const store:Store={get:async(k)=>map.get(k)??null,setJSON:async(k,v)=>{map.set(k,structuredClone(v));},set:async(k,v)=>{map.set(k,v);},list:async({prefix})=>({blobs:[...map.keys()].filter(k=>k.startsWith(prefix)).map(key=>({key}))}),delete:async(k)=>{map.delete(k);}};
  const session='s_'+'a'.repeat(64);map.set(sessionStorageKey(session),{version:1,session:{token:'github_pat_test_not_real_0123456789',login:'acts2man',expires:Date.now()+100000}});
- const services:Services={store,env:{secret:'',origin:ORIGIN,context:'production'},github:async(_t,p)=>p==='/user'?{login:'acts2man'}:{permissions:{push:true},workflows:[]}};
+ const services:Services={store,env:{secret:'',origin:ORIGIN,context:'production'},github:async(_t,p)=>p==='/user'?{login:'acts2man'}:{permissions:{push:true},workflows:[]},saveSecrets:async()=>{}};
  const req=(path:string,method='GET',body?:any,authenticated=true)=>new Request(ORIGIN+'/api/molt/'+path,{method,headers:{origin:ORIGIN,'x-molt-request':'1','content-type':'application/json',...(authenticated?{cookie:cookie(session)}:{})},...(body?{body:JSON.stringify(body)}:{})});
  return{map,services,req};
 }
