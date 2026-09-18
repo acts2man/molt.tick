@@ -21,9 +21,12 @@ async function run(command:string,args:string[],cwd:string,env:Record<string,str
 async function exists(owner:string,repo:string,token:string,cwd:string):Promise<boolean>{
   try{await run('gh',['repo','view',`${owner}/${repo}`,'--json','name'],cwd,{GH_TOKEN:token});return true;}catch{return false;}
 }
-export async function publishOutputRepository(directory:string,owner:string,name:string,token:string):Promise<PublishResult>{
+export async function preflightOutputRepository(directory:string,owner:string,name:string,token:string):Promise<PublishResult>{
   const requested=validRepo(name);
   if(!token||token.length<20)throw new Error('GitHub export token is missing. Reconnect Molt with repository creation permissions.');
+  const login=await run('gh',['api','user','--jq','.login'],directory,{GH_TOKEN:token});
+  if(login.trim().toLowerCase()!==owner.toLowerCase())throw new Error(`GitHub export token belongs to ${login||'another account'}, not ${owner}.`);
+  await run('gh',['repo','view','acts2man/molt.tick','--json','name'],directory,{GH_TOKEN:token});
   let repo=requested;
   if(await exists(owner,repo,token,directory)){
     let found='';
@@ -31,6 +34,11 @@ export async function publishOutputRepository(directory:string,owner:string,name
     if(!found)throw new Error(`Could not find an available GitHub repository name after ${owner}/${requested}-v30.`);
     repo=found;
   }
+  return {repository:`${owner}/${repo}`,url:`https://github.com/${owner}/${repo}`};
+}
+export async function publishOutputRepository(directory:string,owner:string,name:string,token:string):Promise<PublishResult>{
+  const checked=await preflightOutputRepository(directory,owner,name,token);
+  const repo=checked.repository.slice(owner.length+1);
   const ignore='\n# Molt excludes font binaries from generated repositories\n*.woff\n*.woff2\n*.ttf\n*.otf\nnode_modules/\ndist/\n';
   await appendFile(`${directory}/.gitignore`,ignore);
   const readmePath=`${directory}/README.md`;
