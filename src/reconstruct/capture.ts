@@ -70,7 +70,15 @@ const INTERACTIONS = `(() => {
    if(el.getAttribute('role')==='tab')continue; push('button',el);
  }
  for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tab',el);
- return out.slice(0,3);
+ // Explicit Previous/Next carousel controls are bounded, reversible interactions and are safe to replay.
+ // Capture them even when the source does not use aria-expanded, so sliders/testimonials are graded behaviorally.
+ const carousel=/^(?:previous|prev|next)(?:\s+(?:slide|testimonial|review|item|image|photo|project))?\b/i;
+ for(const el of Array.from(document.querySelectorAll('button,[role="button"]'))){
+   const n=name(el);if(!carousel.test(n))continue;
+   if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
+   push('button',el);
+ }
+ return out.slice(0,5);
 })()`;
 export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
   return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
