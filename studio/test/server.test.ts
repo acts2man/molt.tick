@@ -25,6 +25,24 @@ test('anonymous readers cannot inspect private jobs',async()=>{const s=setup();a
 test('no unconfigured model can start a paid job',async()=>{const s=setup();s.services.github=async()=>({secrets:[]});const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);assert.equal(r.status,409);assert.equal(s.map.size,0);});
 test('output repository defaults from the source host and rejects unsafe names',()=>{assert.equal(newJob({id:ID,url:'https://www.example.com'},'acts2man').outputRepo,'example-com-react');assert.throws(()=>newJob({id:ID,url:'https://example.com',outputRepo:'../bad'},'acts2man'));});
 test('dispatch calls the actual workflow and a repeated id is not resubmitted',async()=>{const s=setup();for(let i=0;i<2;i++){const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);assert.ok([200,202].includes(r.status));}assert.equal(s.calls.filter(c=>c.p.includes('dispatches')).length,1);assert.equal(s.map.get('jobs/acts2man/'+ID).status,'queued');});
+test('finished reconstructions can be archived restored and filtered from the default list',async()=>{
+ const s=setup();const job={...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'needs-work'};s.map.set('jobs/acts2man/'+ID,job);
+ assert.equal((await (await handle(s.req('jobs/'+ID+'/archive','POST'),s.services)).json()).archivedAt!=null,true);
+ let rows=await (await handle(s.req('jobs'),s.services)).json();assert.equal(rows.jobs.length,0);
+ rows=await (await handle(s.req('jobs?includeArchived=1'),s.services)).json();assert.equal(rows.jobs.length,1);assert.ok(rows.jobs[0].archivedAt);
+ const restored=await (await handle(s.req('jobs/'+ID+'/restore','POST'),s.services)).json();assert.equal(restored.archivedAt,undefined);
+ rows=await (await handle(s.req('jobs'),s.services)).json();assert.equal(rows.jobs.length,1);
+});
+test('permanent delete removes Molt job images and preview but preserves the generated GitHub repository',async()=>{
+ const s=setup();const job={...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'needs-work',outputRepoUrl:'https://github.com/acts2man/example-com-react'};s.map.set('jobs/acts2man/'+ID,job);
+ s.map.set('images/acts2man/'+ID+'/view.png',new ArrayBuffer(8));s.map.set('previews/acts2man/'+ID+'/index.html',new ArrayBuffer(8));
+ const r=await handle(s.req('jobs/'+ID,'DELETE'),s.services);assert.equal(r.status,200);const body=await r.json();assert.equal(body.deleted,true);assert.equal(body.outputRepoUrl,job.outputRepoUrl);
+ assert.equal(s.map.has('jobs/acts2man/'+ID),false);assert.equal([...s.map.keys()].some(k=>k.startsWith('images/acts2man/'+ID+'/')||k.startsWith('previews/acts2man/'+ID+'/')),false);
+});
+test('active reconstructions cannot be archived or deleted',async()=>{
+ const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'running'});
+ assert.equal((await handle(s.req('jobs/'+ID+'/archive','POST'),s.services)).status,409);assert.equal((await handle(s.req('jobs/'+ID,'DELETE'),s.services)).status,409);
+});
 test('dispatch failure is not a success toast or a stuck queued record',async()=>{const s=setup(),gh=s.services.github!;s.services.github=async(t,p,i)=>{if(p.includes('dispatches'))throw new Error('failed');return gh(t,p,i);};const r=await handle(s.req('jobs','POST',{id:ID,url:'https://example.com',developmentTest:true}),s.services);assert.equal(r.status,500);assert.equal(s.map.get('jobs/acts2man/'+ID).status,'error');});
 test('GitHub connection validates ownership',async()=>{const s=setup();s.services.github=async()=>({login:'other'});const r=await handle(s.req('connect','POST',{token:'github_pat_not_real_0123456789'},false),s.services);assert.equal(r.status,403);});
 test('GitHub connection stores the owner token only as an encrypted Actions secret for output export',async()=>{const s=setup();let saved='';s.services.saveSecrets=async(_t,v)=>{saved=String(v.MOLT_GITHUB_EXPORT_TOKEN??'');};const r=await handle(s.req('connect','POST',{token:'github_pat_not_real_0123456789'},false),s.services);assert.equal(r.status,200);assert.equal(saved,'github_pat_not_real_0123456789');assert.ok(!(await r.text()).includes('github_pat_not_real'));});
