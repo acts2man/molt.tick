@@ -131,7 +131,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(typeof event.deploymentError==='string')job.deploymentError=String(event.deploymentError).slice(0,1000);
         if(event.previewReady===true)job.previewReady=true;
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
-        if(event.report){job.report=safeReport(event.report);job.status=job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
+        if(event.report){job.report=safeReport(event.report);job.status=(event.deploymentError||event.outputRepoError)?'needs-work':job.report.status;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);return json({saved:true});
       }
       throw new HttpError(404,'Runner route not found.');
