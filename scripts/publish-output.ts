@@ -34,8 +34,30 @@ export async function reserveOutputRepository(directory:string,owner:string,name
     if(!found)throw new Error(`Could not find an available GitHub repository name after ${owner}/${requested}-v30.`);
     repo=found;
   }
-  await run('gh',['repo','create',`${owner}/${repo}`,'--private','--description','React reconstruction reserved by Molt'],directory,{GH_TOKEN:token});
-  return {repository:`${owner}/${repo}`,url:`https://github.com/${owner}/${repo}`};
+  const repository=`${owner}/${repo}`;
+  await run('gh',['repo','create',repository,'--private','--add-readme','--description','React reconstruction reserved by Molt'],directory,{GH_TOKEN:token});
+  try{
+    // Prove the *new* repository accepts the exact privileged operations the post-model handoff needs.
+    await run('gh',['secret','set','MOLT_HANDOFF_PREFLIGHT','--repo',repository,'--body','verified'],directory,{GH_TOKEN:token});
+    await run('gh',['secret','delete','MOLT_HANDOFF_PREFLIGHT','--repo',repository],directory,{GH_TOKEN:token});
+    const probe=`name: Molt handoff permission probe
+on:
+  workflow_dispatch:
+jobs:
+  permission-check:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo permission-check
+`;
+    const encoded=Buffer.from(probe,'utf8').toString('base64');
+    const sha=await run('gh',['api',`repos/${repository}/contents/.github/workflows/molt-permission-check.yml`,'--method','PUT','--field','message=Verify Molt workflow permission','--field',`content=${encoded}`,'--jq','.content.sha'],directory,{GH_TOKEN:token});
+    await run('gh',['api',`repos/${repository}/contents/.github/workflows/molt-permission-check.yml`,'--method','DELETE','--field','message=Remove Molt workflow permission probe','--field',`sha=${sha.trim()}`],directory,{GH_TOKEN:token});
+  }catch(error){
+    try{await run('gh',['repo','delete',repository,'--yes'],directory,{GH_TOKEN:token});}catch{}
+    throw new Error('GitHub delivery preflight failed before model usage: '+(error instanceof Error?error.message:String(error)));
+  }
+  return {repository,url:`https://github.com/${repository}`};
 }
 export async function publishReservedOutputRepository(directory:string,repository:string,token:string):Promise<PublishResult>{
   if(!token||token.length<20)throw new Error('GitHub export token is missing.');
@@ -51,6 +73,6 @@ export async function publishReservedOutputRepository(directory:string,repositor
   await run('git',['add','.'],directory);
   await run('git',['commit','-m','Initial React reconstruction from Molt'],directory);
   await run('git',['remote','add','origin',`https://github.com/${repository}.git`],directory);
-  await run('git',['push','-u','origin','main'],directory,{GH_TOKEN:token,GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:'http.https://github.com/.extraheader',GIT_CONFIG_VALUE_0:`AUTHORIZATION: basic ${Buffer.from('x-access-token:'+token).toString('base64')}`});
+  await run('git',['push','-u','--force','origin','main'],directory,{GH_TOKEN:token,GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:'http.https://github.com/.extraheader',GIT_CONFIG_VALUE_0:`AUTHORIZATION: basic ${Buffer.from('x-access-token:'+token).toString('base64')}`});
   return {repository,url:`https://github.com/${repository}`};
 }
