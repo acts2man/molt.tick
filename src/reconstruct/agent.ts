@@ -132,7 +132,11 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Target a measured 95%+ pixel match on every viewport without regressing any viewport. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}. The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`),images:await repairImages(checks)},signal);
     },
     apply:reply=>apply(outDir,reply.files,allowed),
-    save:async(best,attempts)=>{await writeFile(reportPath,JSON.stringify({status:best.pass&&!evidence.blockers.length?'review':'needs-work',outDir,evaluation:best,attempts,warnings:evidence.warnings,blockers:evidence.blockers,usage:model.usage},null,2));},
+    save:async(best,attempts)=>{
+      await writeFile(reportPath,JSON.stringify({status:best.pass&&!evidence.blockers.length?'review':'needs-work',outDir,evaluation:best,attempts,warnings:evidence.warnings,blockers:evidence.blockers,usage:model.usage},null,2));
+      const latest=attempts.at(-1);
+      if(latest&&latest.round>0)await progress(`Repair round ${latest.round} ${latest.accepted?'accepted':'not applied'}: ${latest.summary.slice(0,220)}`);
+    },
   },{maxRounds:options.maxRepairs??integer(process.env.MOLT_MAX_REPAIRS,6,0,20),signal});
   // Restore() changes source files. Never leave a rejected candidate in dist.
   await rm(join(outDir,'dist'),{recursive:true,force:true});

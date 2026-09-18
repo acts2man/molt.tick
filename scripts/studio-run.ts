@@ -7,29 +7,40 @@ import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { publishOutputRepository } from './publish-output.js';
-let liveModel:Model|undefined,runnerToken:string|undefined;
+let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
 const artifacts=resolve('studio-artifacts');await mkdir(artifacts,{recursive:true});
-async function identityToken():Promise<string>{
-  if(runnerToken)return runnerToken;
+function jwtExpiry(token:string):number{
+  try{const payload=JSON.parse(Buffer.from(token.split('.')[1]??'','base64url').toString('utf8')) as {exp?:number};return Number.isFinite(payload.exp)?Number(payload.exp)*1000:0;}catch{return 0;}
+}
+async function identityToken(force=false):Promise<string>{
+  if(!force&&runnerIdentityCache&&runnerIdentityCache.expiresAt>Date.now()+60_000)return runnerIdentityCache.token;
   const endpoint=process.env.ACTIONS_ID_TOKEN_REQUEST_URL,secret=process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if(!endpoint||!secret)throw new Error('The workflow needs GitHub id-token: write permission.');
   const response=await fetch(`${endpoint}&audience=${encodeURIComponent(origin)}`,{headers:{Authorization:`Bearer ${secret}`},signal:AbortSignal.timeout(15000)});
   if(!response.ok)throw new Error('Could not obtain the runner identity.');
-  const data=await response.json() as {value:string};runnerToken=data.value;return runnerToken;
+  const data=await response.json() as {value:string};const expiresAt=jwtExpiry(data.value)||Date.now()+120_000;
+  runnerIdentityCache={token:data.value,expiresAt};return data.value;
 }
 async function studio(path:string,init:RequestInit={}):Promise<Response>{
-  const token=await identityToken();
-  const response=await fetch(`${origin}/api/molt/runner/${id}${path}`,{...init,redirect:'error',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${token}`,...init.headers}});
-  if(!response.ok)throw new Error(`Studio callback failed (HTTP ${response.status}): ${(await response.text()).slice(0,400)}`);
-  return response;
+  let last='';
+  for(let attempt=0;attempt<3;attempt++){
+    const token=await identityToken(attempt>0);
+    const response=await fetch(`${origin}/api/molt/runner/${id}${path}`,{...init,redirect:'error',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${token}`,...init.headers}});
+    if(response.ok)return response;
+    last=`Studio callback failed (HTTP ${response.status}): ${(await response.text()).slice(0,400)}`;
+    if(![401,403,429,500,502,503,504].includes(response.status)||attempt===2)break;
+    runnerIdentityCache=undefined;await new Promise(resolve=>setTimeout(resolve,350*(attempt+1)));
+  }
+  throw new Error(last||'Studio callback failed.');
 }
 function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
-async function progress(message:string,extra:object={}):Promise<void>{
+async function progress(message:string,extra:object={},required=true):Promise<void>{
   const clean=redacted(message);console.log(clean);
-  await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,...extra})});
+  try{await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,...extra})});}
+  catch(error){const note='Studio callback warning: '+redacted(error instanceof Error?error.message:String(error));console.warn(note);if(required)throw error;}
 }
 function pathIn(root:string,file:string):string{
   if(file.startsWith('/')||file.includes('\\')||file.split('/').some(p=>!p||p.startsWith('.')))throw new Error('Unsafe saved-page path');
@@ -88,8 +99,12 @@ try{
     for(const f of manifest.files){if(f.size>4_000_000||(total+=f.size)>50_000_000)throw new Error('Bundle size limit exceeded');const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});const bytes=await (await studio(`/bundle?file=${encodeURIComponent(f.path)}`)).arrayBuffer();if(bytes.byteLength!==f.size)throw new Error('Bundle file size mismatch');await writeFile(dest,Buffer.from(bytes));}
   }
   liveModel=modelFromEnv();
-  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message)});
-  await progress('Preparing comparison images and the retained React source.');
+  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
+  // Checkpoint the expensive work before any nonessential callback, preview, or export step.
+  await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
+  await writeFile(join(artifacts,'report.json'),JSON.stringify(result,null,2));
+  await writeFile(join(artifacts,'READ-ME.txt'),'This is actual Molt output. Review report.json before using it. Passing pixel metrics do not migrate form backends, identity, payment services or other integrations. The downloadable artifact excludes font binaries; obtain any required fonts from their original authorized source. The runner retained the best measured React source, not a claimed universally exact result.\n');
+  await progress('Core React reconstruction checkpointed; preparing review assets.',{},false);
   const report=JSON.parse(JSON.stringify(result));
   for(let i=0;i<report.evaluation.views.length;i++){
     const view=report.evaluation.views[i];view.sourceImage=view.source?await preview(view.source,`view-${i}-source.png`):null;view.candidateImage=view.candidate?await preview(view.candidate,`view-${i}-react.png`):null;view.diffImage=view.diff?await preview(view.diff,`view-${i}-diff.png`):null;
@@ -100,19 +115,21 @@ try{
       state.diffImage=state.diff?await preview(state.diff,`${prefix}-diff.png`):null;
     }
   }
-  await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
-  try{await uploadInteractivePreview(result.outDir);}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)));}
+  await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
+  const finalExtras:{previewReady?:boolean;outputRepoUrl?:string;outputRepoError?:string}={};
+  try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
   try{
-    await progress(`Publishing retained React source to acts2man/${job.outputRepo}`);
+    await progress(`Publishing retained React source to acts2man/${job.outputRepo}`,{},false);
     const published=await publishOutputRepository(result.outDir,'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
-    await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url});
+    finalExtras.outputRepoUrl=published.url;
+    await progress(`GitHub repository created: ${published.repository}`,{outputRepoUrl:published.url},false);
   }catch(exportError){
     const outputRepoError='React source was built, but GitHub repository export failed: '+redacted(exportError instanceof Error?exportError.message:String(exportError));
-    await progress(outputRepoError,{outputRepoError});
+    finalExtras.outputRepoError=outputRepoError;
+    await progress(outputRepoError,{outputRepoError},false);
   }
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
-  await writeFile(join(artifacts,'READ-ME.txt'),'This is actual Molt output. Review report.json before using it. Passing pixel metrics do not migrate form backends, identity, payment services or other integrations. The downloadable artifact excludes font binaries; obtain any required fonts from their original authorized source. The runner retained the best measured React source, not a claimed universally exact result.\n');
-  await progress(result.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',{report});
+  await progress(result.status==='review'?'Measured checks passed. Your reconstruction is ready for review.':'The best reconstruction is saved. Differences or integrations still need attention.',{report,...finalExtras});
   if(result.status!=='review')process.exitCode=2;
 }catch(error){
   const message=redacted(error instanceof Error?error.message:String(error));
