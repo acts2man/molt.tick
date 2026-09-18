@@ -7,7 +7,7 @@ import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { reserveOutputRepository, publishReservedOutputRepository } from './publish-output.js';
-import { preflightNetlify, createNetlifySite, configureContinuousNetlifyDeploy } from './publish-netlify.js';
+import { preflightNetlify, createNetlifySite, deployNetlifyDirectory, configureContinuousNetlifyDeploy } from './publish-netlify.js';
 import { finalStudioEvent } from './studio-report.js';
 import { runnerFetch } from './runner-callback.js';
 let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
@@ -95,7 +95,7 @@ try{
   const plannedSite=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',plannedRepo.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
   const netlifyProbeDir=resolve('studio-work/netlify-preflight');await mkdir(netlifyProbeDir,{recursive:true});
   await writeFile(join(netlifyProbeDir,'index.html'),'<!doctype html><meta name="robots" content="noindex"><title>Molt delivery preflight</title><p>Molt reserved this deployment target before reconstruction.</p>');
-  await run('npx',['--yes','netlify-cli@27.8.0','deploy','--prod','--dir',netlifyProbeDir,'--site',plannedSite.id,'--message','Molt zero-cost delivery preflight'],process.cwd(),{NETLIFY_AUTH_TOKEN:process.env.MOLT_NETLIFY_AUTH_TOKEN});
+  await deployNetlifyDirectory(netlifyProbeDir,plannedSite.id,process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
   const netlifyProbe=await fetch(plannedSite.url,{redirect:'follow',signal:AbortSignal.timeout(15000)});
   if(!netlifyProbe.ok)throw new Error(`Netlify reserved-site deploy preflight returned HTTP ${netlifyProbe.status} before model usage.`);
   await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url,reservedNetlifySite:plannedSite},null,2));
