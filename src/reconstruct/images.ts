@@ -41,19 +41,24 @@ export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[
 }
 export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
   const result:ImageInput[]=[];
-  for(const v of checks.slice(0,3)){
+  const views=checks.slice(0,3);
+  for(const v of views){
     const source=await loadPng(v.source);const y=Math.max(0,(v.worstY??0)-100);
     result.push(input(`${v.viewport} SOURCE complete overview`,overview(source)));
     result.push(input(`${v.viewport} SOURCE detail y=${y}`,crop(source,y,1100)));
-    if(v.candidate){const target=await loadPng(v.candidate);result.push(input(`${v.viewport} CANDIDATE complete overview`,overview(target)));result.push(input(`${v.viewport} CANDIDATE detail y=${y}`,crop(target,y,1100)));}
+    if(v.candidate){const target=await loadPng(v.candidate);result.push(input(`${v.viewport} CANDIDATE detail y=${y}`,crop(target,y,1100)));}
     if(v.diff){const diff=await loadPng(v.diff);result.push(input(`${v.viewport} DIFF heatmap detail y=${y}; bright pixels are mismatches`,crop(diff,y,1100)));}
-    const failed=(v.interactions??[]).find(state=>!state.pass);
-    if(failed){
-      const opened=await loadPng(failed.source);
-      result.push(input(`${v.viewport} SOURCE INTERACTION ${failed.trigger.kind} "${failed.trigger.name}"`,overview(opened)));
-      if(failed.candidate){const candidate=await loadPng(failed.candidate);result.push(input(`${v.viewport} CANDIDATE INTERACTION ${failed.trigger.kind} "${failed.trigger.name}"`,overview(candidate)));}
-    }
-  }return result;
+  }
+  // Interaction evidence is valuable, but only attach the worst failed state so repairs stay below provider image limits.
+  const interactionView=[...views].filter(v=>(v.interactions??[]).some(i=>!i.pass)).sort((a,b)=>(a.worstBand??101)-(b.worstBand??101))[0];
+  const failed=interactionView?.interactions?.find(state=>!state.pass);
+  if(interactionView&&failed){
+    const opened=await loadPng(failed.source);
+    result.push(input(`${interactionView.viewport} SOURCE INTERACTION ${failed.trigger.kind} "${failed.trigger.name}"`,overview(opened)));
+    if(failed.candidate){const candidate=await loadPng(failed.candidate);result.push(input(`${interactionView.viewport} CANDIDATE INTERACTION ${failed.trigger.kind} "${failed.trigger.name}"`,overview(candidate)));}
+  }
+  if(result.length>18)throw new Error('Repair image selection exceeded provider budget');
+  return result;
 }
 export async function compare(sourcePath:string,candidatePath:string,diffPath:string):Promise<{score:number;worstBand:number;worstY:number}>{
   const a=await loadPng(sourcePath),b=await loadPng(candidatePath);
