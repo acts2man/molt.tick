@@ -76,7 +76,7 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
   const before = new Map(best.views.map(v => [key(v), v]));
   if (before.size !== best.views.length || next.issues.some(i => !best.issues.includes(i))) return false;
 
-  let passGain = 0, issueGain = best.issues.length - next.issues.length;
+  let passGain = 0, measurementGain = 0, issueGain = best.issues.length - next.issues.length;
   let beforeScore = 0, nextScore = 0, beforeWorst = 0, nextWorst = 0, count = 0;
   let beforeMinWorst = 101, nextMinWorst = 101;
 
@@ -85,6 +85,8 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
     if (!old) return false;
     if (old.pass && !v.pass) return false;
 
+    if(old.score!==null&&v.score===null||old.worstBand!==null&&v.worstBand===null)return false;
+    if(old.score===null&&v.score!==null||old.worstBand===null&&v.worstBand!==null)measurementGain++;
     const os=old.score ?? -1, ns=v.score ?? -1, ow=old.worstBand ?? -1, nw=v.worstBand ?? -1;
     // Failing views may move slightly as shared typography/geometry is repaired, but never accept
     // a material regression on an untouched viewport.
@@ -102,6 +104,8 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
       const prior = oldInteractions.get(interactionKey(v,state));
       if (!prior) continue;
       if (prior.pass && !state.pass) return false;
+      if(prior.score!==null&&state.score===null||prior.worstBand!==null&&state.worstBand===null)return false;
+      if(prior.score===null&&state.score!==null||prior.worstBand===null&&state.worstBand!==null)measurementGain++;
       const pis=prior.score ?? -1, sis=state.score ?? -1, piw=prior.worstBand ?? -1, siw=state.worstBand ?? -1;
       if (sis < pis - 1.5 || siw < piw - 1.5) return false;
       if (state.pass && !prior.pass) passGain++;
@@ -109,7 +113,7 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
     }
   }
 
-  if (passGain > 0 || issueGain > 0) return true;
+  if (passGain > 0 || measurementGain > 0 || issueGain > 0) return true;
   if (!count) return false;
   const beforeComposite=(beforeScore/count)*0.35+(beforeWorst/count)*0.65;
   const nextComposite=(nextScore/count)*0.35+(nextWorst/count)*0.65;
