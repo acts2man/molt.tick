@@ -38,3 +38,6 @@
 
 .auth-blocked{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;background:#121810;color:#e9eadf}
 .auth-blocked .logo{margin-bottom:28px}.auth-blocked h1{max-width:620px;font:400 36px/1.1 Georgia,serif;margin:0 0 14px}.auth-blocked p{max-width:560px;color:#93a080;line-height:1.8;margin:0 0 24px}
+
+.history-status{display:block;margin-top:5px;color:#819073;font-size:9px;letter-spacing:.02em}
+.text-button:disabled{opacity:.55;cursor:wait}
