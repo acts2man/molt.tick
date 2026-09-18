@@ -121,29 +121,32 @@ export async function handle(req: Request, services: Services): Promise<Response
       }
       throw new HttpError(404,'Runner route not found.');
     }
-    const session=await readSession(req,store,env.secret);
+    const account=await (services.authenticate??authenticateAccount)(req);
+    const binding=await ownerBinding(store);
+    const integration=env.secret.length>=40?await githubIntegration(store,env):null;
     if(method==='GET' && path[0]==='session'){
-      // Read the real automatically provisioned backend before reporting readiness.
       await store.get('system/studio-health',{type:'json'});
-      return json({connected:!!session,login:session?.login??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
+      const authorized=!!account&&(!binding||binding.userId===account.id);
+      return json({authenticated:!!account,authorized,claimable:!!account&&!binding,connected:authorized&&!!integration,login:authorized&&integration?integration.record.login:null,email:account?.email??null,serverReady:true,repository:REPOSITORY,branch:BRANCH,hosting:'Netlify',runner:'GitHub Actions'});
     }
     if(!['GET','HEAD'].includes(method))assertMutation(req);
+    if(!account)throw new HttpError(401,'Sign in to your Molt account to continue.');
     if(method==='POST' && path[0]==='connect') {
+      if(binding&&binding.userId!==account.id)throw new HttpError(403,'This Molt account is not authorized for the owner workspace.');
+      if(env.secret.length<40)throw new HttpError(503,'Secure workspace credential storage is not configured on this deployment.');
       const input=await body(req),token=String(input.token??'').trim();
       if(token.length<20||token.length>255||/\s/.test(token))throw new HttpError(400,'Enter a valid GitHub fine-grained access token.');
       const user=await gh(token,'/user');if(String(user.login).toLowerCase()!==OWNER)throw new HttpError(403,`This workspace belongs to ${OWNER}. Use that GitHub account.`);
       const repo=await gh(token,`/repos/${REPOSITORY}`);if(!repo.permissions?.push)throw new HttpError(403,'This token must have write access to the Molt repository.');
       await gh(token,`/repos/${REPOSITORY}/actions/workflows?per_page=1`);
-      // Owner mode uses the same fine-grained token to create and push reconstructed site repositories.
-      // It is stored only as an encrypted GitHub Actions secret; the browser receives only the opaque session cookie.
       await (services.saveSecrets??saveSecrets)(token,{MOLT_GITHUB_EXPORT_TOKEN:token});
-      const identifier=await createSession(store,token,OWNER);
-      await revokeSession(req,store);
-      return json({connected:true,login:user.login},200,{'set-cookie':cookie(identifier)});
+      if(!binding)await store.setJSON(OWNER_BINDING_KEY,{userId:account.id,...(account.email?{email:account.email}:{}),createdAt:new Date().toISOString()} satisfies OwnerBinding);
+      await store.setJSON(GITHUB_INTEGRATION_KEY,{ciphertext:sealSecret(token,env.secret),login:OWNER,connectedAt:new Date().toISOString()} satisfies GithubIntegration);
+      return json({connected:true,login:user.login,accountBound:true});
     }
-    if(method==='POST' && path[0]==='disconnect'){await revokeSession(req,store);return json({connected:false},200,{'set-cookie':cookie('',true)});}
-    if(!session)throw new HttpError(401,'Connect your GitHub workspace to continue.');
-    const token=session.token,owner=session.login;
+    await requireOwner(store,account);
+    const owner=OWNER,token=integration?.token??null;
+    if(method==='POST' && path[0]==='disconnect'){await store.delete(GITHUB_INTEGRATION_KEY);return json({connected:false});}
     if(method==='GET' && path[0]==='preview'){
       const id=uuid(path[1]??''),job=await store.get(dataKey(owner,id),{type:'json'}) as Job|null;
       if(!job||!job.previewReady)throw new HttpError(404,'Interactive preview is not available for this reconstruction.');
