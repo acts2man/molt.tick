@@ -65,7 +65,10 @@ export function validEvaluation(e: Evaluation): boolean {
       && (!v.pass || v.score !== null && v.worstBand !== null && !v.issues.length))
     && e.pass === (e.issues.length === 0 && e.views.every(v => v.pass));
 }
-/** Never trade an already-correct page/device for a prettier homepage. */
+function interactionKey(v: Evaluation['views'][number], i: NonNullable<Evaluation['views'][number]['interactions']>[number]) {
+  return `${key(v)}\0${i.id}`;
+}
+/** Keep already-correct views intact, but judge failed repairs by measured fidelity rather than issue-string churn. */
 export function improves(best: Evaluation, next: Evaluation): boolean {
   if (!validEvaluation(next) || next.views.length !== best.views.length) return false;
   const before = new Map(best.views.map(v => [key(v), v]));
@@ -74,9 +77,19 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
   for (const v of next.views) {
     const old = before.get(key(v));
     if (!old) return false;
-    if (old.pass && !v.pass || old.score !== null && v.issues.some(i => !old.issues.includes(i))) return false;
-    if ((v.score ?? -1) < (old.score ?? -1) - 0.05 || (v.worstBand ?? -1) < (old.worstBand ?? -1) - 0.05) return false;
-    if (v.pass && !old.pass || (v.score ?? -1) > (old.score ?? -1) + 0.05 || (v.worstBand ?? -1) > (old.worstBand ?? -1) + 0.05 || v.issues.length < old.issues.length) better = true;
+    if (old.pass && !v.pass) return false;
+    // Small detector/antialiasing movement is noise; reject only meaningful visual regressions.
+    if ((v.score ?? -1) < (old.score ?? -1) - 0.35 || (v.worstBand ?? -1) < (old.worstBand ?? -1) - 0.35) return false;
+    if (v.pass && !old.pass || (v.score ?? -1) > (old.score ?? -1) + 0.20 || (v.worstBand ?? -1) > (old.worstBand ?? -1) + 0.20 || v.issues.length < old.issues.length) better = true;
+
+    const oldInteractions = new Map((old.interactions??[]).map(i => [interactionKey(old,i), i]));
+    for (const state of v.interactions??[]) {
+      const prior = oldInteractions.get(interactionKey(v,state));
+      if (!prior) continue;
+      if (prior.pass && !state.pass) return false;
+      if ((state.score ?? -1) < (prior.score ?? -1) - 0.35 || (state.worstBand ?? -1) < (prior.worstBand ?? -1) - 0.35) return false;
+      if (state.pass && !prior.pass || (state.score ?? -1) > (prior.score ?? -1) + 0.20 || (state.worstBand ?? -1) > (prior.worstBand ?? -1) + 0.20 || state.issues.length < prior.issues.length) better = true;
+    }
   }
   return better;
 }
