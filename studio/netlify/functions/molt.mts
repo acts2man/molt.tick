@@ -15,6 +15,7 @@ export default async (req: Request, context: Context) => {
       secret: Netlify.env.get('MOLT_SESSION_SECRET') ?? '',
       origin: Netlify.env.get('MOLT_STUDIO_ORIGIN') ?? 'https://moltick.netlify.app',
       context: deployContext,
+      ownerUserId: Netlify.env.get('MOLT_OWNER_USER_ID') ?? undefined,
     },
   });
 };

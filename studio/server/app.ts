@@ -11,7 +11,7 @@ export interface Store {
   list(options: {prefix: string}): Promise<{blobs: {key: string}[]}>;
   delete(key: string): Promise<unknown>;
 }
-export interface Environment { secret: string; origin: string; context: string }
+export interface Environment { secret: string; origin: string; context: string; ownerUserId?: string }
 export interface Services {
   store: Store; env: Environment; github?: typeof github;
   identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; authenticate?: typeof authenticateAccount;
@@ -122,7 +122,8 @@ export async function handle(req: Request, services: Services): Promise<Response
       throw new HttpError(404,'Runner route not found.');
     }
     const account=await (services.authenticate??authenticateAccount)(req);
-    const binding=await ownerBinding(store);
+    let binding=await ownerBinding(store);
+    if(!binding&&account&&env.ownerUserId&&account.id===env.ownerUserId){binding={userId:account.id,...(account.email?{email:account.email}:{}),createdAt:new Date().toISOString()};await store.setJSON(OWNER_BINDING_KEY,binding);}
     const integration=env.secret.length>=40?await githubIntegration(store,env):null;
     if(method==='GET' && path[0]==='session'){
       await store.get('system/studio-health',{type:'json'});
