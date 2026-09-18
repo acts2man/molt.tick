@@ -9,6 +9,8 @@ import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
 import { readBundle } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
+import { repairImages } from '../src/reconstruct/images.js';
+import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence } from '../src/reconstruct/types.js';
 import { reconstructionPrompt } from '../src/reconstruct/agent.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
@@ -63,6 +65,15 @@ test('large page evidence compacts below the provider safety budget',()=>{
   assert.match(text,/Large site/);
   assert.match(text,/screenshots|visual authority/i);
 });
+test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
+  const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
+  for(let y=0;y<png.height;y++)for(let x=0;x<png.width;x++){const i=(y*png.width+x)*4;png.data[i]=(x*17+y*31)%256;png.data[i+1]=(x*43+y*11)%256;png.data[i+2]=(x*7+y*53)%256;png.data[i+3]=255;}
+  await writeFile(path,PNG.sync.write(png));
+  const checks=['desktop','tablet','mobile'].map(viewport=>({route:'/',viewport,source:path,candidate:path,diff:path,score:80,worstBand:60,worstY:400,pass:false,issues:[]}));
+  const images=await repairImages(checks as any);
+  assert.ok(images.length<=18);
+  assert.ok(images.every(image=>Buffer.from(image.base64,'base64').length<=900_000),'every repair image must stay below the binary budget');
+}));
 test('provider response must contain real files',()=>{assert.throws(()=>parseReply('{"summary":"done","files":[]}'));assert.equal(parseReply('```json\n{"summary":"x","files":[{"path":"src/site.css","content":"body{}"}]}\n```').files.length,1);});
 const reply:ModelReply={summary:'test',files:[change('export default()=> <main>Text</main>')]};
 test('Anthropic adapter sends both visual evidence and measured text',async()=>{let body:any;const model=createModel({provider:'anthropic',model:'test-model',key:'test-only',fetcher:async(_url,init)=>{body=JSON.parse(String(init?.body));return new Response(JSON.stringify({stop_reason:'end_turn',content:[{type:'text',text:JSON.stringify(reply)}],usage:{input_tokens:12,output_tokens:7}}));}});assert.deepEqual(await model.complete({prompt:'geometry',images:[{label:'source',base64:'abc'}]},signal()),reply);assert.equal(body.messages[0].content[1].type,'image');assert.equal(model.usage.inputTokens,12);});
