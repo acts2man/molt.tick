@@ -90,6 +90,9 @@ try{
   await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
   const plannedRepo=await preflightOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
   await progress(`Zero-cost preflight passed. Output will publish to ${plannedRepo.repository}; no model usage has occurred yet.`);
+  const requestedCallCap=Math.min(24,Math.max(2,job.maxPages*2+job.maxRepairs));
+  process.env.MOLT_MAX_MODEL_CALLS=String(requestedCallCap);
+  await progress(`Paid-model guard armed: at most ${requestedCallCap} model calls for this scope.`);
   let bundleDir:string|undefined;
   if(job.bundleId){
     await progress('Retrieving the saved-page bundle.');bundleDir=resolve('studio-work/bundle');await mkdir(bundleDir,{recursive:true});
