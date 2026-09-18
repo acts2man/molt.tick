@@ -47,7 +47,8 @@ export function newJob(input: any, owner: string): Job {
   const pages = sourcePages(source, String(input.pages || ''));
   const maxPages = Number(input.maxPages ?? 5), maxRepairs = Number(input.maxRepairs ?? 3);
   const model=String(input.model??'gpt-5.6-sol').trim(), reasoningEffort=String(input.reasoningEffort??'medium') as Job['reasoningEffort'];
-  const outputRepo=String(input.outputRepo??'').trim().toLowerCase();
+  const suggestedRepo=new URL(source).hostname.replace(/^www\./,'').replace(/[^a-z0-9.-]+/gi,'-').replace(/\./g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()+'-react';
+  const outputRepo=String(input.outputRepo??suggestedRepo).trim().toLowerCase();
   if (!/^[\w.:-]{1,100}$/.test(model) || !['low','medium','high'].includes(reasoningEffort)) throw new HttpError(400,'Invalid model selection.');
   if (!/^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/.test(outputRepo)||outputRepo.includes('..')) throw new HttpError(400,'Choose a valid GitHub repository name for the React output.');
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 12 || !Number.isInteger(maxRepairs) || maxRepairs < 0 || maxRepairs > 6) throw new HttpError(400, 'Invalid reconstruction limits.');
