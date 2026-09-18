@@ -45,7 +45,7 @@ on:
   workflow_dispatch:
 jobs:
   permission-check:
-    if: ${{ false }}
+    if: \${{ false }}
     runs-on: ubuntu-latest
     steps:
       - run: echo permission-check
