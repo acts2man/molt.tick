@@ -24,6 +24,13 @@ test('sessions are encrypted, authenticated, owner-scoped and expiring',()=>{con
 test('cookie has security attributes',()=>{for(const flag of ['HttpOnly','Secure','SameSite=Strict','Path=/'])assert.ok(cookie('opaque').includes(flag));});
 test('cross-origin writes are denied',()=>{assert.throws(()=>assertMutation(new Request(ORIGIN,{method:'POST',headers:{origin:'https://evil.test','x-molt-request':'1'}})));});
 test('account session health never returns a credential and reports the shared workspace integration',async()=>{const s=setup();const r=await handle(s.req('session'),s.services);const text=await r.text();assert.ok(!text.includes('github_pat'));const data=JSON.parse(text);assert.equal(data.authenticated,true);assert.equal(data.authorized,true);assert.equal(data.connected,true);assert.equal(data.email,'owner@example.test');});
+test('configured owner account automatically reclaims the existing owner workspace history',async()=>{
+ const s=setup();s.map.delete('auth/owner-binding-v1');s.services.env.ownerUserId=USER;
+ s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'needs-work'});
+ const session=await handle(s.req('session'),s.services);const info=await session.json();assert.equal(info.authorized,true);
+ const binding=s.map.get('auth/owner-binding-v1');assert.equal(binding.userId,USER);
+ const rows=await (await handle(s.req('jobs'),s.services)).json();assert.equal(rows.jobs.length,1);
+});
 test('a signed-in device sees the same persisted runs without a browser GitHub session',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'https://example.com'},'acts2man'),status:'needs-work'});
  const r=await handle(s.req('jobs'),s.services);assert.equal(r.status,200);const data=await r.json();assert.equal(data.jobs.length,1);
