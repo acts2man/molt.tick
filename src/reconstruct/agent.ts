@@ -93,6 +93,25 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
     currentFiles:boundedFiles(files,page,8000).slice(0,6)
   });
 }
+function numberDelta(retained:number|null,candidate:number|null){return retained===null||candidate===null?null:Number((candidate-retained).toFixed(2));}
+function issueDelta(retained:string[],candidate:string[]){return {removed:retained.filter(i=>!candidate.includes(i)).slice(0,8),added:candidate.filter(i=>!retained.includes(i)).slice(0,8)};}
+/** Diagnose the latest rejected candidate against the version that was retained so the next repair can preserve gains and avoid repeating regressions. */
+export function rejectedRepairAutopsy(best:Evaluation,history:Attempt[],route:string){
+  const rejected=[...history].reverse().find(attempt=>!attempt.accepted&&attempt.evaluation.views.some(v=>v.route===route));
+  if(!rejected)return null;
+  const retainedViews=new Map(best.views.filter(v=>v.route===route).map(v=>[v.viewport,v]));
+  const views=rejected.evaluation.views.filter(v=>v.route===route).flatMap(candidate=>{
+    const retained=retainedViews.get(candidate.viewport);if(!retained)return [];
+    const retainedInteractions=new Map((retained.interactions??[]).map(i=>[`${i.trigger.kind}:${i.trigger.name}`,i]));
+    const interactions=(candidate.interactions??[]).flatMap(state=>{
+      const prior=retainedInteractions.get(`${state.trigger.kind}:${state.trigger.name}`);if(!prior)return [];
+      return [{name:state.trigger.name,retained:{score:prior.score,worstBand:prior.worstBand,pass:prior.pass},rejected:{score:state.score,worstBand:state.worstBand,pass:state.pass},delta:{score:numberDelta(prior.score,state.score),worstBand:numberDelta(prior.worstBand,state.worstBand)},issues:issueDelta(prior.issues,state.issues)}];
+    });
+    return [{viewport:candidate.viewport,retained:{score:retained.score,worstBand:retained.worstBand,pass:retained.pass},rejected:{score:candidate.score,worstBand:candidate.worstBand,pass:candidate.pass},delta:{score:numberDelta(retained.score,candidate.score),worstBand:numberDelta(retained.worstBand,candidate.worstBand)},issues:issueDelta(retained.issues,candidate.issues),interactions}];
+  });
+  return {round:rejected.round,summary:rejected.summary,note:'Positive score deltas are gains from the rejected candidate; negative deltas and added issues are regressions. Recreate useful gains without repeating regressions.',views};
+}
+
 /** One browser-evidence contract, one shared React workspace, one measured repair loop. */
 export async function runReconstruction(options:AgentOptions):Promise<ReconstructionResult>{
   const model=options.model??modelFromEnv();
@@ -129,7 +148,9 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const checks=best.views.filter(v=>v.route===page.route);
       const targets=checks.map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand,worstY:v.worstY,issues:v.issues.slice(0,12),interactions:(v.interactions??[]).filter(i=>!i.pass).map(i=>({name:i.trigger.name,score:i.score,worstBand:i.worstBand,worstY:i.worstY,issues:i.issues.slice(0,6)}))}));
       const historySummary=history.slice(-4).map(a=>({round:a.round,accepted:a.accepted,summary:a.summary,views:a.evaluation.views.filter(v=>v.route===page.route).map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand}))}));
-      return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Target the evaluator's acceptance bar on every viewport: at least 97% overall pixel match and at least 92% in the weakest measured band, with no content/interaction issues and without regressing any already-correct viewport. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}. The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`),images:await repairImages(checks)},signal);
+      const autopsy=rejectedRepairAutopsy(best,history,page.route);
+      const rejectionGuidance=autopsy?` Most recent rejected repair autopsy: ${JSON.stringify(autopsy)}. Treat this as causal feedback: preserve the positive deltas, explicitly avoid the negative deltas and added issues, and make a narrower repair rather than repeating the rejected strategy.`:'';
+      return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Target the evaluator's acceptance bar on every viewport: at least 97% overall pixel match and at least 92% in the weakest measured band, with no content/interaction issues and without regressing any already-correct viewport. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}.${rejectionGuidance} The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`),images:await repairImages(checks)},signal);
     },
     apply:reply=>apply(outDir,reply.files,allowed),
     save:async(best,attempts)=>{
