@@ -10,7 +10,7 @@ import { writeReview } from './report.js';
 import { apply, digest, restore, scaffold, snapshot } from './workspace.js';
 import { prepareToolchain, build } from './runtime.js';
 import { routeFile, integer } from './policy.js';
-import type { Evidence, EvidencePage, FileChange, Model, ReconstructionResult } from './types.js';
+import type { Attempt, Evaluation, Evidence, EvidencePage, FileChange, Model, ReconstructionResult } from './types.js';
 
 export interface AgentOptions {
   url?:string; urls?:string[]; bundleDir?:string; workDir:string;
