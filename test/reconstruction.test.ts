@@ -12,7 +12,7 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence } from '../src/reconstruct/types.js';
-import { reconstructionPrompt } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, rejectedRepairAutopsy } from '../src/reconstruct/agent.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -36,6 +36,15 @@ test('material regression in any failing viewport is still rejected',()=>{
   const a=score(91);a.views[0].worstBand=78;a.views.push({...a.views[0],viewport:'mobile',score:90,worstBand:76,pass:false});
   const b=structuredClone(a);b.views[0].score=94;b.views[0].worstBand=84;b.views[1].score=88;b.views[1].worstBand=74;
   assert.equal(improves(a,b),false);
+});
+
+test('rejected repair autopsy exposes gains and regressions for the next model round',()=>{
+  const best=score(90);best.views[0].worstBand=70;best.views.push({...best.views[0],viewport:'mobile',score:88,worstBand:68,pass:false,issues:['mobile spacing']});
+  const rejected=structuredClone(best);rejected.views[0].score=93;rejected.views[0].worstBand=78;rejected.views[1].score=86.5;rejected.views[1].worstBand=66;rejected.views[1].issues=['mobile spacing','new overflow'];
+  const autopsy=rejectedRepairAutopsy(best,[{round:1,accepted:false,summary:'Rejected regression',evaluation:rejected,digest:'x'}],'/');
+  assert.equal(autopsy?.round,1);
+  assert.deepEqual(autopsy?.views.map(v=>[v.viewport,v.delta.score,v.delta.worstBand]),[['desktop',3,8],['mobile',-1.5,-2]]);
+  assert.deepEqual(autopsy?.views[1].issues.added,['new overflow']);
 });
 test('malformed evaluator success and changed scope cannot pass',()=>{assert.equal(improves(score(50),score(null,true)),false);const next=score(99,true);next.views[0].viewport='mobile';assert.equal(improves(score(50),next),false);});
 test('asset paths cannot escape a bundle through a symlink',()=>temporary(async dir=>{await writeFile(join(dir,'page.html'),'x');assert.equal(await inside(dir,'page.html'),join(dir,'page.html'));await symlink('/etc/passwd',join(dir,'escape'));await assert.rejects(inside(dir,'escape'));await assert.rejects(inside(dir,'../outside'));}));
