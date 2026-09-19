@@ -19,7 +19,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     if(index<0){problems.push(`Missing heading: ${original.text}`);continue;}
     const actual=headings.splice(index,1)[0];
     const mismatches=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
-    for(const property of ['font-size','font-weight','line-height'])if(original.style[property]!==actual.style[property])mismatches.push(property);
+    for(const property of ['font-family','font-size','font-weight','line-height','letter-spacing'])if(original.style[property]!==actual.style[property])mismatches.push(property);
     if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
   }
   if(Math.abs(source.height-candidate.height)>Math.max(3,source.height*0.005))problems.push(`Page height differs: source ${source.height}px, generated ${candidate.height}px`);
@@ -28,7 +28,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
 export function emptyEvaluation(evidence:Evidence,issue:string):Evaluation{
   return {pass:false,issues:[issue],views:evidence.pages.flatMap(p=>p.views.map(v=>({route:p.route,viewport:v.viewport.name,score:null,worstBand:null,pass:false,issues:[issue],source:v.screenshot})))};
 }
-export async function evaluate(outDir:string,evidence:Evidence,directory:string,signal:AbortSignal,threshold=95,bandThreshold=85):Promise<Evaluation>{
+export async function evaluate(outDir:string,evidence:Evidence,directory:string,signal:AbortSignal,threshold=97,bandThreshold=92):Promise<Evaluation>{
   if(!Number.isFinite(threshold)||threshold<=0||threshold>100||!Number.isFinite(bandThreshold)||bandThreshold<=0||bandThreshold>100)throw new Error('Invalid visual acceptance thresholds');
   await mkdir(directory,{recursive:true});
   // A failed compilation must never reuse an earlier dist directory.

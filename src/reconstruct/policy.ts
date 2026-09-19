@@ -68,30 +68,58 @@ export function validEvaluation(e: Evaluation): boolean {
 function interactionKey(v: Evaluation['views'][number], i: NonNullable<Evaluation['views'][number]['interactions']>[number]) {
   return `${key(v)}\0${i.id}`;
 }
-/** Keep already-correct views intact, but judge failed repairs by measured fidelity rather than issue-string churn. */
+/** Keep already-correct views intact, while allowing a targeted repair to trade tiny
+ * antialiasing/layout noise in one failing viewport for a material gain in the worst region.
+ * Human-visible local fidelity matters more than preserving every failing score to 0.35 points. */
 export function improves(best: Evaluation, next: Evaluation): boolean {
   if (!validEvaluation(next) || next.views.length !== best.views.length) return false;
   const before = new Map(best.views.map(v => [key(v), v]));
   if (before.size !== best.views.length || next.issues.some(i => !best.issues.includes(i))) return false;
-  let better = next.issues.length < best.issues.length;
+
+  let passGain = 0, measurementGain = 0, issueGain = best.issues.length - next.issues.length;
+  let beforeScore = 0, nextScore = 0, beforeWorst = 0, nextWorst = 0, count = 0;
+  let beforeMinWorst = 101, nextMinWorst = 101;
+
   for (const v of next.views) {
     const old = before.get(key(v));
     if (!old) return false;
     if (old.pass && !v.pass) return false;
-    // Small detector/antialiasing movement is noise; reject only meaningful visual regressions.
-    if ((v.score ?? -1) < (old.score ?? -1) - 0.35 || (v.worstBand ?? -1) < (old.worstBand ?? -1) - 0.35) return false;
-    if (v.pass && !old.pass || (v.score ?? -1) > (old.score ?? -1) + 0.20 || (v.worstBand ?? -1) > (old.worstBand ?? -1) + 0.20 || v.issues.length < old.issues.length) better = true;
+
+    if(old.score!==null&&v.score===null||old.worstBand!==null&&v.worstBand===null)return false;
+    if(old.score===null&&v.score!==null||old.worstBand===null&&v.worstBand!==null)measurementGain++;
+    const os=old.score ?? -1, ns=v.score ?? -1, ow=old.worstBand ?? -1, nw=v.worstBand ?? -1;
+    // Failing views may move slightly as shared typography/geometry is repaired, but never accept
+    // a material regression on an untouched viewport.
+    if (ns < os - 1.5 || nw < ow - 1.5) return false;
+
+    if (v.pass && !old.pass) passGain++;
+    issueGain += old.issues.length - v.issues.length;
+    if (os >= 0 && ns >= 0 && ow >= 0 && nw >= 0) {
+      beforeScore += os; nextScore += ns; beforeWorst += ow; nextWorst += nw; count++;
+      beforeMinWorst = Math.min(beforeMinWorst,ow); nextMinWorst = Math.min(nextMinWorst,nw);
+    }
 
     const oldInteractions = new Map((old.interactions??[]).map(i => [interactionKey(old,i), i]));
     for (const state of v.interactions??[]) {
       const prior = oldInteractions.get(interactionKey(v,state));
       if (!prior) continue;
       if (prior.pass && !state.pass) return false;
-      if ((state.score ?? -1) < (prior.score ?? -1) - 0.35 || (state.worstBand ?? -1) < (prior.worstBand ?? -1) - 0.35) return false;
-      if (state.pass && !prior.pass || (state.score ?? -1) > (prior.score ?? -1) + 0.20 || (state.worstBand ?? -1) > (prior.worstBand ?? -1) + 0.20 || state.issues.length < prior.issues.length) better = true;
+      if(prior.score!==null&&state.score===null||prior.worstBand!==null&&state.worstBand===null)return false;
+      if(prior.score===null&&state.score!==null||prior.worstBand===null&&state.worstBand!==null)measurementGain++;
+      const pis=prior.score ?? -1, sis=state.score ?? -1, piw=prior.worstBand ?? -1, siw=state.worstBand ?? -1;
+      if (sis < pis - 1.5 || siw < piw - 1.5) return false;
+      if (state.pass && !prior.pass) passGain++;
+      issueGain += prior.issues.length - state.issues.length;
     }
   }
-  return better;
+
+  if (passGain > 0 || measurementGain > 0 || issueGain > 0) return true;
+  if (!count) return false;
+  const beforeComposite=(beforeScore/count)*0.35+(beforeWorst/count)*0.65;
+  const nextComposite=(nextScore/count)*0.35+(nextWorst/count)*0.65;
+  // Prefer improving the weakest visible band; otherwise require a meaningful weighted gain.
+  if (nextMinWorst >= beforeMinWorst + 0.35 && nextComposite >= beforeComposite - 0.15) return true;
+  return nextComposite >= beforeComposite + 0.25;
 }
 export function safeEnvironment(): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};

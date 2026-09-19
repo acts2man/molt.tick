@@ -61,7 +61,7 @@ export async function geometry(page: Page): Promise<Geometry> {
 /** Observe only bounded, reversible interaction states. Links, submit buttons and arbitrary clicks are excluded. */
 const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
- const name=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+ const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
  const out=[],seen=new Set();
  const push=(kind,el)=>{const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');if(!n||seen.has(key))return;seen.add(key);out.push({kind,name:n,controls});};
  for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const s=d.querySelector(':scope > summary');if(s)push('details',s);}
@@ -70,7 +70,15 @@ const INTERACTIONS = `(() => {
    if(el.getAttribute('role')==='tab')continue; push('button',el);
  }
  for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tab',el);
- return out.slice(0,3);
+ // Explicit Previous/Next carousel controls are bounded, reversible interactions and are safe to replay.
+ // Capture them even when the source does not use aria-expanded, so sliders/testimonials are graded behaviorally.
+ const carousel=/^(?:previous|prev|next)(?:\s+(?:slide|testimonial|review|item|image|photo|project))?\b/i;
+ for(const el of Array.from(document.querySelectorAll('button,[role="button"]'))){
+   const n=name(el);if(!carousel.test(n))continue;
+   if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
+   push('button',el);
+ }
+ return out.slice(0,5);
 })()`;
 export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
   return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
