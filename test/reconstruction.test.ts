@@ -7,9 +7,9 @@ import { improves, routePath, routeFile, publicUrl, publicIP, inside, integer, v
 import { validateChanges, apply, snapshot, restore } from '../src/reconstruct/workspace.js';
 import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
-import { readBundle } from '../src/reconstruct/capture.js';
+import { readBundle, adaptiveViewports, geometryFingerprint } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
-import { repairImages } from '../src/reconstruct/images.js';
+import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
@@ -39,6 +39,13 @@ test('partially supplied current files are protected from full replacement',()=>
 test('source URL validation rejects unsafe schemes and credentials',()=>{for(const u of ['file:///etc/passwd','data:text/html,a','javascript:alert(1)','https://user:password@example.com'])assert.throws(()=>publicUrl(u));assert.equal(publicUrl('example.com').origin,'https://example.com');});
 test('reserved networks are denied',()=>{for(const ip of ['127.0.0.1','10.0.0.1','192.168.1.1','169.254.169.254','100.64.0.1','::1','::ffff:127.0.0.1','2001:db8::1','198.51.100.1'])assert.equal(publicIP(ip),false,ip);assert.equal(publicIP('8.8.8.8'),true);});
 test('numeric and viewport limits are explicit',()=>{assert.equal(integer(undefined,6,0,20),6);for(const n of ['','-1','21','NaN','1.5'])assert.throws(()=>integer(n,6,0,20));assert.throws(()=>validateViewports([]));assert.throws(()=>validateViewports([{name:'../x',width:390,height:844}]));});
+test('adaptive viewport probes derive meaningful source breakpoints without duplicating the base matrix',()=>{
+  const probes=adaptiveViewports(['(max-width: 1200px)','(max-width: 1024px)','(max-width: 430px)','(min-width: 375px)'],[
+    {name:'desktop',width:1440,height:900},{name:'tablet',width:768,height:1024},{name:'mobile',width:390,height:844}
+  ]);
+  assert.deepEqual(probes.map(v=>v.width),[1024,430]);
+  assert.ok(probes.every(v=>!['desktop','tablet','mobile'].includes(v.name)));
+});
 test('child environment excludes provider credentials',()=>{process.env.MOLT_TEST_PRIVATE_VALUE='secret';assert.equal(safeEnvironment().MOLT_TEST_PRIVATE_VALUE,undefined);delete process.env.MOLT_TEST_PRIVATE_VALUE;});
 test('high-fidelity repair scope expands only enough to cover multi-page jobs',()=>{
   assert.equal(effectiveRepairRounds(1,4),4);
@@ -67,6 +74,12 @@ test('multi-page repair scheduling gives unattempted failing routes priority',()
   assert.equal(selectRepairRoute(evaluation,attempts),'/b');
 });
 const simpleGeometry=(elements:Geometry['elements']):Geometry=>({text:elements.map(e=>e.text).filter(Boolean).join(' '),title:'Spacing test',height:1000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false});
+test('source geometry fingerprints are stable for identical evidence and change for visible layout changes',()=>{
+  const base=simpleGeometry([{key:'1',tag:'h1',text:'Stable title',x:40,y:80,width:600,height:60,style:{}}]);
+  const same=structuredClone(base),changed=structuredClone(base);changed.elements[0].y=120;
+  assert.equal(geometryFingerprint(base),geometryFingerprint(same));
+  assert.notEqual(geometryFingerprint(base),geometryFingerprint(changed));
+});
 test('media geometry diagnostics identify exact localized image placement deltas without guessing by DOM order',()=>{
   const source=simpleGeometry([{key:'1',tag:'img',text:'',x:100,y:200,width:500,height:300,style:{},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
   const candidate=simpleGeometry([
@@ -245,6 +258,23 @@ test('large page evidence compacts below the provider safety budget',()=>{
   assert.equal(Boolean(parsed.reference?.views?.[0]?.outline),Boolean(baseParsed.reference?.views?.[0]?.outline),'saved evidence changed the live-evidence fallback mode');
   if(parsed.savedSource)assert.ok(parsed.savedSource.html.length<=26001,'saved HTML should be supplemental and bounded');
 });
+test('adaptive viewport reference evidence stays within provider image count while retaining every viewport overview',async()=>temporary(async dir=>{
+  const path=join(dir,'reference.png'),png=new PNG({width:320,height:3600});png.data.fill(240);for(let i=3;i<png.data.length;i+=4)png.data[i]=255;await writeFile(path,PNG.sync.write(png));
+  const names=['desktop','tablet','mobile','probe-1024','probe-430'],widths=[1440,768,390,1024,430];
+  const views=names.map((name,index)=>({viewport:{name,width:widths[index],height:900},screenshot:path,geometry:simpleGeometry([]),interactions:[]}));
+  const images=await referenceImages(views as any);assert.ok(images.length<=18,images.map(i=>i.label).join('\n'));
+  for(const name of names)assert.ok(images.some(image=>image.label.startsWith(name+' complete source overview')),name);
+}));
+test('repair evidence prioritizes the worst failing adaptive viewport instead of the first three widths',async()=>temporary(async dir=>{
+  const path=join(dir,'repair-priority.png'),png=new PNG({width:320,height:900});png.data.fill(230);for(let i=3;i<png.data.length;i+=4)png.data[i]=255;await writeFile(path,PNG.sync.write(png));
+  const checks=[
+    {route:'/',viewport:'desktop',source:path,candidate:path,diff:path,score:99,worstBand:98,worstY:0,pass:true,issues:[]},
+    {route:'/',viewport:'tablet',source:path,candidate:path,diff:path,score:98,worstBand:97,worstY:0,pass:true,issues:[]},
+    {route:'/',viewport:'mobile',source:path,candidate:path,diff:path,score:96,worstBand:90,worstY:0,pass:false,issues:['mobile']},
+    {route:'/',viewport:'probe-1024',source:path,candidate:path,diff:path,score:80,worstBand:35,worstY:0,pass:false,issues:['breakpoint']}
+  ];
+  const images=await repairImages(checks as any);assert.ok(images.some(image=>image.label.startsWith('probe-1024 SOURCE')),images.map(i=>i.label).join('\n'));
+}));
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
   for(let y=0;y<png.height;y++)for(let x=0;x<png.width;x++){const i=(y*png.width+x)*4;png.data[i]=(x*17+y*31)%256;png.data[i+1]=(x*43+y*11)%256;png.data[i+2]=(x*7+y*53)%256;png.data[i+3]=255;}

@@ -30,7 +30,8 @@ const result=await runReconstruction({
   onProgress:message=>{console.log('[preflight]',message);}
 });
 assert.equal(result.source.pages.length,1,'real Ceballos homepage must capture');
-assert.equal(result.evaluation.views.length,3,'desktop/tablet/mobile must all render');
+assert.ok(result.evaluation.views.length>=3&&result.evaluation.views.length<=5,'desktop/tablet/mobile plus at most two adaptive breakpoint probes must render');
+for(const viewport of ['desktop','tablet','mobile'])assert.ok(result.evaluation.views.some(v=>v.viewport===viewport),`${viewport} baseline viewport must render`);
 assert.ok(result.evaluation.views.every(v=>typeof v.score==='number'),'every viewport must produce a pixel score');
 assert.ok(result.evaluation.views.every(v=>v.candidate),'every viewport must produce a generated screenshot');
 assert.ok(result.attempts.length>=1,'repair loop must checkpoint at least the initial evaluation');
