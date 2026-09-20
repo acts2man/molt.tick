@@ -79,6 +79,7 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
   let passGain = 0, measurementGain = 0, issueGain = best.issues.length - next.issues.length;
   let beforeScore = 0, nextScore = 0, beforeWorst = 0, nextWorst = 0, count = 0;
   let beforeMinWorst = 101, nextMinWorst = 101;
+  const addMeasured=(os:number,ns:number,ow:number,nw:number)=>{if(os<0||ns<0||ow<0||nw<0)return;beforeScore+=os;nextScore+=ns;beforeWorst+=ow;nextWorst+=nw;count++;beforeMinWorst=Math.min(beforeMinWorst,ow);nextMinWorst=Math.min(nextMinWorst,nw);};
 
   for (const v of next.views) {
     const old = before.get(key(v));
@@ -94,10 +95,7 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
 
     if (v.pass && !old.pass) passGain++;
     issueGain += old.issues.length - v.issues.length;
-    if (os >= 0 && ns >= 0 && ow >= 0 && nw >= 0) {
-      beforeScore += os; nextScore += ns; beforeWorst += ow; nextWorst += nw; count++;
-      beforeMinWorst = Math.min(beforeMinWorst,ow); nextMinWorst = Math.min(nextMinWorst,nw);
-    }
+    addMeasured(os,ns,ow,nw);
 
     const oldInteractions = new Map((old.interactions??[]).map(i => [interactionKey(old,i), i]));
     for (const state of v.interactions??[]) {
@@ -107,9 +105,12 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
       if(prior.score!==null&&state.score===null||prior.worstBand!==null&&state.worstBand===null)return false;
       if(prior.score===null&&state.score!==null||prior.worstBand===null&&state.worstBand!==null)measurementGain++;
       const pis=prior.score ?? -1, sis=state.score ?? -1, piw=prior.worstBand ?? -1, siw=state.worstBand ?? -1;
-      if (sis < pis - 1.5 || siw < piw - 1.5) return false;
+      // Never break an interaction that was already correct. For interactions that are still failing,
+      // allow a temporary local regression when the combined page+interaction evidence improves overall;
+      // the next repair round can then target that remaining interaction instead of discarding page-wide gains.
       if (state.pass && !prior.pass) passGain++;
       issueGain += prior.issues.length - state.issues.length;
+      addMeasured(pis,sis,piw,siw);
     }
   }
 
