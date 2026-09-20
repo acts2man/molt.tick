@@ -7,18 +7,36 @@ import { routeFile } from './policy.js';
 import type { Evidence, Evaluation, ViewCheck, Geometry, ElementEvidence } from './types.js';
 
 const normalize=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim();
-const TEXT_TAG=/^(h[1-6]|p|li|button|label|blockquote)$/;
+const TEXT_TAG=/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/;
+const INLINE_TEXT_TAG=/^(strong|b|em|i|span|a|small)$/;
+const TYPOGRAPHY_PROPS=['font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform'] as const;
 const short=(e:ElementEvidence)=>{const value=normalize(e.text);return value.length>54?value.slice(0,51)+'…':value||e.tag;};
+function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):string[]{
+  const diffs:string[]=[];
+  for(const property of TYPOGRAPHY_PROPS){
+    const expected=source.style[property]??'',actual=candidate.style[property]??'';
+    if(expected===actual)continue;
+    diffs.push(`${property} source ${expected||'unset'}, generated ${actual||'unset'}`);
+  }
+  return diffs;
+}
 function matchedTextElements(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence}>{
+  const visibleCandidate=candidate.elements.filter(e=>normalize(e.text)&&TEXT_TAG.test(e.tag));
+  const key=(e:ElementEvidence,text:string)=>(INLINE_TEXT_TAG.test(e.tag)?'inline':e.tag)+'\0'+text;
   const pools=new Map<string,ElementEvidence[]>();
-  for(const e of candidate.elements){
-    const text=normalize(e.text);if(!text||!TEXT_TAG.test(e.tag))continue;
-    const key=e.tag+'\0'+text,items=pools.get(key)??[];items.push(e);pools.set(key,items);
+  for(const e of visibleCandidate){
+    const text=normalize(e.text),k=key(e,text),items=pools.get(k)??[];items.push(e);pools.set(k,items);
   }
   const out:Array<{source:ElementEvidence;candidate:ElementEvidence}>=[];
   for(const e of source.elements){
     const text=normalize(e.text);if(!text||!TEXT_TAG.test(e.tag))continue;
-    const items=pools.get(e.tag+'\0'+text);const actual=items?.shift();if(actual)out.push({source:e,candidate:actual});
+    const items=pools.get(key(e,text));let actual=items?.shift();
+    // If emphasized inline text was flattened into its surrounding paragraph, still compare the
+    // fragment against the smallest candidate text box containing it so lost bold/italic is visible.
+    if(!actual&&INLINE_TEXT_TAG.test(e.tag)&&text.length>=3){
+      actual=visibleCandidate.filter(c=>normalize(c.text).includes(text)).sort((a,b)=>normalize(a.text).length-normalize(b.text).length)[0];
+    }
+    if(actual)out.push({source:e,candidate:actual});
   }
   return out;
 }
@@ -29,13 +47,23 @@ const overlapX=(a:ElementEvidence,b:ElementEvidence)=>{
 export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
   const pairs=matchedTextElements(source,candidate),problems:string[]=[];
   const typography:string[]=[];
+  const horizontal:Array<{amount:number;message:string}>=[];
   for(const pair of pairs){
     if(/^h[1-6]$/.test(pair.source.tag))continue;
-    const mismatches=['font-family','font-size','line-height','letter-spacing'].filter(property=>pair.source.style[property]!==pair.candidate.style[property]);
-    if(mismatches.length)typography.push(`Text "${short(pair.source)}": ${mismatches.join(', ')} differ`);
-    if(typography.length>=5)break;
+    const diffs=typographyDiffs(pair.source,pair.candidate);
+    if(diffs.length&&typography.length<8)typography.push(`Text "${short(pair.source)}": ${diffs.join('; ')}`);
+    if(!INLINE_TEXT_TAG.test(pair.source.tag)){
+      const leftDelta=pair.candidate.x-pair.source.x;
+      const sourceCenter=pair.source.x+pair.source.width/2,candidateCenter=pair.candidate.x+pair.candidate.width/2;
+      const centerDelta=candidateCenter-sourceCenter;
+      if(Math.abs(leftDelta)>8&&Math.abs(centerDelta)>8){
+        horizontal.push({amount:Math.max(Math.abs(leftDelta),Math.abs(centerDelta)),message:`Horizontal alignment "${short(pair.source)}": source x ${Math.round(pair.source.x)}px, generated x ${Math.round(pair.candidate.x)}px; source center ${Math.round(sourceCenter)}px, generated center ${Math.round(candidateCenter)}px`});
+      }
+    }
   }
   problems.push(...typography);
+  horizontal.sort((a,b)=>b.amount-a.amount);
+  problems.push(...horizontal.slice(0,5).map(item=>item.message));
 
   const byParent=new Map<string,typeof pairs>();
   for(const pair of pairs){
@@ -72,7 +100,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     if(index<0){problems.push(`Missing heading: ${original.text}`);continue;}
     const actual=headings.splice(index,1)[0];
     const mismatches=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
-    for(const property of ['font-family','font-size','font-weight','line-height','letter-spacing'])if(original.style[property]!==actual.style[property])mismatches.push(property);
+    for(const property of TYPOGRAPHY_PROPS)if(original.style[property]!==actual.style[property])mismatches.push(property);
     if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
   }
   problems.push(...spacingIssues(source,candidate));
