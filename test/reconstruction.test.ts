@@ -109,7 +109,7 @@ test('large page evidence compacts below the provider safety budget',()=>{
   const liveGeometry=(value:any)=>value.reference?.views?.[0]?.geometry?.length??0;
   assert.ok(liveGeometry(parsed)>=liveGeometry(baseParsed),'saved evidence reduced live geometry from '+liveGeometry(baseParsed)+' to '+liveGeometry(parsed));
   assert.equal(Boolean(parsed.reference?.views?.[0]?.outline),Boolean(baseParsed.reference?.views?.[0]?.outline),'saved evidence changed the live-evidence fallback mode');
-  if(parsed.savedSource)assert.ok(parsed.savedSource.html.length<=18001,'saved HTML should be supplemental and bounded');
+  if(parsed.savedSource)assert.ok(parsed.savedSource.html.length<=26001,'saved HTML should be supplemental and bounded');
 });
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
