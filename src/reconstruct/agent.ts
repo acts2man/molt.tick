@@ -103,11 +103,17 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
   };
-  // Keep detailed live geometry first. Saved HTML/CSS is supplemental and is progressively clipped
-  // before we ever fall back to the vision-first outline. This prevents a ZIP from crowding out the
-  // browser evidence that produced the strongest visual reconstruction.
-  for(const [g,t,f,h,sc,sl] of [[180,42000,42000,18000,8,1000],[150,36000,36000,15000,7,900],[110,28000,30000,12000,6,800],[80,20000,22000,9000,4,650],[56,15000,16000,6500,3,500],[36,12000,14000,0,0,0]] as const){
-    const text=build(g,t,f,h,sc,sl); if(text.length<=300000)return text;
+  // First find the exact live-evidence level URL-only reconstruction would receive. Then add
+  // saved HTML/CSS only when it fits at that same level. A ZIP may enrich a prompt, never downgrade it.
+  for(const [g,t,f] of [[180,42000,42000],[110,28000,30000],[64,18000,20000],[36,12000,14000]] as const){
+    const baseline=build(g,t,f,0,0,0);
+    if(baseline.length>300000)continue;
+    if(savedSource){
+      for(const [h,sc,sl] of [[18000,8,1000],[12000,6,800],[8000,4,600],[4000,2,400]] as const){
+        const hybrid=build(g,t,f,h,sc,sl);if(hybrid.length<=300000)return hybrid;
+      }
+    }
+    return baseline;
   }
   const visionFirst=JSON.stringify({
     task:task+' The attached desktop, tablet and mobile screenshots are the primary visual authority. Implement from the screenshots plus this compact structural outline.',
