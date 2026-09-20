@@ -18,5 +18,5 @@ export function readMediaSession(req:Request,secret:string):{userId:string}|null
   }catch{return null;}
 }
 export function mediaCookie(value:string,clear=false):string{
-  return `${MEDIA_COOKIE}=${clear?'':value}; HttpOnly; Secure; SameSite=Strict; Path=/api/molt/; Max-Age=${clear?0:1800}`;
+  return `${MEDIA_COOKIE}=${clear?'':value}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${clear?0:1800}`;
 }

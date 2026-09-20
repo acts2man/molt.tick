@@ -98,7 +98,7 @@ test('runner uploads an interactive preview and embedded media uses a short-live
  const r=await handle(s.req('preview/'+ID+'/'),s.services);
  assert.equal(r.status,200);assert.match(r.headers.get('content-type')??'',/text\/html/);assert.equal(r.headers.get('x-frame-options'),'SAMEORIGIN');assert.match(r.headers.get('content-security-policy')??'',/frame-ancestors 'self'/);assert.match(await r.text(),/Preview/);
  assert.equal((await handle(s.req('preview/'+ID+'/','GET',undefined,false),s.services)).status,401);
- const issued=await handle(s.req('media-session','POST',{}),s.services);assert.equal(issued.status,200);assert.match(issued.headers.get('set-cookie')??'',/__Host-molt-media=/);
+ const issued=await handle(s.req('media-session','POST',{}),s.services);assert.equal(issued.status,200);const setCookie=issued.headers.get('set-cookie')??'';assert.match(setCookie,/__Host-molt-media=/);assert.match(setCookie,/Path=\/(?:;|$)/);assert.doesNotMatch(setCookie,/Path=\/api\/molt/);
  const token=mediaCookie(createMediaSession(USER,SECRET));
  const embedded=new Request(ORIGIN+'/api/molt/preview/'+ID+'/',{headers:{cookie:token}});
  const framed=await handle(embedded,s.services);assert.equal(framed.status,200);assert.match(await framed.text(),/Preview/);
