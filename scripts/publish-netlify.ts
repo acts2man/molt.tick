@@ -36,6 +36,13 @@ export async function preflightNetlify(teamSlug:string,token:string):Promise<voi
   if(user.status!==200)throw new Error(`Netlify preflight failed (HTTP ${user.status}). Reconnect the Netlify token before spending model usage.`);
   if(accounts.status!==200||!Array.isArray(accounts.data)||!accounts.data.some((a:any)=>a?.slug===teamSlug))throw new Error('Netlify preflight could not confirm access to the configured team. Reconnect hosting before spending model usage.');
 }
+export async function deleteNetlifySite(siteId:string,token:string):Promise<void>{
+  if(!siteId||!token)return;
+  try{
+    const response=await call(token,`/api/v1/sites/${encodeURIComponent(siteId)}`,{method:'DELETE'});
+    if(response.status!==404&&(response.status<200||response.status>=300))console.warn('Reserved Netlify site cleanup warning:',response.status,response.text.slice(0,500));
+  }catch(error){console.warn('Reserved Netlify site cleanup warning:',error instanceof Error?error.message:String(error));}
+}
 export async function createNetlifySite(teamSlug:string,repoName:string,token:string):Promise<NetlifySite>{
   const base=cleanName(repoName);
   for(let n=1;n<=30;n++){
