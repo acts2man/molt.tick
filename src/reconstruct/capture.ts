@@ -33,7 +33,7 @@ const GEOMETRY = `(() => {
  const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility'];
  const nodes=Array.from(document.querySelectorAll('body *')); const index=new Map(nodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
- const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
+ const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
  const elements=[]; let truncated=false;
  for(const el of nodes){
   const tag=el.tagName.toLowerCase(); if(/^(script|style|noscript|link|meta)$/.test(tag)) continue;
