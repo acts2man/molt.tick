@@ -78,7 +78,7 @@ jobs:
   delivery:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       MOLT_GITHUB_EXPORT_TOKEN: ${{ secrets.MOLT_GITHUB_EXPORT_TOKEN }}
       MOLT_NETLIFY_AUTH_TOKEN: ${{ secrets.MOLT_NETLIFY_AUTH_TOKEN }}
