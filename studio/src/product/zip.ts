@@ -7,9 +7,10 @@ function mime(path:string):string{
 function decodeName(bytes:Uint8Array,utf8:boolean):string{
   return new TextDecoder(utf8?'utf-8':'utf-8',{fatal:false}).decode(bytes);
 }
+function bufferPart(bytes:Uint8Array):ArrayBuffer{return bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;}
 async function inflateRaw(bytes:Uint8Array):Promise<Uint8Array>{
   if(typeof DecompressionStream==='undefined')throw new Error('This browser cannot unpack ZIP files. Use a current Chrome, Edge, Safari, or Firefox release, or upload the extracted folder instead.');
-  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const stream=new Blob([bufferPart(bytes)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 function normalize(path:string):string{
@@ -53,7 +54,7 @@ export async function unzipSavedPage(file:File):Promise<ExtractedZipFile[]>{
     const compressed=bytes.slice(start,end),content=record.method===0?compressed:await inflateRaw(compressed);
     if(content.byteLength!==record.size)throw new Error(`ZIP entry size mismatch: ${record.path}`);
     const path=common&&record.path.startsWith(common)?record.path.slice(common.length):record.path;
-    out.push({path,file:new File([content],path.split('/').pop()||'file',{type:mime(path),lastModified:file.lastModified})});
+    out.push({path,file:new File([bufferPart(content)],path.split('/').pop()||'file',{type:mime(path),lastModified:file.lastModified})});
   }
   return out;
 }
