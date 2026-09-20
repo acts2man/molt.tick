@@ -9,7 +9,7 @@ import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
 import { readBundle, adaptiveViewports, geometryFingerprint } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
-import { repairImages } from '../src/reconstruct/images.js';
+import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
@@ -243,6 +243,13 @@ test('large page evidence compacts below the provider safety budget',()=>{
   assert.equal(Boolean(parsed.reference?.views?.[0]?.outline),Boolean(baseParsed.reference?.views?.[0]?.outline),'saved evidence changed the live-evidence fallback mode');
   if(parsed.savedSource)assert.ok(parsed.savedSource.html.length<=26001,'saved HTML should be supplemental and bounded');
 });
+test('adaptive viewport reference evidence stays within provider image count while retaining every viewport overview',async()=>temporary(async dir=>{
+  const path=join(dir,'reference.png'),png=new PNG({width:320,height:3600});png.data.fill(240);for(let i=3;i<png.data.length;i+=4)png.data[i]=255;await writeFile(path,PNG.sync.write(png));
+  const names=['desktop','tablet','mobile','probe-1024','probe-430'],widths=[1440,768,390,1024,430];
+  const views=names.map((name,index)=>({viewport:{name,width:widths[index],height:900},screenshot:path,geometry:simpleGeometry([]),interactions:[]}));
+  const images=await referenceImages(views as any);assert.ok(images.length<=18,images.map(i=>i.label).join('\n'));
+  for(const name of names)assert.ok(images.some(image=>image.label.startsWith(name+' complete source overview')),name);
+}));
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
   for(let y=0;y<png.height;y++)for(let x=0;x<png.width;x++){const i=(y*png.width+x)*4;png.data[i]=(x*17+y*31)%256;png.data[i+1]=(x*43+y*11)%256;png.data[i+2]=(x*7+y*53)%256;png.data[i+3]=255;}
