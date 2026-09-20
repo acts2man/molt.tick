@@ -38,26 +38,35 @@ function compactPng(png:PNG,maxBytes=900_000):Buffer{
 }
 const input=(label:string,png:PNG):ImageInput=>({label,base64:compactPng(png).toString('base64')});
 export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[]>{
-  const result:ImageInput[]=[];
-  for(const v of views){const png=await loadPng(v.screenshot);
+  const result:ImageInput[]=[],interactionCandidates:Array<{view:ReferenceView;state:NonNullable<ReferenceView['interactions']>[number]}>=[],MAX=18;
+  // Adaptive breakpoint probes expand what the evaluator measures, but they must not multiply
+  // provider vision input without bound. Every measured viewport gets an overview. Baseline
+  // desktop/tablet/mobile views get native-resolution top/middle/bottom evidence; source-derived
+  // probes get one native detail. Two interaction overviews are then added if budget remains.
+  for(const v of views){
+    const png=await loadPng(v.screenshot),probe=v.viewport.name.startsWith('probe-');
     result.push(input(`${v.viewport.name} complete source overview; native dimensions ${png.width}x${png.height}`,overview(png)));
     const maxY=Math.max(0,png.height-1100),positions=new Set<number>([0]);
-    if(png.height>3300){positions.add(Math.round(maxY/3));positions.add(Math.round(maxY*2/3));}
-    else if(png.height>2200)positions.add(Math.max(0,Math.round(png.height/2)-550));
-    if(png.height>1100)positions.add(maxY);
+    if(!probe&&png.height>2200)positions.add(Math.max(0,Math.round(png.height/2)-550));
+    if(!probe&&png.height>1100)positions.add(maxY);
     for(const y of [...positions].sort((a,b)=>a-b))result.push(input(`${v.viewport.name} source detail y=${y} at native resolution`,crop(png,y,1100)));
-    const interactionLimit=png.height>3300?1:2;
-    for(const state of (v.interactions??[]).slice(0,interactionLimit)){
-      const opened=await loadPng(state.screenshot);
-      result.push(input(`${v.viewport.name} INTERACTION ${state.trigger.kind} "${state.trigger.name}" source state`,overview(opened)));
-    }
+    if(!probe)for(const state of (v.interactions??[]))interactionCandidates.push({view:v,state});
   }
-  if(result.length>18)throw new Error('Reference image selection exceeded provider budget');
+  // Five viewport matrices (3 baseline + 2 probes) use at most 16 static images with the
+  // policy above, leaving room for the most useful observed interaction states.
+  for(const {view,state} of interactionCandidates.slice(0,Math.max(0,Math.min(2,MAX-result.length)))){
+    const opened=await loadPng(state.screenshot);
+    result.push(input(`${view.viewport.name} INTERACTION ${state.trigger.kind} "${state.trigger.name}" source state`,overview(opened)));
+  }
+  if(result.length>MAX)throw new Error('Reference image selection exceeded provider budget after bounded selection');
   return result;
 }
 export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
   const result:ImageInput[]=[];
-  const views=checks.slice(0,3);
+  const views=[...checks].sort((a,b)=>{
+    if(a.pass!==b.pass)return a.pass?1:-1;
+    return (a.worstBand??101)-(b.worstBand??101)||(a.score??101)-(b.score??101);
+  }).slice(0,3);
   for(const v of views){
     const source=await loadPng(v.source);const y=Math.max(0,(v.worstY??0)-100);
     result.push(input(`${v.viewport} SOURCE complete overview`,overview(source)));
