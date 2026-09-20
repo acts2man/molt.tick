@@ -6,6 +6,7 @@ import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
+import { productionRunBudget } from '../src/reconstruct/budgets.js';
 import { reserveOutputRepository, publishReservedOutputRepository } from './publish-output.js';
 import { preflightNetlify, createNetlifySite, deployNetlifyDirectory, configureContinuousNetlifyDeploy } from './publish-netlify.js';
 import { finalStudioEvent } from './studio-report.js';
@@ -120,10 +121,15 @@ async function preview(file:string,name:string):Promise<string|null>{
 }
 try{
   const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;model:string;reasoningEffort:'low'|'medium'|'high'|'xhigh'|'max';outputRepo:string;maxPages:number;maxRepairs:number};
-  progressRepairRounds=Math.max(1,job.maxRepairs||1);
+  const budget=productionRunBudget(job.maxPages,job.maxRepairs,job.reasoningEffort);
+  progressRepairRounds=Math.max(1,budget.repairRounds||1);
   if(job.model)process.env.MOLT_AI_MODEL=job.model;
   if(job.reasoningEffort)process.env.MOLT_REASONING_EFFORT=job.reasoningEffort;
-  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning.`);
+  process.env.MOLT_AGENT_MINUTES=String(budget.agentMinutes);
+  process.env.MOLT_MODEL_TIMEOUT_MS=String(budget.requestMs);
+  process.env.MOLT_AI_MAX_TOKENS=String(budget.maxOutputTokens);
+  process.env.MOLT_MAX_MODEL_CALLS=String(budget.maxModelCalls);
+  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning. Scope guard: up to ${budget.agentMinutes} minutes, ${budget.repairRounds} measured repair calls, and ${budget.maxModelCalls} provider request attempts.`);
   if(!process.env.MOLT_AI_MODEL||!(process.env.MOLT_MODEL_PROVIDER==='anthropic'?process.env.ANTHROPIC_API_KEY:process.env.OPENAI_API_KEY))throw new Error('Model configuration is missing. Open Connections in Molt Studio.');
   // Everything below this preflight is still zero-cost. Prove runner rotation, Blob writes and GitHub export access before the first model request.
   runnerIdentityCache=undefined;
@@ -140,9 +146,7 @@ try{
   if(!netlifyProbe.ok)throw new Error(`Netlify reserved-site deploy preflight returned HTTP ${netlifyProbe.status} before model usage.`);
   await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url,reservedNetlifySite:plannedSite},null,2));
   await progress(`Zero-cost delivery preflight passed. Reserved ${plannedRepo.repository}, proved GitHub workflow/secret access, and deployed a placeholder to Netlify site ${plannedSite.name}; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url});
-  const requestedCallCap=Math.min(24,Math.max(2,job.maxPages*2+job.maxRepairs));
-  process.env.MOLT_MAX_MODEL_CALLS=String(requestedCallCap);
-  await progress(`Paid-model guard armed: at most ${requestedCallCap} model calls for this scope.`);
+  await progress(`Paid-model guard armed: at most ${budget.maxModelCalls} provider request attempts; unused headroom is not billed.`);
   let bundleDir:string|undefined;
   if(job.bundleId){
     await progress('Retrieving the saved-page bundle.');bundleDir=resolve('studio-work/bundle');await mkdir(bundleDir,{recursive:true});
