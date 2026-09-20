@@ -14,7 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -95,6 +95,30 @@ test('control geometry diagnostics report measured button box mismatch',()=>{
   const issues=controlGeometryIssues(source,candidate);assert.equal(issues.length,1);assert.match(issues[0],/Control "Get Started"/);assert.match(issues[0],/delta x 0, y 12, width 24, height 8px/);
 });
 
+test('visual layout diagnostics expose container sizing, treatment and text wrapping',()=>{
+  const sectionStyle={'background':'rgb(20, 20, 20)','background-image':'none','background-size':'auto','background-position':'0% 0%','border':'1px solid rgb(70, 70, 70)','border-radius':'24px','box-shadow':'rgba(0, 0, 0, 0.2) 0px 8px 24px 0px','padding':'40px','gap':'24px','overflow':'visible'};
+  const textStyle={'font-family':'Arial','font-size':'18px','line-height':'28px','letter-spacing':'0px','font-weight':'400','font-style':'normal','text-align':'left','text-transform':'none'};
+  const source=simpleGeometry([
+    {key:'s',tag:'section',text:'',x:100,y:100,width:1000,height:400,style:sectionStyle},
+    {key:'p',parent:'s',tag:'p',text:'A measured paragraph that should keep the same line wrapping.',x:140,y:160,width:600,height:56,style:textStyle},
+  ]);source.bodyStyle={margin:'0px',padding:'0px',background:'rgb(255, 255, 255)','background-image':'none'};
+  const candidate=simpleGeometry([
+    {key:'c',tag:'div',text:'',x:80,y:100,width:1100,height:460,style:{...sectionStyle,'border-radius':'0px',padding:'24px'}},
+    {key:'q',parent:'c',tag:'p',text:'A measured paragraph that should keep the same line wrapping.',x:104,y:150,width:470,height:84,style:textStyle},
+  ]);candidate.bodyStyle={margin:'8px',padding:'0px',background:'rgb(250, 250, 250)','background-image':'none'};
+  const issues=visualLayoutIssues(source,candidate);
+  assert.ok(issues.some(i=>/Container section #1/.test(i)&&/delta x -20/.test(i)&&/width 100/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Container section #1 treatment/.test(i)&&/border-radius source 24px, generated 0px/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Text box "A measured paragraph/.test(i)&&/width -130/.test(i)&&/height 28px/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Page frame/.test(i)&&/margin source 0px, generated 8px/.test(i)),issues.join('\n'));
+});
+test('media presentation diagnostics report image crop and positioning mismatches',()=>{
+  const source=simpleGeometry([{key:'1',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'cover','object-position':'50% 30%','border-radius':'18px'},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
+  const candidate=simpleGeometry([{key:'2',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'contain','object-position':'50% 50%','border-radius':'0px'},src:'http://generated.test/assets/hero-hash.jpg',attributes:{alt:'Hero'}}]);
+  const evidence={site:'https://source.example',directory:'',pages:[],assets:[{original:'https://source.example/hero.jpg',file:'/tmp/hero.jpg',publicPath:'/assets/hero-hash.jpg'}],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
+  const issues=mediaPresentationIssues(source,candidate,evidence);
+  assert.ok(issues.some(i=>/Image "Hero" crop\/presentation/.test(i)&&/object-fit source cover, generated contain/.test(i)&&/object-position source 50% 30%, generated 50% 50%/.test(i)),issues.join('\n'));
+});
 test('spacing evaluator reports exact element-to-element gap deltas',()=>{
   const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
   const source=simpleGeometry([
