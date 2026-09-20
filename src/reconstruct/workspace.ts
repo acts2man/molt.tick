@@ -82,7 +82,7 @@ export async function restore(root: string, files: FileChange[]): Promise<void> 
 }
 export async function scaffold(root: string, evidence: Evidence): Promise<void> {
   const write = async (p: string, s: string) => { await mkdir(dirname(join(root,p)), {recursive:true}); await writeFile(join(root,p), s); };
-  const pkg = { name: 'molt-reconstruction', private: true, type: 'module', scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' }, dependencies: { react:'18.3.1','react-dom':'18.3.1' }, devDependencies: { vite:'5.4.10','@vitejs/plugin-react':'4.3.3',tailwindcss:'3.4.14',postcss:'8.4.47',autoprefixer:'10.4.20' } };
+  const pkg = { name: 'molt-reconstruction', private: true, type: 'module', scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' }, dependencies: { react:'18.3.1','react-dom':'18.3.1','react-router-dom':'6.26.2' }, devDependencies: { vite:'5.4.10','@vitejs/plugin-react':'4.3.3',tailwindcss:'3.4.14',postcss:'8.4.47',autoprefixer:'10.4.20','@types/react':'18.3.12','@types/react-dom':'18.3.1' } };
   await write('package.json', JSON.stringify(pkg,null,2));
   await write('vite.config.ts', "import {defineConfig} from 'vite'; import react from '@vitejs/plugin-react'; export default defineConfig({base:process.env.MOLT_PREVIEW_BASE||'/',plugins:[react()]});");
   await write('tailwind.config.js', "export default {content:['./src/**/*.{ts,tsx}'],theme:{extend:{}},plugins:[]};");
