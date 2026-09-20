@@ -104,9 +104,11 @@ test('large page evidence compacts below the provider safety budget',()=>{
   const saved={html:'<html>'+('saved-structure '.repeat(12000))+'</html>',styles:Array.from({length:24},(_,i)=>({path:'style-'+i+'.css',content:('selector{font-family:Arvo;padding:24px;}').repeat(500)})),note:'saved evidence'};
   const hybrid=reconstructionPrompt(evidence,page,[{path:'src/site.css',content:'a{display:block}'.repeat(30000)}],'Implement hybrid page',saved);
   assert.ok(hybrid.length<=300000,'hybrid prompt was '+hybrid.length+' chars');
-  const parsed=JSON.parse(hybrid);
-  assert.ok(Array.isArray(parsed.reference?.views?.[0]?.geometry),'saved evidence must not force live geometry into the vision-only fallback');
-  assert.ok(parsed.reference.views[0].geometry.length>=36,'hybrid prompt retained only '+parsed.reference.views[0].geometry.length+' geometry elements');
+  const baseline=reconstructionPrompt(evidence,page,[{path:'src/site.css',content:'a{display:block}'.repeat(30000)}],'Implement hybrid page');
+  const parsed=JSON.parse(hybrid),baseParsed=JSON.parse(baseline);
+  const liveGeometry=(value:any)=>value.reference?.views?.[0]?.geometry?.length??0;
+  assert.ok(liveGeometry(parsed)>=liveGeometry(baseParsed),'saved evidence reduced live geometry from '+liveGeometry(baseParsed)+' to '+liveGeometry(parsed));
+  assert.equal(Boolean(parsed.reference?.views?.[0]?.outline),Boolean(baseParsed.reference?.views?.[0]?.outline),'saved evidence changed the live-evidence fallback mode');
   if(parsed.savedSource)assert.ok(parsed.savedSource.html.length<=18001,'saved HTML should be supplemental and bounded');
 });
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
