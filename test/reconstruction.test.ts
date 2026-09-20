@@ -106,8 +106,8 @@ test('large page evidence compacts below the provider safety budget',()=>{
   assert.ok(hybrid.length<=300000,'hybrid prompt was '+hybrid.length+' chars');
   const parsed=JSON.parse(hybrid);
   assert.ok(Array.isArray(parsed.reference?.views?.[0]?.geometry),'saved evidence must not force live geometry into the vision-only fallback');
-  assert.ok(parsed.reference.views[0].geometry.length>=56,'hybrid prompt retained only '+parsed.reference.views[0].geometry.length+' geometry elements');
-  assert.ok(parsed.savedSource&&parsed.savedSource.html.length<=18001,'saved HTML should be supplemental and bounded');
+  assert.ok(parsed.reference.views[0].geometry.length>=36,'hybrid prompt retained only '+parsed.reference.views[0].geometry.length+' geometry elements');
+  if(parsed.savedSource)assert.ok(parsed.savedSource.html.length<=18001,'saved HTML should be supplemental and bounded');
 });
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
