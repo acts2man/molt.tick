@@ -221,15 +221,21 @@ test('rejected repair autopsy exposes gains and regressions for the next model r
 });
 test('malformed evaluator success and changed scope cannot pass',()=>{assert.equal(improves(score(50),score(null,true)),false);const next=score(99,true);next.views[0].viewport='mobile';assert.equal(improves(score(50),next),false);});
 test('asset paths cannot escape a bundle through a symlink',()=>temporary(async dir=>{await writeFile(join(dir,'page.html'),'x');assert.equal(await inside(dir,'page.html'),join(dir,'page.html'));await symlink('/etc/passwd',join(dir,'escape'));await assert.rejects(inside(dir,'escape'));await assert.rejects(inside(dir,'../outside'));}));
-test('page discovery keeps navigation first while filling scope from main and footer links',()=>{
+test('page discovery keeps navigation first and promotes core business pages over incidental content',()=>{
   const links=prioritizeDiscoveredLinks([
-    {href:'https://example.com/privacy',region:'footer',index:8},
-    {href:'https://example.com/service',region:'main',index:4},
+    {href:'https://example.com/blog',region:'nav',index:1},
     {href:'https://example.com/about',region:'header',index:2},
-    {href:'https://example.com/about',region:'footer',index:9},
-    {href:'https://example.com/contact',region:'nav',index:1},
+    {href:'https://example.com/news',region:'main',index:3},
+    {href:'https://example.com/feature-story',region:'main',index:4},
+    {href:'https://example.com/tree-services',region:'main',index:5},
+    {href:'https://example.com/privacy',region:'footer',index:8},
+    {href:'https://example.com/contact',region:'footer',index:9},
+    {href:'https://example.com/gallery',region:'footer',index:10},
+    {href:'https://example.com/about',region:'footer',index:11},
   ]);
-  assert.deepEqual(links,['https://example.com/contact','https://example.com/about','https://example.com/service','https://example.com/privacy']);
+  assert.deepEqual(links,[
+    'https://example.com/blog','https://example.com/about','https://example.com/tree-services','https://example.com/contact','https://example.com/gallery','https://example.com/feature-story','https://example.com/news','https://example.com/privacy'
+  ]);
 });
 test('bundle validates explicit routes and files before browsing',()=>temporary(async dir=>{await writeFile(join(dir,'home.html'),'<h1>Home</h1>');await writeFile(join(dir,'bundle.json'),JSON.stringify({site:'https://example.com',pages:[{route:'/',file:'home.html'}]}));assert.equal((await readBundle(dir)).pages.length,1);await writeFile(join(dir,'bundle.json'),JSON.stringify({site:'https://example.com',pages:[{route:'/',file:'home.html'},{route:'/',file:'home.html'}]}));await assert.rejects(readBundle(dir),/Duplicate/);}));
 test('static server does not return home for missing routes or expose dotfiles',()=>temporary(async dir=>{await writeFile(join(dir,'index.html'),'home');await writeFile(join(dir,'.env'),'private');const server=await serve(dir,{'/':'index.html'});try{assert.equal(await(await fetch(server.origin)).text(),'home');assert.equal((await fetch(server.origin+'/missing')).status,404);assert.equal((await fetch(server.origin+'/.env')).status,404);}finally{await server.close();}}));
