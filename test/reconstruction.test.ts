@@ -250,6 +250,16 @@ test('adaptive viewport reference evidence stays within provider image count whi
   const images=await referenceImages(views as any);assert.ok(images.length<=18,images.map(i=>i.label).join('\n'));
   for(const name of names)assert.ok(images.some(image=>image.label.startsWith(name+' complete source overview')),name);
 }));
+test('repair evidence prioritizes the worst failing adaptive viewport instead of the first three widths',async()=>temporary(async dir=>{
+  const path=join(dir,'repair-priority.png'),png=new PNG({width:320,height:900});png.data.fill(230);for(let i=3;i<png.data.length;i+=4)png.data[i]=255;await writeFile(path,PNG.sync.write(png));
+  const checks=[
+    {route:'/',viewport:'desktop',source:path,candidate:path,diff:path,score:99,worstBand:98,worstY:0,pass:true,issues:[]},
+    {route:'/',viewport:'tablet',source:path,candidate:path,diff:path,score:98,worstBand:97,worstY:0,pass:true,issues:[]},
+    {route:'/',viewport:'mobile',source:path,candidate:path,diff:path,score:96,worstBand:90,worstY:0,pass:false,issues:['mobile']},
+    {route:'/',viewport:'probe-1024',source:path,candidate:path,diff:path,score:80,worstBand:35,worstY:0,pass:false,issues:['breakpoint']}
+  ];
+  const images=await repairImages(checks as any);assert.ok(images.some(image=>image.label.startsWith('probe-1024 SOURCE')),images.map(i=>i.label).join('\n'));
+}));
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
   for(let y=0;y<png.height;y++)for(let x=0;x<png.width;x++){const i=(y*png.width+x)*4;png.data[i]=(x*17+y*31)%256;png.data[i+1]=(x*43+y*11)%256;png.data[i+2]=(x*7+y*53)%256;png.data[i+3]=255;}
