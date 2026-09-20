@@ -57,34 +57,45 @@ function compactElement(e:any){
     ...(e.svg?{svg:clipped(e.svg,4000)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{}),
     ...(e.before?{before:e.before}:{}),...(e.after?{after:e.after}:{})};
 }
+function evenly<T>(items:T[],limit:number):T[]{
+  if(items.length<=limit)return items;
+  if(limit<=1)return items.slice(0,1);
+  const out:T[]=[];for(let i=0;i<limit;i++)out.push(items[Math.round(i*(items.length-1)/(limit-1))]);return out;
+}
 function spacingGuide(elements:any[],limit=60){
-  const allText=elements.filter(e=>/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/.test(e.tag)&&String(e.text||'').trim());
+  const allText=elements.filter(e=>/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/.test(e.tag)&&String(e.text||'').trim()).sort((a,b)=>a.y-b.y||a.x-b.x);
   const blockText=allText.filter(e=>/^(h[1-6]|p|li|button|label|blockquote)$/.test(e.tag));
   const label=(e:any)=>{const v=String(e.text||'').replace(/\s+/g,' ').trim();return clipped(v,70)??e.tag;};
-  const rhythm=allText.slice(0,Math.min(50,limit)).map(e=>({tag:e.tag,text:label(e),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
+  const rhythm=evenly(allText,Math.min(50,limit)).map(e=>({tag:e.tag,text:label(e),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
     fontFamily:e.style?.['font-family'],fontSize:e.style?.['font-size'],fontWeight:e.style?.['font-weight'],fontStyle:e.style?.['font-style'],
     lineHeight:e.style?.['line-height'],letterSpacing:e.style?.['letter-spacing'],textAlign:e.style?.['text-align'],textTransform:e.style?.['text-transform'],
     margin:e.style?.margin,padding:e.style?.padding}));
   const byParent=new Map<string,any[]>();
   for(const e of blockText){if(!e.parent)continue;const items=byParent.get(e.parent)??[];items.push(e);byParent.set(e.parent,items);}
-  const between:any[]=[];
+  const allBetween:any[]=[];
   for(const items of byParent.values()){
     items.sort((a,b)=>a.y-b.y||a.x-b.x);
-    for(let i=0;i<items.length-1&&between.length<limit;i++){
+    for(let i=0;i<items.length-1;i++){
       const a=items[i],b=items[i+1],overlap=Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))/Math.max(1,Math.min(a.width,b.width));
       if(b.y<a.y+a.height-2||overlap<0.12)continue;
       const gap=b.y-(a.y+a.height);if(gap<0||gap>500)continue;
-      between.push({from:label(a),to:label(b),gap:Math.round(gap),fromHeight:Math.round(a.height),toY:Math.round(b.y)});
+      allBetween.push({from:label(a),to:label(b),gap:Math.round(gap),fromHeight:Math.round(a.height),toY:Math.round(b.y)});
     }
   }
-  return {textRhythm:rhythm,between};
+  return {textRhythm:rhythm,between:evenly(allBetween.sort((a,b)=>a.toY-b.toY),limit)};
 }
 function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
   const mediaQueries=[...new Set(page.views.flatMap(v=>v.geometry.mediaQueries))].slice(0,120);
-  const select=(elements:any[],limit:number)=>elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|h[1-6])$/.test(e.tag)||e.style?.['background-image']!=='none')
-    .slice(0,limit).map(e=>JSON.parse(remap(JSON.stringify(compactElement(e)))));
+  const select=(elements:any[],limit:number)=>{
+    const candidates=elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|h[1-6])$/.test(e.tag)||e.style?.['background-image']!=='none').sort((a,b)=>a.y-b.y||a.x-b.x);
+    const priority=candidates.filter(e=>/^(header|nav|footer|section|h[1-6]|img|button)$/.test(e.tag));
+    const chosen=[...evenly(priority,Math.min(priority.length,Math.max(1,Math.floor(limit/2)))),...evenly(candidates,limit)];
+    const unique=[] as any[],seen=new Set<string>();
+    for(const e of chosen.sort((a,b)=>a.y-b.y||a.x-b.x)){const key=String(e.key??'')+'|'+e.tag+'|'+Math.round(e.x)+'|'+Math.round(e.y);if(seen.has(key))continue;seen.add(key);unique.push(e);if(unique.length>=limit)break;}
+    return unique.map(e=>JSON.parse(remap(JSON.stringify(compactElement(e)))));
+  };
   return {route:page.route,title:page.title,file:routeFile(page.route),fullVisibleText:desktopText,mediaQueries,
     views:page.views.map((v,index)=>({
       viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,rootStyle:v.geometry.rootStyle,bodyStyle:v.geometry.bodyStyle,
@@ -168,7 +179,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
     return JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
-      editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
+      editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
   };
