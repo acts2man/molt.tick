@@ -39,6 +39,7 @@ export interface Job {
   id: string; owner: string; name: string; sourceUrl: string; pages: string[]; bundleId?: string;
   model: string; reasoningEffort: 'low'|'medium'|'high'|'xhigh'|'max'; outputRepo: string; outputRepoUrl?: string; outputRepoError?: string; previewReady?: boolean;
   liveSiteUrl?: string; liveSiteAdminUrl?: string; deploymentError?: string;
+  reservedOutputRepository?: string; reservedNetlifySiteId?: string; sourcePublished?: boolean; reservationCleanupAt?: string; reservationCleanupError?: string;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string; archivedAt?: string;
   progress?: number; progressStage?: string; progressUpdatedAt?: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
