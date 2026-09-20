@@ -88,15 +88,15 @@ export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
   problems.push(...gaps.slice(0,8).map(g=>g.message));
   return problems;
 }
-export function internalLinkIssues(source:Geometry,candidate:Geometry,sourceOrigin:string,generatedOrigin:string,known:Set<string>):string[]{
+export function internalLinkIssues(source:Geometry,candidate:Geometry,captureOrigin:string,generatedOrigin:string,known:Set<string>,originalOrigin=captureOrigin):string[]{
   const problems:string[]=[],expected=new Set<string>(),actual=new Set<string>();
-  const routeOf=(raw:string,origin:string)=>{try{const u=new URL(raw);if(u.origin!==origin||u.search)return null;return u.pathname.replace(/\/+$/,'')||'/';}catch{return null;}};
-  for(const raw of source.links){const route=routeOf(raw,sourceOrigin);if(route&&known.has(route))expected.add(route);}
+  const routeOf=(raw:string)=>{try{const u=new URL(raw);if(![captureOrigin,originalOrigin].includes(u.origin)||u.search)return null;return u.pathname.replace(/\/+$/,'')||'/';}catch{return null;}};
+  for(const raw of source.links){const route=routeOf(raw);if(route&&known.has(route))expected.add(route);}
   for(const raw of candidate.links){
     try{
       const u=new URL(raw),route=u.pathname.replace(/\/+$/,'')||'/';
       if(u.origin===generatedOrigin){if(known.has(route))actual.add(route);else if(!u.pathname.startsWith('/assets/'))problems.push(`Unresolved internal link: ${route}`);}
-      else if(u.origin===sourceOrigin&&known.has(route))problems.push(`Internal link still points to the source website instead of the reconstructed route: ${route}`);
+      else if(u.origin===originalOrigin&&known.has(route))problems.push(`Internal link still points to the source website instead of the reconstructed route: ${route}`);
     }catch{}
   }
   for(const route of expected)if(!actual.has(route))problems.push(`Missing reconstructed internal link target: ${route}`);
@@ -160,7 +160,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         // Literal DOM links are checked after rendering, including shared components. Same-site links
         // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
-        check.issues.push(...internalLinkIssues(reference.geometry,generated,new URL(evidence.site).origin,host.origin,known));
+        check.issues.push(...internalLinkIssues(reference.geometry,generated,new URL(pageRef.url).origin,host.origin,known,new URL(evidence.site).origin));
         const metrics=await compare(check.source,check.candidate,check.diff);Object.assign(check,metrics);
         check.interactions=[];
         for(let stateIndex=0;stateIndex<(reference.interactions??[]).length;stateIndex++){
