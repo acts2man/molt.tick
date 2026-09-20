@@ -136,7 +136,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install site dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build React site
         run: npm run build
       - name: Deploy production site through Netlify API
