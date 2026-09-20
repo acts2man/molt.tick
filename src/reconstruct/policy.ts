@@ -98,16 +98,21 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
     addMeasured(os,ns,ow,nw);
 
     const oldInteractions = new Map((old.interactions??[]).map(i => [interactionKey(old,i), i]));
+    const nextInteractions = new Map((v.interactions??[]).map(i => [interactionKey(v,i), i]));
+    // A repair may not make previously measured interaction evidence disappear. Missing states can
+    // otherwise hide a broken menu/carousel/accordion behind an improved page-level screenshot.
+    if(oldInteractions.size!==nextInteractions.size)return false;
+    for(const interaction of oldInteractions.keys())if(!nextInteractions.has(interaction))return false;
     for (const state of v.interactions??[]) {
       const prior = oldInteractions.get(interactionKey(v,state));
-      if (!prior) continue;
+      if (!prior) return false;
       if (prior.pass && !state.pass) return false;
       if(prior.score!==null&&state.score===null||prior.worstBand!==null&&state.worstBand===null)return false;
       if(prior.score===null&&state.score!==null||prior.worstBand===null&&state.worstBand!==null)measurementGain++;
       const pis=prior.score ?? -1, sis=state.score ?? -1, piw=prior.worstBand ?? -1, siw=state.worstBand ?? -1;
-      // Never break an interaction that was already correct. For interactions that are still failing,
-      // allow a temporary local regression when the combined page+interaction evidence improves overall;
-      // the next repair round can then target that remaining interaction instead of discarding page-wide gains.
+      // Apply the same material-regression guard used for page views. Small rendering noise is
+      // tolerated, but a page-wide gain may never conceal a substantially worse interaction state.
+      if(sis<pis-1.5||siw<piw-1.5)return false;
       if (state.pass && !prior.pass) passGain++;
       issueGain += prior.issues.length - state.issues.length;
       addMeasured(pis,sis,piw,siw);
