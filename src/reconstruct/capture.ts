@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, posix, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Page } from 'playwright-core';
 import { browser, restrictNetwork, serve } from './runtime.js';
@@ -121,12 +121,14 @@ export async function settle(page: Page, signal: AbortSignal): Promise<void> {
   await page.evaluate(`Promise.race([Promise.all(Array.from(document.images).map(i=>i.decode().catch(()=>{}))),new Promise(r=>setTimeout(r,5000))])`);
 }
 const EXT: Record<string,string> = {'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/svg+xml':'svg','image/avif':'avif','image/x-icon':'ico','font/woff':'woff','font/woff2':'woff2','font/ttf':'ttf','font/otf':'otf','application/font-woff':'woff','application/x-font-woff':'woff'};
+const SAVED_MIME:Record<string,string>={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.svg':'image/svg+xml','.avif':'image/avif','.ico':'image/x-icon','.woff':'font/woff','.woff2':'font/woff2','.ttf':'font/ttf','.otf':'font/otf'};
+
 function urlsIn(css: string): string[] { return [...css.matchAll(/url\(\s*['"]?([^'"\)]+)['"]?\s*\)/gi)].map(m=>m[1]); }
 function absolutizeCss(css: string, base: string): string {
   return css.replace(/url\(\s*['"]?([^'"\)]+)['"]?\s*\)/gi, (_m,u:string)=>{try{return `url("${new URL(u,base).href}")`;}catch{return 'url("")';}});
 }
 export async function capture(options: CaptureOptions): Promise<Evidence> {
-  if (!!options.url === !!options.bundleDir) throw new Error('Provide exactly one URL or bundle directory');
+  if (!options.url&&!options.bundleDir) throw new Error('Provide a URL, a saved-page bundle, or both');
   const views = options.viewports ?? [...VIEWPORTS]; validateViewports(views);
   const maxPages = options.maxPages ?? 12;
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50) throw new Error('maxPages must be 1..50');
@@ -145,14 +147,53 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
     const item={original:url,file,publicPath}; assetMap.set(url,item);
     await writeFile(file,body);
   };
+  const importSavedResources=async(root:string)=>{
+    let manifestFile:string;
+    try{manifestFile=await inside(root,'manifest.json');}catch{return;}
+    const raw=await readFile(manifestFile,'utf8');if(raw.length>1_000_000)throw new Error('Saved-page manifest is too large');
+    let parsed:any;try{parsed=JSON.parse(raw);}catch{throw new Error('Saved-page manifest.json is invalid JSON');}
+    const resources=parsed?.resources;if(!resources||typeof resources!=='object'||Array.isArray(resources))return;
+    const entries=Object.entries(resources).filter(([path,url])=>typeof path==='string'&&typeof url==='string').slice(0,600) as Array<[string,string]>;
+    const resourceMap=new Map(entries);
+    for(const [path,original] of entries){
+      let file:string;try{file=await inside(root,path);}catch{continue;}
+      const extension=extname(path).toLowerCase(),mime=SAVED_MIME[extension];
+      if(mime){
+        const body=await readFile(file);await save(original,body,mime);continue;
+      }
+      if(extension!=='.css')continue;
+      const css=await readFile(file,'utf8');
+      if(css.length>2_000_000)continue;
+      const base=posix.dirname(path);
+      const rewritten=css.replace(/url\(\s*['"]?([^'"\)]+)['"]?\s*\)/gi,(_m,u:string)=>{
+        if(/^data:/i.test(u))return `url("${u}")`;
+        if(/^https?:\/\//i.test(u))return `url("${u}")`;
+        const local=posix.normalize(posix.join(base,u)).replace(/^\.\//,'');
+        const mapped=resourceMap.get(local);
+        if(mapped)return `url("${mapped}")`;
+        try{return `url("${new URL(u,original).href}")`;}catch{return 'url("")';}
+      });
+      for(const face of rewritten.match(/@font-face\s*\{[^}]*\}/gi)??[])faces.add(face);
+    }
+  };
   let local: Awaited<ReturnType<typeof serve>> | undefined;
   let targets: Array<{route:string;url:string}> = [];
   if(options.bundleDir){
-    const bundle=await readBundle(options.bundleDir); evidence.site=bundle.site;
+    const bundle=await readBundle(options.bundleDir);
     if(bundle.pages.length>maxPages)throw new Error('Bundle has more pages than maxPages; no pages were silently skipped');
-    const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
-    local=await serve(resolve(options.bundleDir),aliases,true);
-    targets=bundle.pages.map(p=>({route:p.route,url:local!.origin+p.route}));
+    if(options.url){
+      const live=publicUrl(options.url);await assertPublicUrl(live.href);
+      if(live.origin!==new URL(bundle.site).origin)throw new Error('Saved-page bundle and live URL must belong to the same website origin');
+      evidence.site=live.origin;
+      targets=bundle.pages.map(p=>({route:p.route,url:new URL(p.route,live.origin).href}));
+      await importSavedResources(options.bundleDir);
+      evidence.warnings.push('Hybrid evidence enabled: live rendering is the visual/interaction authority while saved files supplement exact local assets and font data.');
+    }else{
+      evidence.site=bundle.site;
+      const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
+      local=await serve(resolve(options.bundleDir),aliases,true);
+      targets=bundle.pages.map(p=>({route:p.route,url:local!.origin+p.route}));
+    }
   }else{
     const u=publicUrl(options.url!); await assertPublicUrl(u.href); evidence.site=u.origin;
     const requested=options.urls?.length?options.urls.map(v=>new URL(v,u)): [u];
@@ -164,7 +205,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
   options.signal.addEventListener('abort',stop,{once:true});
   try{
     options.signal.throwIfAborted(); engine=await browser();
-    if(options.url&&!options.urls?.length){
+    if(options.url&&!options.urls?.length&&!options.bundleDir){
       const ctx=await engine.newContext({viewport:views[0],serviceWorkers:'block',acceptDownloads:false});
       try{
         await restrictNetwork(ctx);const page=await ctx.newPage();
