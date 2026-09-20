@@ -4,7 +4,7 @@ import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './secu
 import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkGithubDelivery, checkProvider, github, saveSecrets } from './github.ts';
 import { readSession } from './sessions.ts';
-import { checkNetlify } from './netlify.ts';
+import { checkNetlify, deleteNetlifySite } from './netlify.ts';
 import { createMediaSession, mediaCookie, readMediaSession } from './media-session.ts';
 
 export interface Store {
@@ -17,7 +17,7 @@ export interface Store {
 export interface Environment { secret: string; origin: string; context: string; ownerUserId?: string }
 export interface Services {
   store: Store; env: Environment; github?: typeof github;
-  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; checkGithubDelivery?: typeof checkGithubDelivery; checkNetlify?: typeof checkNetlify; authenticate?: typeof authenticateAccount;
+  identifyRunner?: typeof runnerIdentity; saveSecrets?: typeof saveSecrets; checkProvider?: typeof checkProvider; checkGithubDelivery?: typeof checkGithubDelivery; checkNetlify?: typeof checkNetlify; cleanupNetlify?: typeof deleteNetlifySite; authenticate?: typeof authenticateAccount;
 }
 const json = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(JSON.stringify(value), { status, headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra} });
 async function bytes(req: Request, limit: number): Promise<Uint8Array> {
@@ -64,6 +64,27 @@ async function jobs(store: Store, owner: string): Promise<Job[]> {
   const {blobs} = await store.list({prefix: `jobs/${owner}/`});
   const rows = await Promise.all(blobs.filter(b => b.key.split('/').length === 3).slice(-100).map(b => store.get(b.key, {type: 'json'})));
   return rows.filter(Boolean).sort((a,b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function reservationRepositoryAllowed(job:Job,value:string):boolean{
+  const exact=`${OWNER}/${job.outputRepo}`;
+  if(value===exact)return true;
+  if(!value.startsWith(exact+'-v'))return false;
+  const version=Number(value.slice((exact+'-v').length));
+  return Number.isInteger(version)&&version>=2&&version<=30&&value===`${exact}-v${version}`;
+}
+function missingResource(error:unknown):boolean{return /(?:404|not found)/i.test(error instanceof Error?error.message:String(error));}
+async function cleanupUnusedReservations(job:Job,gh:typeof github,githubToken:string|null,netlifyToken:string|null,cleanupNetlify:typeof deleteNetlifySite):Promise<void>{
+  if(job.sourcePublished||job.reservationCleanupAt)return;
+  const errors:string[]=[];
+  if(job.reservedNetlifySiteId&&netlifyToken){
+    try{await cleanupNetlify(netlifyToken,job.reservedNetlifySiteId);}catch(error){if(!missingResource(error))errors.push(error instanceof Error?error.message:String(error));}
+  }
+  if(job.reservedOutputRepository&&githubToken&&reservationRepositoryAllowed(job,job.reservedOutputRepository)){
+    try{await gh(githubToken,`/repos/${job.reservedOutputRepository}`,{method:'DELETE'});}catch(error){if(!missingResource(error))errors.push('GitHub reservation cleanup failed: '+(error instanceof Error?error.message:String(error)));}
+  }
+  if(errors.length){job.reservationCleanupError=errors.join('; ').slice(0,1000);return;}
+  job.reservationCleanupAt=new Date().toISOString();delete job.reservationCleanupError;
 }
 function safeUsage(value:any):any {const clip=(v:unknown,n=2000)=>String(v??'').slice(0,n);return { calls:Number(value?.calls)||0,inputTokens:Number(value?.inputTokens)||0,outputTokens:Number(value?.outputTokens)||0,
       records:Array.isArray(value?.records)?value.records.slice(0,200).map((r:any)=>({call:Number(r.call)||0,provider:clip(r.provider,30),model:clip(r.model,100),inputTokens:typeof r.inputTokens==='number'&&Number.isSafeInteger(r.inputTokens)&&r.inputTokens>=0?r.inputTokens:null,cachedInputTokens:typeof r.cachedInputTokens==='number'&&Number.isSafeInteger(r.cachedInputTokens)&&r.cachedInputTokens>=0?r.cachedInputTokens:null,cacheWriteTokens:typeof r.cacheWriteTokens==='number'&&Number.isSafeInteger(r.cacheWriteTokens)&&r.cacheWriteTokens>=0?r.cacheWriteTokens:null,outputTokens:typeof r.outputTokens==='number'&&Number.isSafeInteger(r.outputTokens)&&r.outputTokens>=0?r.outputTokens:null,estimatedUsd:typeof r.estimatedUsd==='number'&&Number.isFinite(r.estimatedUsd)&&r.estimatedUsd>=0?r.estimatedUsd:null,reported:r.reported===true,outcome:clip(r.outcome,60),pricingReviewed:clip(r.pricingReviewed,30)})):[],
@@ -135,6 +156,9 @@ export async function handle(req: Request, services: Services): Promise<Response
         }
         if(event.usage)job.usage=safeUsage(event.usage);
         if(typeof event.outputRepoUrl==='string'&&/^https:\/\/github\.com\/acts2man\/[a-z0-9._-]+$/i.test(event.outputRepoUrl))job.outputRepoUrl=event.outputRepoUrl;
+        if(typeof event.reservedOutputRepository==='string'&&/^acts2man\/[a-z0-9._-]+$/i.test(event.reservedOutputRepository)&&reservationRepositoryAllowed(job,event.reservedOutputRepository))job.reservedOutputRepository=event.reservedOutputRepository;
+        if(typeof event.reservedNetlifySiteId==='string'&&/^[a-z0-9-]{8,100}$/i.test(event.reservedNetlifySiteId))job.reservedNetlifySiteId=event.reservedNetlifySiteId;
+        if(event.sourcePublished===true)job.sourcePublished=true;
         if(typeof event.outputRepoError==='string')job.outputRepoError=String(event.outputRepoError).slice(0,1000);
         if(typeof event.liveSiteUrl==='string'&&/^https:\/\/[a-z0-9.-]+\.netlify\.app\/?$/i.test(event.liveSiteUrl))job.liveSiteUrl=event.liveSiteUrl;
         if(typeof event.liveSiteAdminUrl==='string'&&/^https:\/\/app\.netlify\.com\/(?:sites|projects)\/[a-z0-9-]+\/?$/i.test(event.liveSiteAdminUrl))job.liveSiteAdminUrl=event.liveSiteAdminUrl;
@@ -294,8 +318,12 @@ export async function handle(req: Request, services: Services): Promise<Response
         let workflow:any=null,artifacts:any[]=[];
         if(job.runId&&token){
           try {workflow=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}`);
-            if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();await store.setJSON(key,job);if(job.bundleId)await deletePrefix(store,bundleKey(owner,job.bundleId));}
-            if(workflow.status==='completed'){const a=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/artifacts`);artifacts=a.artifacts.filter((f:any)=>!f.expired).map((f:any)=>({name:f.name,size:f.size_in_bytes,url:`https://github.com/${REPOSITORY}/actions/runs/${job!.runId}/artifacts/${f.id}`}));}
+            if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();if(job.bundleId)await deletePrefix(store,bundleKey(owner,job.bundleId));}
+            if(workflow.status==='completed'){
+              if(!job.sourcePublished&&(job.status==='cancelled'||job.status==='error'))await cleanupUnusedReservations(job,gh,token,hostingIntegration?.token??null,services.cleanupNetlify??deleteNetlifySite);
+              await store.setJSON(key,job);
+              const a=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/artifacts`);artifacts=a.artifacts.filter((f:any)=>!f.expired).map((f:any)=>({name:f.name,size:f.size_in_bytes,url:`https://github.com/${REPOSITORY}/actions/runs/${job!.runId}/artifacts/${f.id}`}));
+            }
           }catch{}
         }else if(ACTIVE.has(job.status)&&token) {
           const runs=await gh(token,`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50`);
