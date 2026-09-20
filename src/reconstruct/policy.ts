@@ -114,10 +114,13 @@ export function improves(best: Evaluation, next: Evaluation): boolean {
     }
   }
 
-  if (passGain > 0 || measurementGain > 0 || issueGain > 0) return true;
-  if (!count) return false;
+  if (!count) return passGain > 0 || measurementGain > 0 || issueGain > 0;
   const beforeComposite=(beforeScore/count)*0.35+(beforeWorst/count)*0.65;
   const nextComposite=(nextScore/count)*0.35+(nextWorst/count)*0.65;
+  // New passes and resolved diagnostics are valuable, but they still cannot hide a meaningful
+  // combined visual regression across the page and its interaction states.
+  if (passGain > 0 && nextComposite >= beforeComposite - 0.5) return true;
+  if ((measurementGain > 0 || issueGain > 0) && nextComposite >= beforeComposite - 0.15) return true;
   // Prefer improving the weakest visible band; otherwise require a meaningful weighted gain.
   if (nextMinWorst >= beforeMinWorst + 0.35 && nextComposite >= beforeComposite - 0.15) return true;
   return nextComposite >= beforeComposite + 0.25;
