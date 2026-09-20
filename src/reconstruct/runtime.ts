@@ -1,6 +1,6 @@
 import { chromium, type BrowserContext } from 'playwright-core';
 import { createServer } from 'node:http';
-import { readFile, stat, mkdir, symlink, access, realpath } from 'node:fs/promises';
+import { readFile, writeFile, stat, mkdir, symlink, access, realpath } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { assertPublicUrl, inside, safeEnvironment } from './policy.js';
@@ -90,6 +90,14 @@ export async function prepareToolchain(outDir: string): Promise<void> {
   const deps = resolve(process.env.MOLT_RENDER_DEPS ?? '/opt/molt-render/node_modules');
   await access(join(deps, 'vite/bin/vite.js'));
   await mkdir(outDir, { recursive: true });
+  const [lockRaw,packageRaw]=await Promise.all([readFile(resolve(deps,'..','package-lock.json'),'utf8'),readFile(join(outDir,'package.json'),'utf8')]);
+  const lock=JSON.parse(lockRaw),pkg=JSON.parse(packageRaw);
+  if(!lock||Number(lock.lockfileVersion)<2||!lock.packages?.[''])throw new Error('Trusted render toolchain lockfile is missing or invalid');
+  const root=lock.packages[''];
+  const same=(a:unknown,b:unknown)=>JSON.stringify(a??{})===JSON.stringify(b??{});
+  if(!same(root.dependencies,pkg.dependencies)||!same(root.devDependencies,pkg.devDependencies))throw new Error('Generated package dependencies do not match the trusted render toolchain lockfile');
+  lock.name=pkg.name;root.name=pkg.name;root.private=true;
+  await writeFile(join(outDir,'package-lock.json'),JSON.stringify(lock,null,2)+'\n');
   const destination = join(outDir, 'node_modules');
   try {
     await access(destination);
