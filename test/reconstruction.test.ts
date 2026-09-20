@@ -14,7 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, contentIssues, internalLinkIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -67,6 +67,21 @@ test('multi-page repair scheduling gives unattempted failing routes priority',()
   assert.equal(selectRepairRoute(evaluation,attempts),'/b');
 });
 const simpleGeometry=(elements:Geometry['elements']):Geometry=>({text:elements.map(e=>e.text).filter(Boolean).join(' '),title:'Spacing test',height:1000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false});
+test('media geometry diagnostics identify exact localized image placement deltas without guessing by DOM order',()=>{
+  const source=simpleGeometry([{key:'1',tag:'img',text:'',x:100,y:200,width:500,height:300,style:{},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
+  const candidate=simpleGeometry([
+    {key:'a',tag:'img',text:'',x:5,y:5,width:20,height:20,style:{},src:'http://generated.test/assets/other.jpg'},
+    {key:'b',tag:'img',text:'',x:124,y:222,width:460,height:320,style:{},src:'http://generated.test/assets/hero-hash.jpg',attributes:{alt:'Hero'}}
+  ]);
+  const evidence={site:'https://source.example',directory:'',pages:[],assets:[{original:'https://source.example/hero.jpg',file:'/tmp/hero.jpg',publicPath:'/assets/hero-hash.jpg'}],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
+  const issues=mediaGeometryIssues(source,candidate,evidence);assert.equal(issues.length,1);assert.match(issues[0],/Image "Hero"/);assert.match(issues[0],/delta x 24, y 22, width -40, height 20px/);
+});
+test('control geometry diagnostics report measured button box mismatch',()=>{
+  const source=simpleGeometry([{key:'1',tag:'button',text:'Get Started',x:100,y:200,width:180,height:48,style:{},attributes:{}}]);
+  const candidate=simpleGeometry([{key:'2',tag:'button',text:'Get Started',x:100,y:212,width:204,height:56,style:{},attributes:{}}]);
+  const issues=controlGeometryIssues(source,candidate);assert.equal(issues.length,1);assert.match(issues[0],/Control "Get Started"/);assert.match(issues[0],/delta x 0, y 12, width 24, height 8px/);
+});
+
 test('spacing evaluator reports exact element-to-element gap deltas',()=>{
   const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
   const source=simpleGeometry([
