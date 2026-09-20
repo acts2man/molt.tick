@@ -16,6 +16,15 @@ export interface CaptureOptions {
   sourceStability?: boolean;
 }
 interface Bundle { site: string; pages: Array<{ route: string; file: string }> }
+export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'; index:number }
+export function prioritizeDiscoveredLinks(links:DiscoveredLink[]):string[]{
+  const priority:Record<DiscoveredLink['region'],number>={nav:0,header:0,main:1,footer:2};
+  const seen=new Set<string>(),out:string[]=[];
+  for(const item of [...links].sort((a,b)=>priority[a.region]-priority[b.region]||a.index-b.index)){
+    if(seen.has(item.href))continue;seen.add(item.href);out.push(item.href);
+  }
+  return out;
+}
 export async function readBundle(root: string): Promise<Bundle> {
   const file = await inside(root, 'bundle.json');
   const raw = await readFile(file, 'utf8');
@@ -259,8 +268,8 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         await restrictNetwork(ctx);const page=await ctx.newPage();
         const resp=await page.goto(targets[0].url,{waitUntil:'load',timeout:30000});
         if(!resp?.ok())throw new Error(`Source returned HTTP ${resp?.status()}`);
-        const found=await page.evaluate(`Array.from(document.querySelectorAll('nav a[href],header a[href]')).map(a=>a.href)`) as string[];
-        const known=new Set(targets.map(t=>t.route));
+        const discovered=await page.evaluate(`Array.from(document.querySelectorAll('header a[href],nav a[href],main a[href],footer a[href]')).map((a,index)=>({href:a.href,region:a.closest('nav')?'nav':a.closest('header')?'header':a.closest('main')?'main':'footer',index}))`) as DiscoveredLink[];
+        const found=prioritizeDiscoveredLinks(discovered),known=new Set(targets.map(t=>t.route));
         for(const value of found){try{const u=new URL(value);if(u.origin!==new URL(evidence.site).origin||u.search||/\.(pdf|png|jpg|zip|mp4)$/i.test(u.pathname))continue;const route=routePath(u.pathname);if(!known.has(route)){targets.push({route,url:u.origin+route});known.add(route);}}catch{}}
         if(targets.length>maxPages){evidence.warnings.push(`Discovery found ${targets.length} routes; only the first ${maxPages} were selected.`);targets=targets.slice(0,maxPages);}
       }finally{await ctx.close();}
