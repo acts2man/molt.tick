@@ -40,6 +40,7 @@ export interface Job {
   model: string; reasoningEffort: 'low'|'medium'|'high'|'xhigh'|'max'; outputRepo: string; outputRepoUrl?: string; outputRepoError?: string; previewReady?: boolean;
   liveSiteUrl?: string; liveSiteAdminUrl?: string; deploymentError?: string;
   maxPages: number; maxRepairs: number; status: string; message: string; createdAt: string; updatedAt: string; archivedAt?: string;
+  progress?: number; progressStage?: string; progressUpdatedAt?: string;
   runId?: number; runUrl?: string; events: Array<{ at: string; message: string }>;
   report?: any; usage?: any; error?: string;
 }
@@ -55,5 +56,5 @@ export function newJob(input: any, owner: string): Job {
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 12 || !Number.isInteger(maxRepairs) || maxRepairs < 0 || maxRepairs > 6) throw new HttpError(400, 'Invalid reconstruction limits.');
   if (pages.length > maxPages) throw new HttpError(400, 'Your explicit page list exceeds the page limit.');
   const now = new Date().toISOString();
-  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), model, reasoningEffort, outputRepo, maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, events: [] };
+  return { id, owner, sourceUrl: source, name: new URL(source).hostname.replace(/^www\./, ''), pages, ...(input.bundleId ? {bundleId: uuid(input.bundleId)} : {}), model, reasoningEffort, outputRepo, maxPages, maxRepairs, status: 'dispatching', message: 'Submitting to the reconstruction runner', createdAt: now, updatedAt: now, progress: 1, progressStage: 'Submitting', progressUpdatedAt: now, events: [] };
 }
