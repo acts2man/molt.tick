@@ -93,8 +93,8 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
     const priority=candidates.filter(e=>/^(header|nav|footer|section|h[1-6]|img|button)$/.test(e.tag));
     const chosen=[...evenly(priority,Math.min(priority.length,Math.max(1,Math.floor(limit/2)))),...evenly(candidates,limit)];
     const unique=[] as any[],seen=new Set<string>();
-    for(const e of chosen.sort((a,b)=>a.y-b.y||a.x-b.x)){const key=String(e.key??'')+'|'+e.tag+'|'+Math.round(e.x)+'|'+Math.round(e.y);if(seen.has(key))continue;seen.add(key);unique.push(e);if(unique.length>=limit)break;}
-    return unique.map(e=>JSON.parse(remap(JSON.stringify(compactElement(e)))));
+    for(const e of chosen){const key=String(e.key??'')+'|'+e.tag+'|'+Math.round(e.x)+'|'+Math.round(e.y);if(seen.has(key))continue;seen.add(key);unique.push(e);if(unique.length>=limit)break;}
+    return unique.sort((a,b)=>a.y-b.y||a.x-b.x).map(e=>JSON.parse(remap(JSON.stringify(compactElement(e)))));
   };
   return {route:page.route,title:page.title,file:routeFile(page.route),fullVisibleText:desktopText,mediaQueries,
     views:page.views.map((v,index)=>({
