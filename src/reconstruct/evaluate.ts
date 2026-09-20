@@ -44,6 +44,72 @@ const overlapX=(a:ElementEvidence,b:ElementEvidence)=>{
   const left=Math.max(a.x,b.x),right=Math.min(a.x+a.width,b.x+b.width);
   return Math.max(0,right-left)/Math.max(1,Math.min(a.width,b.width));
 };
+const STRUCTURAL_SOURCE_TAG=/^(header|nav|main|section|article|footer|form)$/;
+const STRUCTURAL_CANDIDATE_TAG=/^(header|nav|main|section|article|footer|form|div)$/;
+const BOX_STYLE_PROPS=['background','background-image','background-size','background-position','border','border-radius','box-shadow','padding','gap','overflow'] as const;
+const FRAME_STYLE_PROPS=['margin','padding','background','background-image'] as const;
+function styleDifferences(source:Record<string,string>|undefined,candidate:Record<string,string>|undefined,properties:readonly string[]):string[]{
+  if(!source||!candidate)return [];
+  return properties.flatMap(property=>{
+    const expected=source[property]??'',actual=candidate[property]??'';
+    return expected===actual?[]:[`${property} source ${expected||'unset'}, generated ${actual||'unset'}`];
+  });
+}
+function matchedVisualContainers(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence;ordinal:number}>{
+  const expected=source.elements.filter(e=>STRUCTURAL_SOURCE_TAG.test(e.tag)&&e.width>0&&e.height>0).sort((a,b)=>a.y-b.y||a.x-b.x);
+  const available=candidate.elements.filter(e=>STRUCTURAL_CANDIDATE_TAG.test(e.tag)&&e.width>0&&e.height>0),used=new Set<string>();
+  const counts=new Map<string,number>(),pairs:Array<{source:ElementEvidence;candidate:ElementEvidence;ordinal:number}>=[];
+  for(const item of expected){
+    const ordinal=(counts.get(item.tag)??0)+1;counts.set(item.tag,ordinal);
+    let best:ElementEvidence|undefined,bestScore=Infinity;
+    for(const actual of available){
+      if(used.has(actual.key))continue;
+      const tagPenalty=actual.tag===item.tag?0:24;
+      const score=Math.abs(actual.x-item.x)+Math.abs(actual.y-item.y)+Math.abs(actual.width-item.width)*0.35+Math.abs(actual.height-item.height)*0.35+tagPenalty;
+      if(score<bestScore){best=actual;bestScore=score;}
+    }
+    if(best){used.add(best.key);pairs.push({source:item,candidate:best,ordinal});}
+  }
+  return pairs;
+}
+export function visualLayoutIssues(source:Geometry,candidate:Geometry):string[]{
+  const issues:Array<{amount:number;message:string}>=[];
+  const frame=styleDifferences(source.bodyStyle,candidate.bodyStyle,FRAME_STYLE_PROPS);
+  if(frame.length)issues.push({amount:50,message:`Page frame: ${frame.slice(0,4).join('; ')}`});
+  for(const pair of matchedVisualContainers(source,candidate)){
+    const delta=geometryDelta(pair.source,pair.candidate),amount=Math.max(...Object.values(delta).map(Math.abs));
+    if(geometryMismatch(delta,8))issues.push({amount,message:geometryMessage(`Container ${pair.source.tag} #${pair.ordinal}`,pair.source,pair.candidate)});
+    const styles=styleDifferences(pair.source.style,pair.candidate.style,BOX_STYLE_PROPS);
+    if(styles.length)issues.push({amount:Math.max(20,amount),message:`Container ${pair.source.tag} #${pair.ordinal} treatment: ${styles.slice(0,5).join('; ')}`});
+  }
+  for(const pair of matchedTextElements(source,candidate)){
+    if(!/^(p|li|blockquote|button|label|a)$/.test(pair.source.tag))continue;
+    const width=Math.abs(pair.candidate.width-pair.source.width),height=Math.abs(pair.candidate.height-pair.source.height);
+    if(width<=8&&height<=6)continue;
+    issues.push({amount:Math.max(width,height),message:geometryMessage(`Text box "${short(pair.source)}"`,pair.source,pair.candidate)});
+  }
+  return issues.sort((a,b)=>b.amount-a.amount).slice(0,12).map(i=>i.message);
+}
+export function mediaPresentationIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  const issues:string[]=[],assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath]));
+  const generatedImages=candidate.elements.filter(e=>e.tag==='img'&&e.src);
+  for(const image of source.elements.filter(e=>e.tag==='img'&&e.src)){
+    const local=assetByOriginal.get(image.src!);if(!local)continue;
+    const match=generatedImages.find(e=>assetPath(e.src)===local);if(!match)continue;
+    const diffs=styleDifferences(image.style,match.style,['object-fit','object-position','border-radius']);
+    if(diffs.length)issues.push(`Image ${image.attributes?.alt?`"${String(image.attributes.alt).slice(0,70)}"`:local} crop/presentation: ${diffs.join('; ')}`);
+  }
+  const sourceBackgrounds=source.elements.filter(e=>e.style['background-image']&&e.style['background-image']!=='none');
+  const candidateBackgrounds=candidate.elements.filter(e=>e.style['background-image']&&e.style['background-image']!=='none');
+  for(const box of sourceBackgrounds){
+    const original=[...box.style['background-image'].matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(m=>m[1]).find(url=>assetByOriginal.has(url));
+    if(!original)continue;const local=assetByOriginal.get(original)!;
+    const match=candidateBackgrounds.find(e=>e.style['background-image'].includes(local));if(!match)continue;
+    const diffs=styleDifferences(box.style,match.style,['background-size','background-position','border-radius']);
+    if(diffs.length)issues.push(`Background ${local} presentation: ${diffs.join('; ')}`);
+  }
+  return issues.slice(0,8);
+}
 
 const geometryDelta=(source:ElementEvidence,candidate:ElementEvidence)=>({
   x:candidate.x-source.x,y:candidate.y-source.y,width:candidate.width-source.width,height:candidate.height-source.height
@@ -206,6 +272,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         const known=new Set(evidence.pages.map(p=>p.route));
         check.issues.push(...internalLinkIssues(reference.geometry,generated,new URL(pageRef.url).origin,host.origin,known,new URL(evidence.site).origin));
         const metrics=await compare(check.source,check.candidate,check.diff);Object.assign(check,metrics);
+        if(metrics.score<threshold||metrics.worstBand<bandThreshold)check.issues.push(...visualLayoutIssues(reference.geometry,generated),...mediaPresentationIssues(reference.geometry,generated,evidence));
         check.interactions=[];
         for(let stateIndex=0;stateIndex<(reference.interactions??[]).length;stateIndex++){
           const state=reference.interactions![stateIndex];
@@ -226,6 +293,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
             const stateGenerated=await geometry(page);
             stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaGeometryIssues(state.geometry,stateGenerated,evidence));
             const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
+            if(stateMetrics.score<threshold||stateMetrics.worstBand<bandThreshold)stateCheck.issues.push(...visualLayoutIssues(state.geometry,stateGenerated),...mediaPresentationIssues(state.geometry,stateGenerated,evidence));
             stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;
             await writeFile(join(directory,`${stem}-${state.id}.json`),JSON.stringify({source:state.geometry,generated:stateGenerated,check:stateCheck},null,2));
           }
