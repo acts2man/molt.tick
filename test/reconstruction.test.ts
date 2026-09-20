@@ -37,6 +37,24 @@ test('material regression in any failing viewport is still rejected',()=>{
   const b=structuredClone(a);b.views[0].score=94;b.views[0].worstBand=84;b.views[1].score=88;b.views[1].worstBand=74;
   assert.equal(improves(a,b),false);
 });
+test('large page gains can be retained while a still-failing interaction temporarily regresses',()=>{
+  const make=(viewport:string,scoreValue:number,worst:number,menuScore:number,menuWorst:number):Evaluation['views'][number]=>({
+    route:'/',viewport,source:'source.png',score:scoreValue,worstBand:worst,pass:false,issues:['page mismatch'],
+    interactions:[{id:'menu',trigger:{kind:'button',name:'Navigation Menu'},source:'source-menu.png',score:menuScore,worstBand:menuWorst,pass:false,issues:['menu mismatch']}]
+  });
+  const before:Evaluation={pass:false,issues:[],views:[
+    make('desktop',85.66,37.97,89.89,65.44),make('tablet',82.21,23.37,86.39,60.89),make('mobile',83.10,19.54,85.83,43.74)
+  ]};
+  const after:Evaluation={pass:false,issues:[],views:[
+    make('desktop',87.93,55.51,83.11,34.91),make('tablet',84.75,59.66,81.84,52.83),make('mobile',86.02,55.08,82.40,23.05)
+  ]};
+  assert.equal(improves(before,after),true);
+});
+test('a passing interaction can never be broken to improve the rest of the page',()=>{
+  const before=score(85);before.views[0].worstBand=38;before.views[0].interactions=[{id:'menu',trigger:{kind:'button',name:'Navigation Menu'},source:'menu.png',score:98,worstBand:95,pass:true,issues:[]}];
+  const after=structuredClone(before);after.views[0].score=96;after.views[0].worstBand=90;after.views[0].interactions![0].score=70;after.views[0].interactions![0].worstBand=45;after.views[0].interactions![0].pass=false;after.views[0].interactions![0].issues=['menu mismatch'];
+  assert.equal(improves(before,after),false);
+});
 
 test('rejected repair autopsy exposes gains and regressions for the next model round',()=>{
   const best=score(90);best.views[0].worstBand=70;best.views.push({...best.views[0],viewport:'mobile',score:88,worstBand:68,pass:false,issues:['mobile spacing']});
@@ -83,6 +101,13 @@ test('large page evidence compacts below the provider safety budget',()=>{
   assert.ok(text.length<=300000,'compacted prompt was '+text.length+' chars');
   assert.match(text,/Large site/);
   assert.match(text,/screenshots|visual authority/i);
+  const saved={html:'<html>'+('saved-structure '.repeat(12000))+'</html>',styles:Array.from({length:24},(_,i)=>({path:'style-'+i+'.css',content:('selector{font-family:Arvo;padding:24px;}').repeat(500)})),note:'saved evidence'};
+  const hybrid=reconstructionPrompt(evidence,page,[{path:'src/site.css',content:'a{display:block}'.repeat(30000)}],'Implement hybrid page',saved);
+  assert.ok(hybrid.length<=300000,'hybrid prompt was '+hybrid.length+' chars');
+  const parsed=JSON.parse(hybrid);
+  assert.ok(Array.isArray(parsed.reference?.views?.[0]?.geometry),'saved evidence must not force live geometry into the vision-only fallback');
+  assert.ok(parsed.reference.views[0].geometry.length>=56,'hybrid prompt retained only '+parsed.reference.views[0].geometry.length+' geometry elements');
+  assert.ok(parsed.savedSource&&parsed.savedSource.html.length<=18001,'saved HTML should be supplemental and bounded');
 });
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
