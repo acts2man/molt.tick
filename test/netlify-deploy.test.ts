@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deployNetlifyDirectory } from '../scripts/publish-netlify.js';
+import { deployNetlifyDirectory, verifyLiveRoutes } from '../scripts/publish-netlify.js';
 
 test('Netlify preflight publishes built files through the deploy API without invoking a build',async()=>{
   const root=await mkdtemp(join(tmpdir(),'molt-netlify-api-'));
@@ -31,4 +31,11 @@ test('Netlify preflight publishes built files through the deploy API without inv
     assert.equal(result.deployId,'deploy-123');assert.deepEqual(uploaded.sort(),['assets/app.js','index.html']);
     assert.equal(calls.some(c=>/build/i.test(c.url)),false);
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('production verification checks every generated route, not only the homepage',async()=>{
+  const seen:string[]=[];
+  const fetcher=async(input:RequestInfo|URL)=>{const url=String(input);seen.push(new URL(url).pathname);return new Response(url.endsWith('/services')?'missing':'ok',{status:url.endsWith('/services')?404:200});};
+  await assert.rejects(()=>verifyLiveRoutes('https://example.netlify.app',['/','/about','/services'],fetcher as typeof fetch,async()=>{}),/route \/services.*HTTP 404/);
+  assert.ok(seen.includes('/about'));assert.ok(seen.includes('/services'));
 });
