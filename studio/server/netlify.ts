@@ -17,6 +17,19 @@ async function request(token:string,path:string,init:RequestInit={},fetcher:type
   return data;
 }
 
+export async function deleteNetlifySite(token:string,siteId:string,fetcher:typeof fetch=fetch):Promise<void>{
+  if(!token||token.length<20||!/^[a-z0-9-]{8,100}$/i.test(siteId))return;
+  try{
+    const response=await fetcher(`https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}`,{
+      method:'DELETE',redirect:'error',signal:AbortSignal.timeout(20000),
+      headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}
+    });
+    if(response.status!==404&&!response.ok)throw new Error(`HTTP ${response.status}`);
+  }catch(error){
+    throw new HttpError(502,`Netlify reservation cleanup failed: ${error instanceof Error?error.message:String(error)}`);
+  }
+}
+
 export async function checkNetlify(token:string,requestedTeam='',fetcher:typeof fetch=fetch):Promise<NetlifyConnectionCheck>{
   if(token.length<20||token.length>512||/\s/.test(token))throw new HttpError(400,'Enter a valid Netlify personal access token.');
   const [user,accounts]=await Promise.all([
