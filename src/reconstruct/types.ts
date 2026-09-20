@@ -15,7 +15,7 @@ export interface ElementEvidence {
 export interface Geometry {
   text: string; title: string; height: number; overflow: boolean; brokenImages: number;
   elements: ElementEvidence[]; links: string[]; embeds: string[]; forms: number;
-  fontFaces: string[]; mediaQueries: string[]; platformHints?: string[]; truncated: boolean;
+  fontFaces: string[]; mediaQueries: string[]; platformHints?: string[]; rootStyle?: Record<string,string>; bodyStyle?: Record<string,string>; truncated: boolean;
 }
 export type InteractionKind = 'button' | 'tab' | 'details';
 export interface InteractionTrigger {
