@@ -56,6 +56,25 @@ function compactElement(e:any){
     ...(e.svg?{svg:clipped(e.svg,4000)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{}),
     ...(e.before?{before:e.before}:{}),...(e.after?{after:e.after}:{})};
 }
+function spacingGuide(elements:any[],limit=60){
+  const text=elements.filter(e=>/^(h[1-6]|p|li|button|label|blockquote)$/.test(e.tag)&&String(e.text||'').trim());
+  const label=(e:any)=>{const v=String(e.text||'').replace(/\s+/g,' ').trim();return clipped(v,70)??e.tag;};
+  const rhythm=text.slice(0,Math.min(36,limit)).map(e=>({tag:e.tag,text:label(e),y:Math.round(e.y),height:Math.round(e.height),
+    lineHeight:e.style?.['line-height'],letterSpacing:e.style?.['letter-spacing'],margin:e.style?.margin,padding:e.style?.padding}));
+  const byParent=new Map<string,any[]>();
+  for(const e of text){if(!e.parent)continue;const items=byParent.get(e.parent)??[];items.push(e);byParent.set(e.parent,items);}
+  const between:any[]=[];
+  for(const items of byParent.values()){
+    items.sort((a,b)=>a.y-b.y||a.x-b.x);
+    for(let i=0;i<items.length-1&&between.length<limit;i++){
+      const a=items[i],b=items[i+1],overlap=Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))/Math.max(1,Math.min(a.width,b.width));
+      if(b.y<a.y+a.height-2||overlap<0.12)continue;
+      const gap=b.y-(a.y+a.height);if(gap<0||gap>500)continue;
+      between.push({from:label(a),to:label(b),gap:Math.round(gap),fromHeight:Math.round(a.height),toY:Math.round(b.y)});
+    }
+  }
+  return {textRhythm:rhythm,between};
+}
 function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
@@ -68,6 +87,7 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
         geometry:select(state.geometry.elements,Math.min(70,geometryLimit))})),
+      spacing:spacingGuide(v.geometry.elements,Math.min(60,geometryLimit)),
       geometry:select(v.geometry.elements,geometryLimit),
     }))};
 }
