@@ -98,7 +98,7 @@ const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
  const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
  const seenElements=new Set(),counts=new Map();
- const groups={priority:[],carousel:[],tabs:[],other:[],details:[]};
+ const groups={priority:[],carousel:[],hover:[],tabs:[],other:[],details:[]};
  const push=(group,kind,el)=>{
    if(seenElements.has(el))return;
    const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');
@@ -119,15 +119,49 @@ const INTERACTIONS = `(() => {
    if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
    push('carousel','button',el);
  }
+ // Only observe hover states that are explicitly backed by a source stylesheet rule.
+ // This is bounded and reversible; arbitrary links are not hovered just because they exist.
+ const hoverSelectors=[];
+ const scanRules=(rules)=>{for(const rule of Array.from(rules||[])){try{
+   if(rule.selectorText&&String(rule.selectorText).includes(':hover'))for(const selector of String(rule.selectorText).split(',')){
+     const at=selector.indexOf(':hover');if(at<0)continue;
+     const base=selector.slice(0,at).trim().replace(/[>+~\\s]+$/,'');if(base)hoverSelectors.push(base);
+   }
+   if(rule.cssRules)scanRules(rule.cssRules);
+ }catch{}}};
+ for(const sheet of Array.from(document.styleSheets)){try{scanRules(sheet.cssRules);}catch{}}
+ for(const selector of hoverSelectors.slice(0,80)){
+   let matches=[];try{matches=Array.from(document.querySelectorAll(selector));}catch{continue;}
+   for(const el of matches){
+     if(!el.matches('a,button,[role="button"],[aria-haspopup]'))continue;
+     const rect=el.getBoundingClientRect(),style=getComputedStyle(el);
+     if(!rect.width||!rect.height||rect.bottom<=0||rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth||style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)continue;
+     push('hover','hover',el);
+   }
+ }
  for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tabs','tab',el);
  for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const summary=d.querySelector(':scope > summary');if(summary)push('details','details',summary);}
- return [...groups.priority.slice(0,2),...groups.carousel.slice(0,2),...groups.tabs.slice(0,2),...groups.other.slice(0,1),...groups.details.slice(0,1)].slice(0,8);
+ return [...groups.priority.slice(0,2),...groups.carousel.slice(0,2),...groups.hover.slice(0,2),...groups.tabs.slice(0,2),...groups.other.slice(0,1),...groups.details.slice(0,1)].slice(0,10);
 })()`;
 export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
   return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
 }
 export async function activateInteraction(page: Page, trigger: InteractionTrigger): Promise<boolean> {
   const payload=JSON.stringify(trigger).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+  if(trigger.kind==='hover'){
+    const point=await page.evaluate(`(() => {
+      const trigger=${payload};
+      const clean=(s)=>String(s==null?'':s).replace(/\\\\s+/g,' ').trim().slice(0,120);
+      const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
+      const items=Array.from(document.querySelectorAll('a,button,[role="button"],[aria-haspopup]'));
+      const matches=items.filter(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+      const target=matches[Math.max(0,Number(trigger.ordinal)||0)];if(!target)return null;
+      const rect=target.getBoundingClientRect(),style=getComputedStyle(target);
+      if(!rect.width||!rect.height||rect.bottom<=0||rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth||style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)return null;
+      return {x:Math.max(1,Math.min(innerWidth-1,rect.left+rect.width/2)),y:Math.max(1,Math.min(innerHeight-1,rect.top+rect.height/2))};
+    })()`) as {x:number;y:number}|null;
+    if(!point)return false;await page.mouse.move(point.x,point.y);return true;
+  }
   const script=`(() => {
     const trigger=${payload};
     const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
