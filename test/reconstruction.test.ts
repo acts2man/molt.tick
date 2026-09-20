@@ -12,9 +12,9 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, contentIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, contentIssues, internalLinkIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -22,6 +22,20 @@ async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp
 test('route mapping prevents collisions across nested, dotted and punctuation routes',()=>assert.equal(new Set(['/a/b','/a.b','/a-b','/'].map(routeFile)).size,4));
 test('route validation rejects traversal, encoded traversal and protocol-relative routes',()=>{for(const s of ['//evil','/../outside','/%2e%2e/out','/a?x=1','/a\\b','/%2f%2fevil'])assert.throws(()=>routePath(s));});
 test('same route has stable filename and trailing slash normalization',()=>{assert.equal(routeFile('/about/'),routeFile('/about'));assert.equal(routePath('/'),' /'.trim());});
+test('internal navigation must stay inside the reconstructed route map',()=>{
+  const source=simpleGeometry([]),candidate=simpleGeometry([]);
+  source.links=['https://example.com/','https://example.com/about'];
+  candidate.links=['http://127.0.0.1:4173/','https://example.com/about'];
+  const issues=internalLinkIssues(source,candidate,'https://example.com','http://127.0.0.1:4173',new Set(['/','/about']));
+  assert.ok(issues.some(i=>/source website.*\/about/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Missing reconstructed internal link target: \/about/.test(i)),issues.join('\n'));
+});
+test('partially supplied current files are protected from full replacement',()=>{
+  const prompt=JSON.stringify({currentFiles:[{path:'src/site.css',content:'partial',complete:false},{path:'src/pages/home.tsx',content:'full',complete:true}]});
+  assert.deepEqual([...protectedPromptPaths(prompt)],['src/site.css']);
+  assert.throws(()=>assertNoPartialFileRewrite(prompt,[{path:'src/site.css',content:'replacement'}]),/partially supplied/);
+  assert.doesNotThrow(()=>assertNoPartialFileRewrite(prompt,[{path:'src/pages/home.tsx',content:'replacement'}]));
+});
 test('source URL validation rejects unsafe schemes and credentials',()=>{for(const u of ['file:///etc/passwd','data:text/html,a','javascript:alert(1)','https://user:password@example.com'])assert.throws(()=>publicUrl(u));assert.equal(publicUrl('example.com').origin,'https://example.com');});
 test('reserved networks are denied',()=>{for(const ip of ['127.0.0.1','10.0.0.1','192.168.1.1','169.254.169.254','100.64.0.1','::1','::ffff:127.0.0.1','2001:db8::1','198.51.100.1'])assert.equal(publicIP(ip),false,ip);assert.equal(publicIP('8.8.8.8'),true);});
 test('numeric and viewport limits are explicit',()=>{assert.equal(integer(undefined,6,0,20),6);for(const n of ['','-1','21','NaN','1.5'])assert.throws(()=>integer(n,6,0,20));assert.throws(()=>validateViewports([]));assert.throws(()=>validateViewports([{name:'../x',width:390,height:844}]));});
