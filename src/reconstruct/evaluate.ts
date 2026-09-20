@@ -44,6 +44,50 @@ const overlapX=(a:ElementEvidence,b:ElementEvidence)=>{
   const left=Math.max(a.x,b.x),right=Math.min(a.x+a.width,b.x+b.width);
   return Math.max(0,right-left)/Math.max(1,Math.min(a.width,b.width));
 };
+
+const geometryDelta=(source:ElementEvidence,candidate:ElementEvidence)=>({
+  x:candidate.x-source.x,y:candidate.y-source.y,width:candidate.width-source.width,height:candidate.height-source.height
+});
+const geometryMismatch=(delta:{x:number;y:number;width:number;height:number},tolerance=4)=>
+  Math.max(Math.abs(delta.x),Math.abs(delta.y),Math.abs(delta.width),Math.abs(delta.height))>tolerance;
+const geometryMessage=(label:string,source:ElementEvidence,candidate:ElementEvidence)=>{
+  const d=geometryDelta(source,candidate);
+  return `${label}: source x/y ${Math.round(source.x)}/${Math.round(source.y)}px, ${Math.round(source.width)}×${Math.round(source.height)}px; generated ${Math.round(candidate.x)}/${Math.round(candidate.y)}px, ${Math.round(candidate.width)}×${Math.round(candidate.height)}px; delta x ${Math.round(d.x)}, y ${Math.round(d.y)}, width ${Math.round(d.width)}, height ${Math.round(d.height)}px`;
+};
+function assetPath(value:string|undefined):string{
+  if(!value)return '';
+  try{return new URL(value,'https://molt.invalid').pathname;}catch{return value;}
+}
+export function mediaGeometryIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  const issues:Array<{amount:number;message:string}>=[],assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath]));
+  const generatedImages=candidate.elements.filter(e=>e.tag==='img'&&e.src);
+  for(const image of source.elements.filter(e=>e.tag==='img'&&e.src)){
+    const local=assetByOriginal.get(image.src!);if(!local)continue;
+    const match=generatedImages.find(e=>assetPath(e.src)===local);if(!match)continue;
+    const delta=geometryDelta(image,match);if(!geometryMismatch(delta))continue;
+    issues.push({amount:Math.max(...Object.values(delta).map(Math.abs)),message:geometryMessage(`Image ${image.attributes?.alt?`"${String(image.attributes.alt).slice(0,70)}"`:local}`,image,match)});
+  }
+  const sourceBackgrounds=source.elements.filter(e=>e.style['background-image']&&e.style['background-image']!=='none');
+  const candidateBackgrounds=candidate.elements.filter(e=>e.style['background-image']&&e.style['background-image']!=='none');
+  for(const box of sourceBackgrounds){
+    const original=[...box.style['background-image'].matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(m=>m[1]).find(url=>assetByOriginal.has(url));
+    if(!original)continue;const local=assetByOriginal.get(original)!;
+    const match=candidateBackgrounds.find(e=>e.style['background-image'].includes(local));if(!match)continue;
+    const delta=geometryDelta(box,match);if(!geometryMismatch(delta))continue;
+    issues.push({amount:Math.max(...Object.values(delta).map(Math.abs)),message:geometryMessage(`Background ${local}`,box,match)});
+  }
+  return issues.sort((a,b)=>b.amount-a.amount).slice(0,8).map(i=>i.message);
+}
+export function controlGeometryIssues(source:Geometry,candidate:Geometry):string[]{
+  const issues:Array<{amount:number;message:string}>=[];
+  for(const pair of matchedTextElements(source,candidate)){
+    const role=pair.source.attributes?.role??'';
+    if(pair.source.tag!=='button'&&role!=='button')continue;
+    const delta=geometryDelta(pair.source,pair.candidate);if(!geometryMismatch(delta))continue;
+    issues.push({amount:Math.max(...Object.values(delta).map(Math.abs)),message:geometryMessage(`Control "${short(pair.source)}"`,pair.source,pair.candidate)});
+  }
+  return issues.sort((a,b)=>b.amount-a.amount).slice(0,6).map(i=>i.message);
+}
 export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
   const pairs=matchedTextElements(source,candidate),problems:string[]=[];
   const typography:string[]=[];
@@ -117,7 +161,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     for(const property of TYPOGRAPHY_PROPS)if(original.style[property]!==actual.style[property])mismatches.push(property);
     if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
   }
-  problems.push(...spacingIssues(source,candidate));
+  problems.push(...spacingIssues(source,candidate),...controlGeometryIssues(source,candidate));
   if(Math.abs(source.height-candidate.height)>Math.max(3,source.height*0.005))problems.push(`Page height differs: source ${source.height}px, generated ${candidate.height}px`);
   return problems;
 }
@@ -156,7 +200,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         check.candidate=join(directory,`${stem}.png`);check.diff=join(directory,`${stem}.diff.png`);
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
         const generated=await geometry(page);
-        check.issues.push(...contentIssues(reference.geometry,generated),...errors);
+        check.issues.push(...contentIssues(reference.geometry,generated),...mediaGeometryIssues(reference.geometry,generated,evidence),...errors);
         // Literal DOM links are checked after rendering, including shared components. Same-site links
         // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
@@ -180,7 +224,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
             stateCheck.diff=join(directory,`${stem}-${state.id}.diff.png`);
             await page.screenshot({path:stateCheck.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
             const stateGenerated=await geometry(page);
-            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated));
+            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaGeometryIssues(state.geometry,stateGenerated,evidence));
             const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
             stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;
             await writeFile(join(directory,`${stem}-${state.id}.json`),JSON.stringify({source:state.geometry,generated:stateGenerated,check:stateCheck},null,2));
