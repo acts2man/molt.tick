@@ -268,6 +268,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
     if(targets.length>maxPages||new Set(targets.map(t=>t.route)).size!==targets.length)throw new Error('Too many or duplicate requested routes');
     const stabilityEnabled=(options.sourceStability??true)&&Boolean(options.url)&&!local;
     const adaptiveEnabled=(options.adaptiveViewports??Boolean(options.url))&&options.viewports===undefined;
+    const stabilityFingerprints=new Map<string,string>();
     for(const target of targets){
       if(stabilityEnabled){
         const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
@@ -279,8 +280,9 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
             await settle(page,options.signal);samples.push(geometryFingerprint(await geometry(page)));
             if(samples.length>=2&&samples.at(-1)===samples.at(-2))break;
           }
+          const finalFingerprint=samples.at(-1);if(finalFingerprint)stabilityFingerprints.set(target.route,finalFingerprint);
           if(samples.length>=2&&samples.at(-1)!==samples.at(-2))evidence.warnings.push(`${target.route}: live source changed across repeated captures; rotating/A-B/geolocation/time-based content may make pixel scoring non-deterministic.`);
-          else if(samples.length>2)evidence.warnings.push(`${target.route}: live source changed once, then stabilized on retry; the stable state is used for reconstruction.`);
+          else if(samples.length>2)evidence.warnings.push(`${target.route}: live source changed once, then stabilized on retry; Molt will compare the actual desktop capture against that stabilized fingerprint.`);
         }catch(error){evidence.warnings.push(`${target.route}: source-stability probe could not complete (${(error as Error).message}); normal capture will still validate the route.`);}
         finally{await ctx.close().catch(()=>{});}
       }
@@ -309,6 +311,10 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           const screenshot=join(options.directory,slug,`${viewport.name}.png`);
           await page.screenshot({path:screenshot,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
           const g=await geometry(page);
+          if(stabilityEnabled&&viewIndex===0){
+            const expected=stabilityFingerprints.get(target.route),actual=geometryFingerprint(g);
+            if(expected&&expected!==actual)evidence.warnings.push(`${target.route}: the actual desktop evidence changed again after the stability probe; visual scoring for this route may reflect rotating source content rather than reconstruction error.`);
+          }
           if(adaptiveEnabled&&viewIndex===0){
             const probes=adaptiveViewports(g.mediaQueries,pageViewports);
             if(probes.length){pageViewports.push(...probes);validateViewports(pageViewports);evidence.warnings.push(`${target.route}: added source-derived breakpoint verification at ${probes.map(v=>v.width+'px').join(', ')}.`);}
