@@ -7,7 +7,7 @@ import { improves, routePath, routeFile, publicUrl, publicIP, inside, integer, v
 import { validateChanges, apply, snapshot, restore } from '../src/reconstruct/workspace.js';
 import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
-import { readBundle } from '../src/reconstruct/capture.js';
+import { readBundle, adaptiveViewports, geometryFingerprint } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
 import { repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
@@ -39,6 +39,19 @@ test('partially supplied current files are protected from full replacement',()=>
 test('source URL validation rejects unsafe schemes and credentials',()=>{for(const u of ['file:///etc/passwd','data:text/html,a','javascript:alert(1)','https://user:password@example.com'])assert.throws(()=>publicUrl(u));assert.equal(publicUrl('example.com').origin,'https://example.com');});
 test('reserved networks are denied',()=>{for(const ip of ['127.0.0.1','10.0.0.1','192.168.1.1','169.254.169.254','100.64.0.1','::1','::ffff:127.0.0.1','2001:db8::1','198.51.100.1'])assert.equal(publicIP(ip),false,ip);assert.equal(publicIP('8.8.8.8'),true);});
 test('numeric and viewport limits are explicit',()=>{assert.equal(integer(undefined,6,0,20),6);for(const n of ['','-1','21','NaN','1.5'])assert.throws(()=>integer(n,6,0,20));assert.throws(()=>validateViewports([]));assert.throws(()=>validateViewports([{name:'../x',width:390,height:844}]));});
+test('adaptive viewport probes derive meaningful source breakpoints without duplicating the base matrix',()=>{
+  const probes=adaptiveViewports(['(max-width: 1200px)','(max-width: 1024px)','(max-width: 430px)','(min-width: 375px)'],[
+    {name:'desktop',width:1440,height:900},{name:'tablet',width:768,height:1024},{name:'mobile',width:390,height:844}
+  ]);
+  assert.deepEqual(probes.map(v=>v.width),[1024,430]);
+  assert.ok(probes.every(v=>!['desktop','tablet','mobile'].includes(v.name)));
+});
+test('source geometry fingerprints are stable for identical evidence and change for visible layout changes',()=>{
+  const base=simpleGeometry([{key:'1',tag:'h1',text:'Stable title',x:40,y:80,width:600,height:60,style:{}}]);
+  const same=structuredClone(base),changed=structuredClone(base);changed.elements[0].y=120;
+  assert.equal(geometryFingerprint(base),geometryFingerprint(same));
+  assert.notEqual(geometryFingerprint(base),geometryFingerprint(changed));
+});
 test('child environment excludes provider credentials',()=>{process.env.MOLT_TEST_PRIVATE_VALUE='secret';assert.equal(safeEnvironment().MOLT_TEST_PRIVATE_VALUE,undefined);delete process.env.MOLT_TEST_PRIVATE_VALUE;});
 test('high-fidelity repair scope expands only enough to cover multi-page jobs',()=>{
   assert.equal(effectiveRepairRounds(1,4),4);
