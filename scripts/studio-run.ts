@@ -7,11 +7,12 @@ import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { productionRunBudget } from '../src/reconstruct/budgets.js';
-import { reserveOutputRepository, publishReservedOutputRepository } from './publish-output.js';
-import { preflightNetlify, createNetlifySite, deployNetlifyDirectory, configureContinuousNetlifyDeploy } from './publish-netlify.js';
+import { reserveOutputRepository, publishReservedOutputRepository, deleteReservedOutputRepository } from './publish-output.js';
+import { preflightNetlify, createNetlifySite, deployNetlifyDirectory, configureContinuousNetlifyDeploy, deleteNetlifySite, type NetlifySite } from './publish-netlify.js';
 import { finalStudioEvent } from './studio-report.js';
 import { runnerFetch } from './runner-callback.js';
 let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number}|undefined;
+let reservedRepository:string|undefined,reservedSite:NetlifySite|undefined,publishedSource=false;
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
@@ -135,10 +136,10 @@ try{
   runnerIdentityCache=undefined;
   await progress('Zero-cost preflight: fresh runner identity verified.');
   await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
-  const plannedRepo=await reserveOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+  const plannedRepo=await reserveOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');reservedRepository=plannedRepo.repository;
   await progress(`Reserved output repository and proved workflow/secret access: ${plannedRepo.repository}`,{outputRepoUrl:plannedRepo.url});
   await preflightNetlify(process.env.MOLT_NETLIFY_TEAM_SLUG??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
-  const plannedSite=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',plannedRepo.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+  const plannedSite=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',plannedRepo.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');reservedSite=plannedSite;
   const netlifyProbeDir=resolve('studio-work/netlify-preflight');await mkdir(netlifyProbeDir,{recursive:true});
   await writeFile(join(netlifyProbeDir,'index.html'),'<!doctype html><meta name="robots" content="noindex"><title>Molt delivery preflight</title><p>Molt reserved this deployment target before reconstruction.</p>');
   await deployNetlifyDirectory(netlifyProbeDir,plannedSite.id,process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
@@ -177,7 +178,7 @@ try{
   try{
     await progress(`Publishing retained React source to ${plannedRepo.repository}`,{},false);
     const published=await publishReservedOutputRepository(result.outDir,plannedRepo.repository,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
-    finalExtras.outputRepoUrl=published.url;
+    publishedSource=true;finalExtras.outputRepoUrl=published.url;
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(`GitHub repository published: ${published.repository}`,{outputRepoUrl:published.url},false);
     await progress('Connecting the reserved Netlify production site to the generated repository.',{},false);
@@ -197,6 +198,10 @@ try{
   await progress(finalMessage,finalPayload,false);
   if(result.status!=='review')process.exitCode=2;
 }catch(error){
+  if(!publishedSource){
+    if(reservedSite)await deleteNetlifySite(reservedSite.id,process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
+    if(reservedRepository)await deleteReservedOutputRepository(process.cwd(),reservedRepository,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
+  }
   const message=redacted(error instanceof Error?error.message:String(error));
   await writeFile(join(artifacts,'error.json'),JSON.stringify({error:message,usage:liveModel?.usage},null,2));
   await progress(message,{error:message,usage:liveModel?.usage},false);
