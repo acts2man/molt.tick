@@ -156,7 +156,7 @@ try{
     for(const f of manifest.files){if(f.size>4_000_000||(total+=f.size)>50_000_000)throw new Error('Bundle size limit exceeded');const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});const bytes=await (await studio(`/bundle?file=${encodeURIComponent(f.path)}`)).arrayBuffer();if(bytes.byteLength!==f.size)throw new Error('Bundle file size mismatch');await writeFile(dest,Buffer.from(bytes));}
   }
   liveModel=modelFromEnv();
-  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir,url:job.sourceUrl}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
+  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir,url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
   // Checkpoint the expensive work before any nonessential callback, preview, or export step.
   await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
   await writeFile(join(artifacts,'report.json'),JSON.stringify(result,null,2));
