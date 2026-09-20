@@ -44,15 +44,23 @@ export async function readBundle(root: string): Promise<Bundle> {
 /** Script string avoids transpiler-injected helpers in browser evaluation. */
 const GEOMETRY = `(() => {
  const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility'];
- const nodes=Array.from(document.querySelectorAll('body *')); const index=new Map(nodes.map((n,i)=>[n,String(i)]));
+ const allNodes=Array.from(document.querySelectorAll('body *')); const index=new Map(allNodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
  const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
- const elements=[]; let truncated=false;
+ const candidates=allNodes.filter(el=>{const tag=el.tagName.toLowerCase();if(/^(script|style|noscript|link|meta)$/.test(tag))return false;const b=el.getBoundingClientRect();return !!b.width&&!!b.height&&b.right>0&&b.left<innerWidth;});
+ let nodes=candidates,truncated=candidates.length>1400;
+ const evenly=(items,limit)=>items.length<=limit?items:Array.from({length:limit},(_,i)=>items[Math.round(i*(items.length-1)/(limit-1))]);
+ if(truncated){
+  const priority=candidates.filter(el=>/^(header|nav|main|section|article|footer|h[1-6]|p|li|img|button|form)$/.test(el.tagName.toLowerCase()));
+  const selected=[],seen=new Set();
+  for(const el of [...evenly(priority,700),...evenly(candidates,1400)]){if(seen.has(el))continue;seen.add(el);selected.push(el);if(selected.length>=1400)break;}
+  nodes=selected.sort((a,b)=>Number(index.get(a))-Number(index.get(b)));
+ }
+ const elements=[];
  for(const el of nodes){
-  const tag=el.tagName.toLowerCase(); if(/^(script|style|noscript|link|meta)$/.test(tag)) continue;
+  const tag=el.tagName.toLowerCase();
   const b=el.getBoundingClientRect(),s=getComputedStyle(el);
-  if(!b.width||!b.height||b.right<=0||b.left>=innerWidth||s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0) continue;
-  if(elements.length>=1400){truncated=true;break;}
+  if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0) continue;
   const e={key:index.get(el),parent:index.get(el.parentElement),tag,text:/^h[1-6]$/.test(tag)?el.innerText:Array.from(el.childNodes).filter(n=>n.nodeType===3).map(n=>n.textContent).join(' ').trim(),x:b.x+scrollX,y:b.y+scrollY,width:b.width,height:b.height,style:read(s),attributes:attrs(el)};
   if(tag==='img') e.src=el.currentSrc||el.src;
   if(tag==='a') e.href=el.href;
@@ -335,7 +343,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
             const urls=[...(e.src?[e.src]:[]),...urlsIn(e.style['background-image']??'')];
             for(const url of urls){if(!url.startsWith('data:'))continue;const m=/^data:([^;,]+)(;base64)?,([\s\S]*)$/.exec(url);if(m)await save(url,Buffer.from(m[2]?m[3]:decodeURIComponent(m[3]),m[2]?'base64':'utf8'),m[1]);}
           }
-          if(g.truncated)evidence.warnings.push(`${target.route} ${viewport.name}: geometry limited to 1400 elements; full screenshot and text retained.`);
+          if(g.truncated)evidence.warnings.push(`${target.route} ${viewport.name}: geometry sampled to 1400 visible elements across the full page; full screenshot and text retained.`);
           if(g.brokenImages)evidence.blockers.push(`${target.route} ${viewport.name}: ${g.brokenImages} source images did not load.`);
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
