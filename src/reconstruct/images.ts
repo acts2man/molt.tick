@@ -93,7 +93,24 @@ export async function compare(sourcePath:string,candidatePath:string,diffPath:st
   const A=fit(a),B=fit(b),diff=new PNG({width,height});
   const pixels=pixelmatch(A.data,B.data,diff.data,width,height,{threshold:0.1});
   let worstBand=100,worstY=0;
-  for(let y=0;y<height;y+=320){const h=Math.min(320,height-y);const mismatch=pixelmatch(A.data.subarray(y*width*4,(y+h)*width*4),B.data.subarray(y*width*4,(y+h)*width*4),undefined,width,h,{threshold:0.1});const score=100*(1-mismatch/(width*h));if(score<worstBand){worstBand=score;worstY=y;}}
+  // The global score can hide a visibly wrong card, image or text block inside a wide desktop
+  // screenshot. Keep the compatibility field name `worstBand`, but measure the weakest local
+  // region as well as each full-width strip. Horizontal prefix sums make this linear in pixels.
+  const localWidth=Math.min(width,Math.max(320,Math.round(width/3))),xStep=Math.max(160,Math.floor(localWidth/2));
+  for(let y=0;y<height;y+=240){
+    const h=Math.min(320,height-y),columns=new Uint32Array(width);
+    for(let yy=y;yy<y+h;yy++){
+      let offset=(yy*width)*4;
+      for(let x=0;x<width;x++,offset+=4)if(diff.data[offset]===255&&diff.data[offset+1]===0&&diff.data[offset+2]===0)columns[x]++;
+    }
+    const prefix=new Uint32Array(width+1);for(let x=0;x<width;x++)prefix[x+1]=prefix[x]+columns[x];
+    const scoreRegion=(x:number,w:number)=>100*(1-(prefix[x+w]-prefix[x])/(w*h));
+    const fullScore=scoreRegion(0,width);if(fullScore<worstBand){worstBand=fullScore;worstY=y;}
+    if(localWidth<width){
+      const starts:number[]=[];for(let x=0;x+localWidth<=width;x+=xStep)starts.push(x);starts.push(width-localWidth);
+      for(const x of new Set(starts)){const score=scoreRegion(x,localWidth);if(score<worstBand){worstBand=score;worstY=y;}}
+    }
+  }
   await writeFile(diffPath,PNG.sync.write(diff));
   return {score:100*(1-pixels/(width*height)),worstBand,worstY};
 }
