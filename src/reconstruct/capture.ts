@@ -96,7 +96,7 @@ export function adaptiveViewports(mediaQueries:string[],base:Viewport[]):Viewpor
 /** Observe only bounded, reversible interaction states. Links, submit buttons and arbitrary clicks are excluded. */
 const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
- const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
+ const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent||el.getAttribute('aria-controls'));
  const seenElements=new Set(),counts=new Map();
  const groups={priority:[],carousel:[],tabs:[],other:[],details:[]};
  const push=(group,kind,el)=>{
@@ -106,7 +106,7 @@ const INTERACTIONS = `(() => {
    const ordinal=counts.get(key)||0;counts.set(key,ordinal+1);seenElements.add(el);
    groups[group].push({kind,name:n,controls,ordinal});
  };
- for(const el of Array.from(document.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"]'))){
+ for(const el of Array.from(document.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"],button[aria-haspopup],[role="button"][aria-haspopup],button[aria-controls],[role="button"][aria-controls]'))){
    if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
    if(el.getAttribute('role')==='tab')continue;
    const n=name(el),important=/menu|navigation|nav|drawer|toggle/i.test(n+' '+(el.getAttribute('aria-controls')||''))||el.getAttribute('aria-haspopup');
@@ -131,7 +131,7 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
   const script=`(() => {
     const trigger=${payload};
     const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
-    const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
+    const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent||el.getAttribute('aria-controls'));
     let items=[];
     if(trigger.kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
     else if(trigger.kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
