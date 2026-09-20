@@ -33,7 +33,7 @@ test('real browser captures two imported pages at all three viewports and locali
   assert.equal(view.interactions?.length,1);assert.equal(view.interactions?.[0].trigger.kind,'details');assert.equal(view.interactions?.[0].trigger.name,'Project notes');
 }));
 test('capture replays duplicate icon-only carousel controls by occurrence',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
-  const carousel='<!doctype html><html><head><meta charset="utf-8"><title>Carousel</title><style>button{display:block;width:44px;height:44px;margin:20px}</style></head><body><button class="swiper-button-next"></button><button class="swiper-button-next"></button></body></html>';
+  const carousel='<!doctype html><html><head><meta charset="utf-8"><title>Carousel</title><style>button{display:block;width:44px;height:44px;margin:20px}</style></head><body><h1>Carousel controls</h1><button class="swiper-button-next"></button><button class="swiper-button-next"></button></body></html>';
   await writeFile(join(dir,'bundle/home.html'),carousel);
   await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
   const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'carousel-evidence'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
