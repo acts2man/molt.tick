@@ -62,8 +62,14 @@ export async function geometry(page: Page): Promise<Geometry> {
 const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
  const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
- const out=[],seen=new Set();
- const push=(kind,el)=>{const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');if(!n||seen.has(key))return;seen.add(key);out.push({kind,name:n,controls});};
+ const out=[],seenElements=new Set(),counts=new Map();
+ const push=(kind,el)=>{
+   if(seenElements.has(el))return;
+   const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');
+   if(!n)return;
+   const ordinal=counts.get(key)||0;counts.set(key,ordinal+1);seenElements.add(el);
+   out.push({kind,name:n,controls,ordinal});
+ };
  for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const s=d.querySelector(':scope > summary');if(s)push('details',s);}
  for(const el of Array.from(document.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"]'))){
    if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
@@ -88,12 +94,13 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
   const script=`(() => {
     const trigger=${payload};
     const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
-    const label=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+    const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
     let items=[];
     if(trigger.kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
     else if(trigger.kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
     else items=Array.from(document.querySelectorAll('button,[role="button"]')).filter(el=>!el.matches('[type="submit"],[type="reset"]'));
-    const target=items.find(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+    const matches=items.filter(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+    const target=matches[Math.max(0,Number(trigger.ordinal)||0)];
     if(!target)return false;
     target.click();
     return true;
