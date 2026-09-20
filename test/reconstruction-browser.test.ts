@@ -32,6 +32,20 @@ test('real browser captures two imported pages at all three viewports and locali
   assert.ok(view.geometry.elements.find(e=>e.tag==='h1'&&e.width>0));
   assert.equal(view.interactions?.length,1);assert.equal(view.interactions?.[0].trigger.kind,'details');assert.equal(view.interactions?.[0].trigger.name,'Project notes');
 }));
+test('capture preserves real reading order across inline emphasis',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const page='<!doctype html><html><body><p>Call <strong>today</strong> for a <em>free estimate</em>.</p></body></html>';
+  await writeFile(join(dir,'bundle/home.html'),page);await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'text-order'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  assert.equal(evidence.pages[0].views[0].geometry.text,'Call today for a free estimate.');
+}));
+test('carousel evidence keeps reserved slots even when many disclosures appear first',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const details=Array.from({length:7},(_,i)=>`<details><summary>Question ${i}</summary><p>Answer</p></details>`).join('');
+  const page=`<!doctype html><html><body>${details}<button class="swiper-button-next"></button></body></html>`;
+  await writeFile(join(dir,'bundle/home.html'),page);await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'interaction-priority'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const names=(evidence.pages[0].views[0].interactions??[]).map(i=>i.trigger.name);
+  assert.ok(names.includes('Next slide'),names.join(', '));assert.ok(names.length<=8);
+}));
 test('capture replays duplicate icon-only carousel controls by occurrence',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const carousel='<!doctype html><html><head><meta charset="utf-8"><title>Carousel</title><style>button{display:block;width:44px;height:44px;margin:20px}</style></head><body><h1>Carousel controls</h1><button class="swiper-button-next"></button><button class="swiper-button-next"></button></body></html>';
   await writeFile(join(dir,'bundle/home.html'),carousel);
