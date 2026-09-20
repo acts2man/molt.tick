@@ -146,7 +146,7 @@ try{
   const netlifyProbe=await fetch(plannedSite.url,{redirect:'follow',signal:AbortSignal.timeout(15000)});
   if(!netlifyProbe.ok)throw new Error(`Netlify reserved-site deploy preflight returned HTTP ${netlifyProbe.status} before model usage.`);
   await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url,reservedNetlifySite:plannedSite},null,2));
-  await progress(`Zero-cost delivery preflight passed. Reserved ${plannedRepo.repository}, proved GitHub workflow/secret access, and deployed a placeholder to Netlify site ${plannedSite.name}; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url});
+  await progress(`Zero-cost delivery preflight passed. Reserved ${plannedRepo.repository}, proved GitHub workflow/secret access, and deployed a placeholder to Netlify site ${plannedSite.name}; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url,reservedOutputRepository:plannedRepo.repository,reservedNetlifySiteId:plannedSite.id});
   await progress(`Paid-model guard armed: at most ${budget.maxModelCalls} provider request attempts; unused headroom is not billed.`);
   let bundleDir:string|undefined;
   if(job.bundleId){
@@ -180,7 +180,7 @@ try{
     const published=await publishReservedOutputRepository(result.outDir,plannedRepo.repository,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
     publishedSource=true;finalExtras.outputRepoUrl=published.url;
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
-    await progress(`GitHub repository published: ${published.repository}`,{outputRepoUrl:published.url},false);
+    await progress(`GitHub repository published: ${published.repository}`,{outputRepoUrl:published.url,sourcePublished:true},false);
     await progress('Connecting the reserved Netlify production site to the generated repository.',{},false);
     const deployed=await configureContinuousNetlifyDeploy(result.outDir,published.repository,plannedSite,process.env.MOLT_GITHUB_EXPORT_TOKEN??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
     finalExtras.liveSiteUrl=deployed.url;finalExtras.liveSiteAdminUrl=deployed.adminUrl;
