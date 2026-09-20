@@ -18,9 +18,17 @@ export interface CaptureOptions {
 interface Bundle { site: string; pages: Array<{ route: string; file: string }> }
 export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'; index:number }
 export function prioritizeDiscoveredLinks(links:DiscoveredLink[]):string[]{
-  const priority:Record<DiscoveredLink['region'],number>={nav:0,header:0,main:1,footer:2};
+  const bucket=(item:DiscoveredLink)=>{
+    if(item.region==='nav'||item.region==='header')return 0;
+    let pathname='';try{pathname=new URL(item.href).pathname.toLowerCase();}catch{}
+    const core=/(?:^|[-/])(contact|about|services?|pricing|faq|team|staff|locations?|gallery|portfolio|projects?|testimonials?|reviews?)(?:[-/]|$)/i.test(pathname);
+    const lowValue=/(?:^|[-/])(blog|news|privacy|terms|cookie|category|tag|author)(?:[-/]|$)/i.test(pathname);
+    if(core)return 1;
+    if(lowValue)return 4;
+    return item.region==='main'?2:3;
+  };
   const seen=new Set<string>(),out:string[]=[];
-  for(const item of [...links].sort((a,b)=>priority[a.region]-priority[b.region]||a.index-b.index)){
+  for(const item of [...links].sort((a,b)=>bucket(a)-bucket(b)||a.index-b.index)){
     if(seen.has(item.href))continue;seen.add(item.href);out.push(item.href);
   }
   return out;
