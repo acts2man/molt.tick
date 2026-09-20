@@ -15,6 +15,43 @@ let liveModel:Model|undefined,runnerIdentityCache:{token:string;expiresAt:number
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
 const artifacts=resolve('studio-artifacts');await mkdir(artifacts,{recursive:true});
+let progressFloor=1,progressStage='Submitting',progressRepairRounds=4;
+function milestone(message:string):{progress:number;stage:string}|null{
+  const lower=message.toLowerCase();
+  if(lower.includes('runner connected'))return {progress:4,stage:'Starting runner'};
+  if(lower.includes('fresh runner identity verified'))return {progress:6,stage:'Verifying runner'};
+  if(lower.includes('reserved output repository'))return {progress:9,stage:'Preparing delivery'};
+  if(lower.includes('zero-cost delivery preflight passed'))return {progress:12,stage:'Preflight complete'};
+  if(lower.includes('paid-model guard armed'))return {progress:14,stage:'Preparing model'};
+  if(lower.includes('retrieving the saved-page bundle'))return {progress:16,stage:'Loading source files'};
+  if(lower.includes('capturing source evidence'))return {progress:20,stage:'Capturing website'};
+  if(lower.startsWith('source captured:'))return {progress:30,stage:'Analyzing source'};
+  if(lower.startsWith('reconstructing '))return {progress:38,stage:'Generating React'};
+  const build=/building and comparing every page\/device \(round (\d+)\)/i.exec(message);
+  if(build){
+    const round=Number(build[1]);
+    if(round===0)return {progress:52,stage:'Measuring first build'};
+    const progress=Math.min(82,56+Math.round((round/Math.max(1,progressRepairRounds))*26));
+    return {progress,stage:`Measuring repair round ${round}`};
+  }
+  if(lower.startsWith('repairing '))return {progress:Math.min(81,Math.max(56,progressFloor+1)),stage:'Repairing visual differences'};
+  const repair=/repair round (\d+)\s+(accepted|not applied)/i.exec(message);
+  if(repair){
+    const round=Number(repair[1]),progress=Math.min(83,57+Math.round((round/Math.max(1,progressRepairRounds))*26));
+    return {progress,stage:`Reviewing repair round ${round}`};
+  }
+  if(lower.includes('measured visual checks passed')||lower.includes('best measured reconstruction retained'))return {progress:84,stage:'Visual reconstruction complete'};
+  if(lower.includes('core react reconstruction checkpointed'))return {progress:86,stage:'Saving reconstruction'};
+  if(lower.includes('building the interactive preview'))return {progress:88,stage:'Building live preview'};
+  if(lower.includes('uploading interactive preview'))return {progress:90,stage:'Uploading live preview'};
+  if(lower.includes('interactive preview is ready'))return {progress:92,stage:'Live preview ready'};
+  if(lower.includes('publishing retained react source'))return {progress:94,stage:'Publishing GitHub repository'};
+  if(lower.includes('github repository published'))return {progress:96,stage:'Repository published'};
+  if(lower.includes('connecting the reserved netlify'))return {progress:97,stage:'Deploying live website'};
+  if(lower.includes('live site deployed and connected'))return {progress:99,stage:'Live website ready'};
+  if(lower.includes('ready for review')||lower.includes('reconstruction is saved'))return {progress:100,stage:'Complete'};
+  return null;
+}
 function jwtExpiry(token:string):number{
   try{const payload=JSON.parse(Buffer.from(token.split('.')[1]??'','base64url').toString('utf8')) as {exp?:number};return Number.isFinite(payload.exp)?Number(payload.exp)*1000:0;}catch{return 0;}
 }
@@ -32,8 +69,10 @@ async function studio(path:string,init:RequestInit={}):Promise<Response>{
 }
 function redacted(message:string):string{let text=message;for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','ACTIONS_ID_TOKEN_REQUEST_TOKEN','MOLT_GITHUB_EXPORT_TOKEN','MOLT_NETLIFY_AUTH_TOKEN']){const value=process.env[key];if(value)text=text.split(value).join('[redacted]');}return text;}
 async function progress(message:string,extra:object={},required=true):Promise<void>{
-  const clean=redacted(message);console.log(clean);
-  try{await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,...extra})});}
+  const clean=redacted(message),next=milestone(clean);
+  if(next&&next.progress>=progressFloor){progressFloor=next.progress;progressStage=next.stage;}
+  console.log(clean);
+  try{await studio('/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:clean,progress:progressFloor,progressStage,...extra})});}
   catch(error){const note='Studio callback warning: '+redacted(error instanceof Error?error.message:String(error));console.warn(note);if(required)throw error;}
 }
 function pathIn(root:string,file:string):string{
@@ -80,7 +119,8 @@ async function preview(file:string,name:string):Promise<string|null>{
   }catch(error){console.warn(`Preview upload unavailable: ${redacted((error as Error).message)}`);return null;}
 }
 try{
-  const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;model:string;reasoningEffort:'low'|'medium'|'high';outputRepo:string;maxPages:number;maxRepairs:number};
+  const job=await (await studio('')).json() as {sourceUrl:string;pages:string[];bundleId?:string;model:string;reasoningEffort:'low'|'medium'|'high'|'xhigh'|'max';outputRepo:string;maxPages:number;maxRepairs:number};
+  progressRepairRounds=Math.max(1,job.maxRepairs||1);
   if(job.model)process.env.MOLT_AI_MODEL=job.model;
   if(job.reasoningEffort)process.env.MOLT_REASONING_EFFORT=job.reasoningEffort;
   await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning.`);
