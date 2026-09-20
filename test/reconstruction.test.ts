@@ -13,7 +13,7 @@ import { repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy } from '../src/reconstruct/agent.js';
-import { spacingIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, contentIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -44,7 +44,42 @@ test('spacing evaluator grades paragraph line-height and letter spacing',()=>{
   const source=simpleGeometry([{key:'1',parent:'p',tag:'p',text:'Measured paragraph rhythm.',x:20,y:20,width:400,height:48,style:base}]);
   const candidate=simpleGeometry([{key:'a',parent:'q',tag:'p',text:'Measured paragraph rhythm.',x:20,y:20,width:400,height:56,style:{...base,'line-height':'28px','letter-spacing':'0.5px'}}]);
   const issues=spacingIssues(source,candidate);
-  assert.ok(issues.some(i=>/line-height, letter-spacing differ/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/line-height source 24px, generated 28px/.test(i)&&/letter-spacing source 0px, generated 0.5px/.test(i)),issues.join('\n'));
+});
+test('typography evaluator catches lost bold italic and text alignment',()=>{
+  const normal={'font-family':'Arvo','font-size':'16px','font-weight':'400','font-style':'normal','line-height':'24px','letter-spacing':'0px','text-align':'left','text-transform':'none',margin:'0px',padding:'0px'};
+  const source=simpleGeometry([
+    {key:'1',parent:'root',tag:'strong',text:'Free estimate',x:100,y:20,width:90,height:24,style:{...normal,'font-weight':'700'}},
+    {key:'2',parent:'root',tag:'em',text:'Family owned',x:100,y:52,width:100,height:24,style:{...normal,'font-style':'italic'}},
+    {key:'3',parent:'root',tag:'p',text:'Centered promise',x:300,y:90,width:400,height:24,style:{...normal,'text-align':'center'}},
+  ]);
+  const candidate=simpleGeometry([
+    {key:'a',parent:'root2',tag:'span',text:'Free estimate',x:100,y:20,width:90,height:24,style:normal},
+    {key:'b',parent:'root2',tag:'span',text:'Family owned',x:100,y:52,width:100,height:24,style:normal},
+    {key:'c',parent:'root2',tag:'p',text:'Centered promise',x:100,y:90,width:400,height:24,style:normal},
+  ]);
+  const issues=spacingIssues(source,candidate);
+  assert.ok(issues.some(i=>/Free estimate/.test(i)&&/font-weight source 700, generated 400/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Family owned/.test(i)&&/font-style source italic, generated normal/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Centered promise/.test(i)&&/text-align source center, generated left/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Horizontal alignment "Centered promise"/.test(i)),issues.join('\n'));
+});
+test('lost strong text is detected even when flattened into an ordinary paragraph',()=>{
+  const normal={'font-family':'Arvo','font-size':'16px','font-weight':'400','font-style':'normal','line-height':'24px','letter-spacing':'0px','text-align':'left','text-transform':'none',margin:'0px',padding:'0px'};
+  const source=simpleGeometry([
+    {key:'1',parent:'p',tag:'p',text:'Call today for a .',x:50,y:20,width:420,height:24,style:normal},
+    {key:'2',parent:'p',tag:'strong',text:'free estimate',x:180,y:20,width:95,height:24,style:{...normal,'font-weight':'700'}},
+  ]);
+  const candidate=simpleGeometry([{key:'a',parent:'q',tag:'p',text:'Call today for a free estimate.',x:50,y:20,width:420,height:24,style:normal}]);
+  const issues=spacingIssues(source,candidate);
+  assert.ok(issues.some(i=>/free estimate/.test(i)&&/font-weight source 700, generated 400/.test(i)),issues.join('\n'));
+});
+test('heading evaluator also enforces italic and text alignment',()=>{
+  const base={'font-family':'Arvo','font-size':'42px','font-weight':'700','font-style':'italic','line-height':'48px','letter-spacing':'0px','text-align':'center','text-transform':'none'};
+  const source=simpleGeometry([{key:'1',parent:'root',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:base}]);
+  const candidate=simpleGeometry([{key:'a',parent:'root2',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:{...base,'font-style':'normal','text-align':'left'}}]);
+  const issues=contentIssues(source,candidate);
+  assert.ok(issues.some(i=>/Heading Tree Experts/.test(i)&&/font-style/.test(i)&&/text-align/.test(i)),issues.join('\n'));
 });
 test('zero is measured; null is missing',()=>{assert.equal(improves(score(null),score(0)),true);assert.equal(improves(score(0),score(null)),false);});
 test('measured pixel improvement is accepted even when diagnostic wording changes',()=>{const a=score(85);a.views[0].worstBand=55;a.views[0].issues=['Heading Example: y, font-weight differ'];const b=score(90);b.views[0].worstBand=64;b.views[0].issues=['Heading Example: y differ'];assert.equal(improves(a,b),true);});
@@ -121,6 +156,15 @@ test('initial reconstruction prompt includes explicit source spacing measurement
   const prompt=JSON.parse(reconstructionPrompt(evidence,page,[],'Implement spacing exactly'));
   assert.equal(prompt.reference.views[0].spacing.between[0].gap,32);
   assert.equal(prompt.reference.views[0].spacing.textRhythm[0].lineHeight,'27px');
+});
+test('initial reconstruction prompt preserves emphasis and alignment measurements',()=>{
+  const style={display:'block','font-family':'Arvo','font-size':'18px','font-weight':'700','font-style':'italic','line-height':'27px','letter-spacing':'0px','text-align':'center','text-transform':'uppercase',margin:'0px',padding:'0px'};
+  const geometry=simpleGeometry([{key:'1',parent:'section-1',tag:'strong',text:'Important',x:300,y:100,width:120,height:27,style}]);
+  const page={route:'/',url:'https://example.com/',title:'Type',views:[{viewport:{name:'desktop',width:1440,height:900},screenshot:'source.png',geometry}]};
+  const evidence:Evidence={site:'https://example.com',directory:'/tmp',pages:[page],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[]};
+  const prompt=JSON.parse(reconstructionPrompt(evidence,page,[],'Implement typography exactly'));
+  const evidenceRow=prompt.reference.views[0].spacing.textRhythm[0];
+  assert.equal(evidenceRow.fontWeight,'700');assert.equal(evidenceRow.fontStyle,'italic');assert.equal(evidenceRow.textAlign,'center');assert.equal(evidenceRow.textTransform,'uppercase');
 });
 test('large page evidence compacts below the provider safety budget',()=>{
   const style={display:'block','font-family':'Inter','font-size':'16px','line-height':'24px',padding:'24px',margin:'12px',color:'rgb(1, 2, 3)',background:'rgb(255,255,255)','background-image':'none',width:'1200px',height:'40px'};
