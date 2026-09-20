@@ -112,6 +112,17 @@ test('visual layout diagnostics expose container sizing, treatment and text wrap
   assert.ok(issues.some(i=>/Text box "A measured paragraph/.test(i)&&/width -130/.test(i)&&/height 28px/.test(i)),issues.join('\n'));
   assert.ok(issues.some(i=>/Page frame/.test(i)&&/margin source 0px, generated 8px/.test(i)),issues.join('\n'));
 });
+test('visual diagnostics expose missing and mismatched pseudo elements',()=>{
+  const style={'background':'none','background-image':'none','background-size':'auto','background-position':'0% 0%','border':'0px none','border-radius':'0px','box-shadow':'none','padding':'0px','gap':'normal','overflow':'visible'};
+  const before={content:'""',position:'absolute',top:'0px',left:'0px',right:'auto',bottom:'auto',width:'80px',height:'3px',background:'rgb(200, 150, 80)','background-image':'none',border:'0px none','border-radius':'0px',transform:'none',opacity:'1'};
+  const source=simpleGeometry([{key:'s',tag:'section',text:'',x:0,y:0,width:800,height:300,style,before}]);
+  const candidate=simpleGeometry([{key:'c',tag:'section',text:'',x:0,y:0,width:800,height:300,style}]);
+  const missing=visualLayoutIssues(source,candidate);
+  assert.ok(missing.some(i=>/Container section #1 ::before is missing/.test(i)),missing.join('\n'));
+  const changed=structuredClone(candidate);changed.elements[0].before={...before,width:'40px',background:'rgb(0, 0, 0)'};
+  const mismatch=visualLayoutIssues(source,changed);
+  assert.ok(mismatch.some(i=>/::before/.test(i)&&/width source 80px, generated 40px/.test(i)&&/background source rgb\(200, 150, 80\), generated rgb\(0, 0, 0\)/.test(i)),mismatch.join('\n'));
+});
 test('media presentation diagnostics report image crop and positioning mismatches',()=>{
   const source=simpleGeometry([{key:'1',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'cover','object-position':'50% 30%','border-radius':'18px'},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
   const candidate=simpleGeometry([{key:'2',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'contain','object-position':'50% 50%','border-radius':'0px'},src:'http://generated.test/assets/hero-hash.jpg',attributes:{alt:'Hero'}}]);
