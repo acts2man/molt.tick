@@ -10,6 +10,10 @@ import { VIEWPORTS, type Evidence, type Geometry, type InteractionTrigger, type 
 export interface CaptureOptions {
   url?: string; urls?: string[]; bundleDir?: string; directory: string;
   viewports?: Viewport[]; maxPages?: number; signal: AbortSignal;
+  /** Add up to two source-derived breakpoint probes when using the default viewport matrix. */
+  adaptiveViewports?: boolean;
+  /** Re-load live pages before capture and report unstable source states without fabricating certainty. */
+  sourceStability?: boolean;
 }
 interface Bundle { site: string; pages: Array<{ route: string; file: string }> }
 export async function readBundle(root: string): Promise<Bundle> {
@@ -56,6 +60,37 @@ const GEOMETRY = `(() => {
 })()`;
 export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
+}
+
+const normalizedFingerprintText=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
+export function geometryFingerprint(value:Geometry):string{
+  const candidates=value.elements.filter(e=>/^(header|nav|main|section|article|footer|h[1-6]|p|img|button|a|form)$/.test(e.tag)||Boolean(e.text)||Boolean(e.src));
+  const sampled=candidates.length<=180?candidates:Array.from({length:180},(_,i)=>candidates[Math.round(i*(candidates.length-1)/179)]);
+  const landmarks=sampled.map(e=>({
+    tag:e.tag,text:normalizedFingerprintText(e.text).slice(0,180),src:e.src??'',
+    x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height)
+  }));
+  return createHash('sha256').update(JSON.stringify({
+    title:value.title,text:normalizedFingerprintText(value.text),height:Math.round(value.height),landmarks
+  })).digest('hex');
+}
+
+export function adaptiveViewports(mediaQueries:string[],base:Viewport[]):Viewport[]{
+  const remaining=Math.max(0,6-base.length);if(!remaining)return [];
+  const widths=new Set<number>();
+  for(const query of mediaQueries){
+    const re=/(?:min|max)-width\s*:\s*(\d+(?:\.\d+)?)px/gi;let match:RegExpExecArray|null;
+    while((match=re.exec(query))){const width=Math.round(Number(match[1]));if(width>=320&&width<=1600)widths.add(width);}
+  }
+  const existing=base.map(v=>v.width);
+  const candidates=[...widths].filter(width=>!existing.some(current=>Math.abs(current-width)<24));
+  const distance=(width:number)=>Math.min(...existing.map(current=>Math.abs(current-width)));
+  const ranked=candidates.sort((a,b)=>distance(b)-distance(a)||a-b);
+  const mobile=ranked.find(width=>width<=600),larger=ranked.find(width=>width>600);
+  const selected=mobile!==undefined&&larger!==undefined?[larger,mobile]:ranked.slice(0,2);
+  return [...new Set(selected)].slice(0,Math.min(2,remaining)).sort((a,b)=>b-a).map(width=>({
+    name:`probe-${width}`,width,height:width<=600?932:width<=900?1024:900
+  }));
 }
 
 /** Observe only bounded, reversible interaction states. Links, submit buttons and arbitrary clicks are excluded. */
@@ -194,9 +229,13 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       const live=publicUrl(options.url);await assertPublicUrl(live.href);
       if(live.origin!==new URL(bundle.site).origin)throw new Error('Saved-page bundle and live URL must belong to the same website origin');
       evidence.site=live.origin;
-      targets=bundle.pages.map(p=>({route:p.route,url:new URL(p.route,live.origin).href}));
+      const requested=options.urls?.length?options.urls.map(value=>new URL(value,live)):bundle.pages.map(p=>new URL(p.route,live.origin));
+      for(const page of requested)if(page.origin!==live.origin||page.search)throw new Error('Hybrid page URLs must be same-origin and cannot contain query parameters');
+      targets=requested.map(page=>({route:routePath(page.pathname),url:page.href}));
       await importSavedResources(options.bundleDir);
+      const savedRoutes=new Set(bundle.pages.map(p=>p.route)),supplemented=targets.filter(target=>savedRoutes.has(target.route)).length;
       evidence.warnings.push('Hybrid evidence enabled: live rendering is the visual/interaction authority while saved files supplement exact local assets and font data.');
+      if(supplemented<targets.length)evidence.warnings.push(`Saved HTML/CSS supplements ${supplemented} of ${targets.length} selected routes; the remaining routes use live browser evidence without silently shrinking the requested page scope.`);
     }else{
       evidence.site=bundle.site;
       const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
@@ -227,11 +266,30 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       }finally{await ctx.close();}
     }
     if(targets.length>maxPages||new Set(targets.map(t=>t.route)).size!==targets.length)throw new Error('Too many or duplicate requested routes');
+    const stabilityEnabled=(options.sourceStability??true)&&Boolean(options.url)&&!local;
+    const adaptiveEnabled=(options.adaptiveViewports??Boolean(options.url))&&options.viewports===undefined;
     for(const target of targets){
+      if(stabilityEnabled){
+        const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
+        try{
+          await restrictNetwork(ctx);const page=await ctx.newPage();const samples:string[]=[];
+          for(let attempt=0;attempt<3;attempt++){
+            options.signal.throwIfAborted();
+            const response=await page.goto(target.url,{waitUntil:'load',timeout:30000});if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
+            await settle(page,options.signal);samples.push(geometryFingerprint(await geometry(page)));
+            if(samples.length>=2&&samples.at(-1)===samples.at(-2))break;
+          }
+          if(samples.length>=2&&samples.at(-1)!==samples.at(-2))evidence.warnings.push(`${target.route}: live source changed across repeated captures; rotating/A-B/geolocation/time-based content may make pixel scoring non-deterministic.`);
+          else if(samples.length>2)evidence.warnings.push(`${target.route}: live source changed once, then stabilized on retry; the stable state is used for reconstruction.`);
+        }catch(error){evidence.warnings.push(`${target.route}: source-stability probe could not complete (${(error as Error).message}); normal capture will still validate the route.`);}
+        finally{await ctx.close().catch(()=>{});}
+      }
       const item:Evidence['pages'][number]={...target,title:'',views:[]};
       const slug=createHash('sha256').update(target.route).digest('hex').slice(0,12);
       await mkdir(join(options.directory,slug),{recursive:true});
-      for(const viewport of views){
+      const pageViewports=[...views];
+      for(let viewIndex=0;viewIndex<pageViewports.length;viewIndex++){
+        const viewport=pageViewports[viewIndex];
         options.signal.throwIfAborted();
         const ctx=await engine.newContext({viewport,deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         const pending:Promise<void>[]=[];const assetErrors:string[]=[];
@@ -251,6 +309,10 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           const screenshot=join(options.directory,slug,`${viewport.name}.png`);
           await page.screenshot({path:screenshot,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
           const g=await geometry(page);
+          if(adaptiveEnabled&&viewIndex===0){
+            const probes=adaptiveViewports(g.mediaQueries,pageViewports);
+            if(probes.length){pageViewports.push(...probes);validateViewports(pageViewports);evidence.warnings.push(`${target.route}: added source-derived breakpoint verification at ${probes.map(v=>v.width+'px').join(', ')}.`);}
+          }
           if(!g.text.trim()&&!g.elements.some(e=>e.src||e.svg))throw new Error('Source page is empty');
           if(g.text.length>120000)throw new Error('Page text exceeds reconstruction context budget');
           for(const face of g.fontFaces)faces.add(absolutizeCss(face,target.url));
