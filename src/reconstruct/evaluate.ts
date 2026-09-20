@@ -21,15 +21,22 @@ function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):strin
   return diffs;
 }
 function matchedTextElements(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence}>{
+  const visibleCandidate=candidate.elements.filter(e=>normalize(e.text)&&TEXT_TAG.test(e.tag));
+  const key=(e:ElementEvidence,text:string)=>(INLINE_TEXT_TAG.test(e.tag)?'inline':e.tag)+'\0'+text;
   const pools=new Map<string,ElementEvidence[]>();
-  for(const e of candidate.elements){
-    const text=normalize(e.text);if(!text||!TEXT_TAG.test(e.tag))continue;
-    const key=e.tag+'\0'+text,items=pools.get(key)??[];items.push(e);pools.set(key,items);
+  for(const e of visibleCandidate){
+    const text=normalize(e.text),k=key(e,text),items=pools.get(k)??[];items.push(e);pools.set(k,items);
   }
   const out:Array<{source:ElementEvidence;candidate:ElementEvidence}>=[];
   for(const e of source.elements){
     const text=normalize(e.text);if(!text||!TEXT_TAG.test(e.tag))continue;
-    const items=pools.get(e.tag+'\0'+text);const actual=items?.shift();if(actual)out.push({source:e,candidate:actual});
+    const items=pools.get(key(e,text));let actual=items?.shift();
+    // If emphasized inline text was flattened into its surrounding paragraph, still compare the
+    // fragment against the smallest candidate text box containing it so lost bold/italic is visible.
+    if(!actual&&INLINE_TEXT_TAG.test(e.tag)&&text.length>=3){
+      actual=visibleCandidate.filter(c=>normalize(c.text).includes(text)).sort((a,b)=>normalize(a.text).length-normalize(b.text).length)[0];
+    }
+    if(actual)out.push({source:e,candidate:actual});
   }
   return out;
 }
