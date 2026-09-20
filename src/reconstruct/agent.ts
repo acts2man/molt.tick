@@ -3,6 +3,7 @@ import { join, posix } from 'node:path';
 import { capture, readBundle, type CaptureOptions } from './capture.js';
 import { assessComplexity } from './complexity.js';
 import { effectiveRepairRounds } from './budgets.js';
+import { reconstructionReviewStatus } from './review-policy.js';
 import { evaluate } from './evaluate.js';
 import { referenceImages, repairImages } from './images.js';
 import { modelFromEnv } from './provider.js';
@@ -284,7 +285,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
     },
     apply:reply=>apply(outDir,reply.files,allowed),
     save:async(best,attempts)=>{
-      await writeFile(reportPath,JSON.stringify({status:best.pass&&!evidence.blockers.length?'review':'needs-work',outDir,evaluation:best,attempts,warnings:evidence.warnings,blockers:evidence.blockers,usage:model.usage},null,2));
+      await writeFile(reportPath,JSON.stringify({status:reconstructionReviewStatus(best.pass,evidence.blockers),outDir,evaluation:best,attempts,warnings:evidence.warnings,blockers:evidence.blockers,usage:model.usage},null,2));
       const latest=attempts.at(-1);
       if(latest&&latest.round>0)await progress(`Repair round ${latest.round} ${latest.accepted?'accepted':'not applied'}: ${latest.summary.slice(0,220)}`);
     },
@@ -294,9 +295,10 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const finalBuild=signal.aborted?{ok:false,log:'Run cancelled before final compilation'}:await build(outDir,AbortSignal.any([signal,AbortSignal.timeout(120000)]));
   await writeFile(join(run,'final-build.log'),finalBuild.log);
   if(!finalBuild.ok){result.evaluation={...result.evaluation,pass:false,issues:[...result.evaluation.issues,'Final compilation of the retained source did not succeed']};}
-  const final:ReconstructionResult={complexity,status:result.evaluation.pass&&!evidence.blockers.length?'review':'needs-work',outDir,reportPath,...result,warnings:evidence.warnings,blockers:evidence.blockers,integrations:evidence.integrations,usage:model.usage,source:{site:evidence.site,assetCount:evidence.assets.length,pages:evidence.pages.map(p=>({route:p.route,title:p.title,sections:p.views[0].geometry.elements.filter(e=>/^(section|main|header|footer)$/.test(e.tag)).length,elements:p.views[0].geometry.elements.length}))}};
+  const finalStatus=reconstructionReviewStatus(result.evaluation.pass,evidence.blockers);
+  const final:ReconstructionResult={complexity,status:finalStatus,outDir,reportPath,...result,warnings:evidence.warnings,blockers:evidence.blockers,integrations:evidence.integrations,usage:model.usage,source:{site:evidence.site,assetCount:evidence.assets.length,pages:evidence.pages.map(p=>({route:p.route,title:p.title,sections:p.views[0].geometry.elements.filter(e=>/^(section|main|header|footer)$/.test(e.tag)).length,elements:p.views[0].geometry.elements.length}))}};
   await writeFile(reportPath,JSON.stringify(final,null,2));
   await writeReview(join(run,'review.html'),final);
-  await progress(final.status==='review'?'Measured visual checks passed; ready for human review':'Best measured reconstruction retained with unresolved differences');
+  await progress(final.status==='review'?(evidence.blockers.length?'Measured visual checks passed; ready for human review with services to reconnect':'Measured visual checks passed; ready for human review'):'Best measured reconstruction retained with unresolved differences');
   return final;
 }

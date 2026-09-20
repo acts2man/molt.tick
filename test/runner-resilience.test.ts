@@ -32,6 +32,11 @@ test('Studio report payload remains comfortably below callback limit even with l
   assert.ok(bytes<900_000,`callback payload was ${bytes} bytes`);
 });
 
+test('final Studio message distinguishes visual success from pending service reconnection',()=>{
+  const event=finalStudioEvent({status:'review',evaluation:{pass:true,issues:[],views:[]},attempts:[],warnings:[],blockers:['/contact: form submission needs a backend integration']},{previewReady:true});
+  assert.match(event.message,/ready for review; listed services still need reconnection/i);
+  assert.equal(event.report.status,'review');
+});
 test('fresh-process finalizer preserves handoff metadata with compact report',()=>{
   const event=finalStudioEvent({status:'needs-work',evaluation:{pass:false,issues:[],views:[]},attempts:[],warnings:[],blockers:[]},{previewReady:true,outputRepoUrl:'https://github.com/acts2man/example-v2'});
   assert.equal(event.previewReady,true);assert.equal(event.outputRepoUrl,'https://github.com/acts2man/example-v2');assert.equal(event.report.status,'needs-work');
