@@ -58,5 +58,6 @@ test('full agent builds real React, detects a deliberate mismatch, repairs it an
   assert.ok(result.evaluation.views.every(v=>v.interactions?.length===1&&v.interactions[0].pass));
   assert.equal(result.attempts[0].evaluation.pass,false);assert.equal(result.attempts[1].accepted,true);
   assert.ok((await readFile(join(result.outDir,'src/site.css'),'utf8')).includes('font-size:48px'));
+  const lock=JSON.parse(await readFile(join(result.outDir,'package-lock.json'),'utf8'));assert.equal(lock.name,'molt-reconstruction');assert.equal(lock.packages[''].dependencies.react,'18.3.1');
   assert.equal(JSON.parse(await readFile(result.reportPath,'utf8')).status,'review');
 }));
