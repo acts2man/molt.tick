@@ -36,6 +36,13 @@ export async function preflightNetlify(teamSlug:string,token:string):Promise<voi
   if(user.status!==200)throw new Error(`Netlify preflight failed (HTTP ${user.status}). Reconnect the Netlify token before spending model usage.`);
   if(accounts.status!==200||!Array.isArray(accounts.data)||!accounts.data.some((a:any)=>a?.slug===teamSlug))throw new Error('Netlify preflight could not confirm access to the configured team. Reconnect hosting before spending model usage.');
 }
+export async function deleteNetlifySite(siteId:string,token:string):Promise<void>{
+  if(!siteId||!token)return;
+  try{
+    const response=await call(token,`/api/v1/sites/${encodeURIComponent(siteId)}`,{method:'DELETE'});
+    if(response.status!==404&&(response.status<200||response.status>=300))console.warn('Reserved Netlify site cleanup warning:',response.status,response.text.slice(0,500));
+  }catch(error){console.warn('Reserved Netlify site cleanup warning:',error instanceof Error?error.message:String(error));}
+}
 export async function createNetlifySite(teamSlug:string,repoName:string,token:string):Promise<NetlifySite>{
   const base=cleanName(repoName);
   for(let n=1;n<=30;n++){
@@ -136,7 +143,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install site dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Build React site
         run: npm run build
       - name: Deploy production site through Netlify API
@@ -164,12 +171,20 @@ async function waitForRun(repo:string,commitSha:string,token:string,cwd:string):
   }
   throw new Error('Timed out waiting for the generated repository to deploy to Netlify.');
 }
-async function verifyLive(url:string):Promise<void>{
-  for(let attempt=0;attempt<12;attempt++){
-    try{const response=await fetch(url,{redirect:'follow',signal:AbortSignal.timeout(15000)});if(response.ok)return;}catch{}
-    await new Promise(r=>setTimeout(r,5000));
+export async function verifyLiveRoutes(url:string,routes:string[],fetcher:typeof fetch=fetch,wait:(ms:number)=>Promise<void>=ms=>new Promise(r=>setTimeout(r,ms))):Promise<void>{
+  const unique=[...new Set(['/',...routes.map(route=>route.startsWith('/')?route:'/'+route)])].slice(0,50);
+  for(const route of unique){
+    let ok=false,lastStatus=0;
+    for(let attempt=0;attempt<12;attempt++){
+      try{
+        const target=new URL(route,url).href,response=await fetcher(target,{redirect:'follow',signal:AbortSignal.timeout(15000)});
+        lastStatus=response.status;
+        if(response.ok){ok=true;break;}
+      }catch{}
+      await wait(5000);
+    }
+    if(!ok)throw new Error(`Netlify reported a successful deploy, but reconstructed route ${route} did not become reachable${lastStatus?` (HTTP ${lastStatus})`:''}.`);
   }
-  throw new Error('Netlify reported a successful deploy, but the public site did not become reachable.');
 }
 export async function configureContinuousNetlifyDeploy(directory:string,repository:string,site:NetlifySite,githubToken:string,netlifyToken:string):Promise<NetlifyDeployResult>{
   if(!githubToken||githubToken.length<20)throw new Error('GitHub export token is missing while configuring continuous deployment.');
@@ -180,6 +195,8 @@ export async function configureContinuousNetlifyDeploy(directory:string,reposito
   const workflowEncoded=Buffer.from(workflow(),'utf8').toString('base64');
   const commitSha=await run('gh',['api',`repos/${repository}/contents/.github/workflows/netlify-deploy.yml`,'--method','PUT','--field','message=Connect generated site to Netlify','--field',`content=${workflowEncoded}`,'--jq','.commit.sha'],directory,{GH_TOKEN:githubToken});
   const runInfo=await waitForRun(repository,commitSha.trim(),githubToken,directory);
-  await verifyLive(site.url);
+  let routes:string[]=['/'];
+  try{const output=JSON.parse(await readFile(join(directory,'MOLT_OUTPUT.json'),'utf8'));if(Array.isArray(output?.routes))routes=output.routes.filter((route:unknown)=>typeof route==='string');}catch{}
+  await verifyLiveRoutes(site.url,routes);
   return {...site,workflowUrl:runInfo.url};
 }

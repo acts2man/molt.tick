@@ -33,7 +33,7 @@ const GEOMETRY = `(() => {
  const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility'];
  const nodes=Array.from(document.querySelectorAll('body *')); const index=new Map(nodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
- const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
+ const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
  const elements=[]; let truncated=false;
  for(const el of nodes){
   const tag=el.tagName.toLowerCase(); if(/^(script|style|noscript|link|meta)$/.test(tag)) continue;
@@ -50,7 +50,7 @@ const GEOMETRY = `(() => {
  const fontFaces=[],mediaQueries=[];
  const rules=(list)=>{for(const r of Array.from(list||[])){if(r.type===5)fontFaces.push(r.cssText);else if(r.type===4)mediaQueries.push(r.conditionText);if(r.cssRules)rules(r.cssRules);}};
  for(const s of Array.from(document.styleSheets)){try{rules(s.cssRules);}catch{}}
- const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n const visibleText=elements.map(e=>e.text).filter(Boolean).join(' ');\n return {text:visibleText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,
+ const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n const visibleText=String(document.body?.innerText||'').replace(/\\s+/g,' ').trim();\n const rootStyle=read(getComputedStyle(document.documentElement)),bodyStyle=read(getComputedStyle(document.body));\n return {text:visibleText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,rootStyle,bodyStyle,
  brokenImages:Array.from(document.images).filter(i=>{const b=i.getBoundingClientRect(),s=getComputedStyle(i);return b.width>0&&b.height>0&&b.right>0&&b.left<innerWidth&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&i.naturalWidth===0;}).length,
  elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),platformHints:Array.from(new Set(platformHints)),truncated};
 })()`;
@@ -62,23 +62,31 @@ export async function geometry(page: Page): Promise<Geometry> {
 const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
  const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
- const out=[],seen=new Set();
- const push=(kind,el)=>{const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');if(!n||seen.has(key))return;seen.add(key);out.push({kind,name:n,controls});};
- for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const s=d.querySelector(':scope > summary');if(s)push('details',s);}
+ const seenElements=new Set(),counts=new Map();
+ const groups={priority:[],carousel:[],tabs:[],other:[],details:[]};
+ const push=(group,kind,el)=>{
+   if(seenElements.has(el))return;
+   const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');
+   if(!n)return;
+   const ordinal=counts.get(key)||0;counts.set(key,ordinal+1);seenElements.add(el);
+   groups[group].push({kind,name:n,controls,ordinal});
+ };
  for(const el of Array.from(document.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"]'))){
    if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
-   if(el.getAttribute('role')==='tab')continue; push('button',el);
+   if(el.getAttribute('role')==='tab')continue;
+   const n=name(el),important=/menu|navigation|nav|drawer|toggle/i.test(n+' '+(el.getAttribute('aria-controls')||''))||el.getAttribute('aria-haspopup');
+   push(important?'priority':'other','button',el);
  }
- for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tab',el);
- // Explicit Previous/Next carousel controls are bounded, reversible interactions and are safe to replay.
- // Capture them even when the source does not use aria-expanded, so sliders/testimonials are graded behaviorally.
- const carousel=/^(?:previous|prev|next)(?:\s+(?:slide|testimonial|review|item|image|photo|project))?\b/i;
+ // Explicit Previous/Next carousel controls get reserved evidence slots so accordions cannot starve them.
+ const carousel=/^(?:previous|prev|next)(?:\\s+(?:slide|testimonial|review|item|image|photo|project))?\\b/i;
  for(const el of Array.from(document.querySelectorAll('button,[role="button"]'))){
    const n=name(el);if(!carousel.test(n))continue;
    if(el.matches('[type="submit"],[type="reset"]')||el.closest('form')&&el.tagName==='BUTTON'&&(!el.getAttribute('type')||el.getAttribute('type')==='submit'))continue;
-   push('button',el);
+   push('carousel','button',el);
  }
- return out.slice(0,5);
+ for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tabs','tab',el);
+ for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const summary=d.querySelector(':scope > summary');if(summary)push('details','details',summary);}
+ return [...groups.priority.slice(0,2),...groups.carousel.slice(0,2),...groups.tabs.slice(0,2),...groups.other.slice(0,1),...groups.details.slice(0,1)].slice(0,8);
 })()`;
 export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
   return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
@@ -88,12 +96,13 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
   const script=`(() => {
     const trigger=${payload};
     const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
-    const label=(el)=>clean(el.getAttribute('aria-label')||el.textContent);
+    const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent);
     let items=[];
     if(trigger.kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
     else if(trigger.kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
     else items=Array.from(document.querySelectorAll('button,[role="button"]')).filter(el=>!el.matches('[type="submit"],[type="reset"]'));
-    const target=items.find(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+    const matches=items.filter(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+    const target=matches[Math.max(0,Number(trigger.ordinal)||0)];
     if(!target)return false;
     target.click();
     return true;

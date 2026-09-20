@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir,writeFile,access} from 'node:fs/promises';
+import {mkdir,writeFile,access,readdir} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {runReconstruction} from '../src/reconstruct/agent.js';
 import {routeFile} from '../src/reconstruct/policy.js';
@@ -36,6 +36,7 @@ assert.ok(result.evaluation.views.every(v=>v.candidate),'every viewport must pro
 assert.ok(result.attempts.length>=1,'repair loop must checkpoint at least the initial evaluation');
 assert.ok(result.warnings.some(w=>/Hybrid evidence enabled/i.test(w)),'hybrid live + saved evidence must be active');
 assert.ok(result.source.assetCount>=1,'saved resource evidence must supplement the live capture');
+const generatedAssets=await readdir(resolve(result.outDir,'public/assets'));assert.ok(generatedAssets.some(name=>name.endsWith('.woff2')),'saved font binary must survive into the generated React project');
 await access(result.reportPath);
 await access(result.outDir);
 await writeFile(resolve(workDir,'summary.json'),JSON.stringify({

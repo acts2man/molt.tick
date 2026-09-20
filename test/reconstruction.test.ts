@@ -12,8 +12,9 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy } from '../src/reconstruct/agent.js';
-import { spacingIssues, contentIssues } from '../src/reconstruct/evaluate.js';
+import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
+import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
+import { spacingIssues, contentIssues, internalLinkIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -21,10 +22,50 @@ async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp
 test('route mapping prevents collisions across nested, dotted and punctuation routes',()=>assert.equal(new Set(['/a/b','/a.b','/a-b','/'].map(routeFile)).size,4));
 test('route validation rejects traversal, encoded traversal and protocol-relative routes',()=>{for(const s of ['//evil','/../outside','/%2e%2e/out','/a?x=1','/a\\b','/%2f%2fevil'])assert.throws(()=>routePath(s));});
 test('same route has stable filename and trailing slash normalization',()=>{assert.equal(routeFile('/about/'),routeFile('/about'));assert.equal(routePath('/'),' /'.trim());});
+test('internal navigation must stay inside the reconstructed route map',()=>{
+  const source=simpleGeometry([]),candidate=simpleGeometry([]);
+  source.links=['https://example.com/','https://example.com/about'];
+  candidate.links=['http://127.0.0.1:4173/','https://example.com/about'];
+  const issues=internalLinkIssues(source,candidate,'https://example.com','http://127.0.0.1:4173',new Set(['/','/about']));
+  assert.ok(issues.some(i=>/source website.*\/about/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Missing reconstructed internal link target: \/about/.test(i)),issues.join('\n'));
+});
+test('partially supplied current files are protected from full replacement',()=>{
+  const prompt=JSON.stringify({currentFiles:[{path:'src/site.css',content:'partial',complete:false},{path:'src/pages/home.tsx',content:'full',complete:true}]});
+  assert.deepEqual([...protectedPromptPaths(prompt)],['src/site.css']);
+  assert.throws(()=>assertNoPartialFileRewrite(prompt,[{path:'src/site.css',content:'replacement'}]),/partially supplied/);
+  assert.doesNotThrow(()=>assertNoPartialFileRewrite(prompt,[{path:'src/pages/home.tsx',content:'replacement'}]));
+});
 test('source URL validation rejects unsafe schemes and credentials',()=>{for(const u of ['file:///etc/passwd','data:text/html,a','javascript:alert(1)','https://user:password@example.com'])assert.throws(()=>publicUrl(u));assert.equal(publicUrl('example.com').origin,'https://example.com');});
 test('reserved networks are denied',()=>{for(const ip of ['127.0.0.1','10.0.0.1','192.168.1.1','169.254.169.254','100.64.0.1','::1','::ffff:127.0.0.1','2001:db8::1','198.51.100.1'])assert.equal(publicIP(ip),false,ip);assert.equal(publicIP('8.8.8.8'),true);});
 test('numeric and viewport limits are explicit',()=>{assert.equal(integer(undefined,6,0,20),6);for(const n of ['','-1','21','NaN','1.5'])assert.throws(()=>integer(n,6,0,20));assert.throws(()=>validateViewports([]));assert.throws(()=>validateViewports([{name:'../x',width:390,height:844}]));});
 test('child environment excludes provider credentials',()=>{process.env.MOLT_TEST_PRIVATE_VALUE='secret';assert.equal(safeEnvironment().MOLT_TEST_PRIVATE_VALUE,undefined);delete process.env.MOLT_TEST_PRIVATE_VALUE;});
+test('high-fidelity repair scope expands only enough to cover multi-page jobs',()=>{
+  assert.equal(effectiveRepairRounds(1,4),4);
+  assert.equal(effectiveRepairRounds(7,4),7);
+  assert.equal(effectiveRepairRounds(7,2),2);
+  assert.equal(effectiveRepairRounds(7,0),0);
+});
+test('production budgets scale time and provider ceilings without changing low-cost defaults',()=>{
+  const one=productionRunBudget(1,2,'medium');assert.equal(one.repairRounds,2);assert.equal(one.agentMinutes,25);assert.equal(one.requestMs,180000);
+  const multi=productionRunBudget(7,4,'medium');assert.equal(multi.repairRounds,7);assert.ok(multi.agentMinutes>=55);assert.ok(multi.maxModelCalls>=35);
+  const max=productionRunBudget(7,4,'max');assert.equal(max.requestMs,540000);assert.equal(max.maxOutputTokens,40000);
+});
+test('later initial pages cannot rewrite existing shared or earlier-route files',()=>{
+  const before:FileChange[]=[{path:'src/site.css',content:'body{margin:0}'},{path:'src/components/Header.tsx',content:'export const Header=()=>null'},{path:'src/pages/home.tsx',content:'export default()=>null'}];
+  assert.throws(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/about.tsx',1),/cannot rewrite existing/);
+  assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/styles/about.css',content:'.about{}'},{path:'src/pages/about.tsx',content:'export default()=>null'}],'src/pages/about.tsx',1));
+  assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/home.tsx',0));
+});
+test('multi-page repair scheduling gives unattempted failing routes priority',()=>{
+  const evaluation:Evaluation={pass:false,issues:[],views:[
+    {route:'/a',viewport:'desktop',source:'a.png',score:70,worstBand:30,pass:false,issues:['bad']},
+    {route:'/b',viewport:'desktop',source:'b.png',score:80,worstBand:50,pass:false,issues:['bad']},
+  ]};
+  const attempts=new Map<string,number>();
+  assert.equal(selectRepairRoute(evaluation,attempts),'/a');attempts.set('/a',1);
+  assert.equal(selectRepairRoute(evaluation,attempts),'/b');
+});
 const simpleGeometry=(elements:Geometry['elements']):Geometry=>({text:elements.map(e=>e.text).filter(Boolean).join(' '),title:'Spacing test',height:1000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false});
 test('spacing evaluator reports exact element-to-element gap deltas',()=>{
   const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};

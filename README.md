@@ -34,14 +34,14 @@ Engine configuration and limitations: [docs/RECONSTRUCTION.md](docs/RECONSTRUCTI
 
 Connect the `acts2man` GitHub account inside the app using a repository-scoped fine-grained token. In Connections, configure an image-capable API model and its key. These are real server-backed controls; a model credential is not supplied by a chat subscription.
 
-Start a reconstruction from a public website URL or a folder of saved HTML pages and assets. Select page and refinement limits. Inspect actual job events, source/output screenshots, differences, and the retained React source. Unresolved integrations and unsuccessful comparisons are reported rather than presented as finished work.
+Start a reconstruction from a public website URL or, for stronger evidence, use the live URL together with a saved-page ZIP/folder containing HTML, CSS, images, and fonts. Select page and refinement limits. Inspect actual job events, source/output screenshots, differences, measured spacing/typography diagnostics, and the retained React source. Unresolved integrations and unsuccessful comparisons are reported rather than presented as finished work.
 
 This public repository's Actions artifacts are intended for public website material, not confidential uploads. Hosting, storage, Actions, and provider usage may apply.
 
 ## Develop
 
 ```sh
-npm --prefix studio install
+npm --prefix studio ci
 npm --prefix studio run dev
 npm --prefix studio run build
 npm --prefix studio test

@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install pinned studio dependencies
-        run: npm --prefix studio install --no-audit --no-fund
+        run: npm --prefix studio ci --no-audit --no-fund
       - name: Typecheck and build the actual Netlify interface
         run: npm --prefix studio run build
       - name: Test private API and job controls

@@ -12,7 +12,7 @@ export function validateChanges(files: FileChange[]): void {
   const seen = new Set<string>(); let bytes = 0;
   for (const f of files) {
     if (!f || typeof f.path !== 'string' || !editable(f.path) || seen.has(f.path)) throw new Error('Disallowed or duplicate output path');
-    if (typeof f.content !== 'string' || !f.content.trim() || Buffer.byteLength(f.content) > 250000) throw new Error('Empty or oversized code file');
+    if (typeof f.content !== 'string' || !f.content.trim() || Buffer.byteLength(f.content) > 60000) throw new Error('Empty or oversized code file; split large pages/components/styles into smaller editable files');
     seen.add(f.path); bytes += Buffer.byteLength(f.content);
     if (f.path.endsWith('.css')) {
       const css = f.content.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -82,13 +82,13 @@ export async function restore(root: string, files: FileChange[]): Promise<void> 
 }
 export async function scaffold(root: string, evidence: Evidence): Promise<void> {
   const write = async (p: string, s: string) => { await mkdir(dirname(join(root,p)), {recursive:true}); await writeFile(join(root,p), s); };
-  const pkg = { name: 'molt-reconstruction', private: true, type: 'module', scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' }, dependencies: { react:'18.3.1','react-dom':'18.3.1' }, devDependencies: { vite:'5.4.10','@vitejs/plugin-react':'4.3.3',tailwindcss:'3.4.14',postcss:'8.4.47',autoprefixer:'10.4.20' } };
+  const pkg = { name: 'molt-reconstruction', private: true, type: 'module', scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' }, dependencies: { react:'18.3.1','react-dom':'18.3.1','react-router-dom':'6.26.2' }, devDependencies: { vite:'5.4.10','@vitejs/plugin-react':'4.3.3',tailwindcss:'3.4.14',postcss:'8.4.47',autoprefixer:'10.4.20','@types/react':'18.3.12','@types/react-dom':'18.3.1' } };
   await write('package.json', JSON.stringify(pkg,null,2));
   await write('vite.config.ts', "import {defineConfig} from 'vite'; import react from '@vitejs/plugin-react'; export default defineConfig({base:process.env.MOLT_PREVIEW_BASE||'/',plugins:[react()]});");
   await write('tailwind.config.js', "export default {content:['./src/**/*.{ts,tsx}'],theme:{extend:{}},plugins:[]};");
   await write('postcss.config.js', "export default {plugins:{tailwindcss:{},autoprefixer:{}}};");
   await write('index.html', '<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>');
-  await write('src/index.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;');
+  await write('src/index.css', '@tailwind components;\n@tailwind utilities;');
   await write('src/fonts.css', evidence.fontFaces.join('\n'));
   await write('src/site.css', '/* Shared styles authored from the reference. */');
   const imports = evidence.pages.map((p,i)=>`import P${i} from './pages/${routeFile(p.route).split('/').pop()!.replace('.tsx','')}';`).join('\n');

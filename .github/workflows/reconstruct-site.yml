@@ -16,7 +16,7 @@ concurrency:
 jobs:
   reconstruct:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,16 +41,12 @@ jobs:
           MOLT_STUDIO_ORIGIN: https://moltick.netlify.app
           MOLT_MODEL_PROVIDER: ${{ secrets.MOLT_MODEL_PROVIDER || 'openai' }}
           MOLT_AI_MODEL: ${{ secrets.MOLT_AI_MODEL }}
-          MOLT_REASONING_EFFORT: high
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MOLT_GITHUB_EXPORT_TOKEN: ${{ secrets.MOLT_GITHUB_EXPORT_TOKEN }}
           MOLT_NETLIFY_AUTH_TOKEN: ${{ secrets.MOLT_NETLIFY_AUTH_TOKEN }}
           MOLT_NETLIFY_TEAM_SLUG: ${{ secrets.MOLT_NETLIFY_TEAM_SLUG }}
           MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
-          MOLT_MAX_MODEL_CALLS: '24'
-          MOLT_AI_MAX_TOKENS: '16000'
-          MOLT_AGENT_MINUTES: '25'
         run: ./node_modules/.bin/tsx scripts/studio-run.ts
       - name: Finalize Studio from checkpoint with a fresh runner identity
         if: always()

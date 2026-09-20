@@ -1,5 +1,7 @@
 # Reconstruction acceptance contract
 
+> **Historical implementation notes.** This file documents an earlier verification stage and is retained for archaeology only. The current production reconstruction/acceptance contract is `docs/RECONSTRUCTION.md` and the Studio/GitHub Actions path described in the root README. Do not use thresholds or required-work lists below as current behavior.
+
 This change is confined to `acts2man/molt.tick`, the engine. It does not modify
 `acts2man/molt`, the Lovable editor, production data, or database schema.
 

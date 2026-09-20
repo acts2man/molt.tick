@@ -64,6 +64,10 @@ jobs:
   }
   return {repository,url:`https://github.com/${repository}`};
 }
+export async function deleteReservedOutputRepository(directory:string,repository:string,token:string):Promise<void>{
+  if(!token||token.length<20||!/^acts2man\/[a-z0-9][a-z0-9._-]{0,99}$/i.test(repository))return;
+  try{await run('gh',['repo','delete',repository,'--yes'],directory,{GH_TOKEN:token});}catch(error){console.warn('Reserved GitHub repository cleanup warning:',error instanceof Error?error.message:String(error));}
+}
 export async function publishReservedOutputRepository(directory:string,repository:string,token:string):Promise<PublishResult>{
   if(!token||token.length<20)throw new Error('GitHub export token is missing.');
   if(!/^acts2man\/[a-z0-9][a-z0-9._-]{0,99}$/i.test(repository))throw new Error('Invalid reserved output repository.');

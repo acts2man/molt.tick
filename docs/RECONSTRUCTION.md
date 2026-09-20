@@ -91,25 +91,19 @@ file size/type limits are checked. This is a CLI importer, not a dashboard uploa
 Each run gets a fresh directory with `site/`, source evidence, per-attempt
 screenshots/diffs/geometry/build logs, `report.json`, and an offline `review.html`.
 The review UI provides page/device selection, labeled original/React views,
-pixel differences, actual metrics, unresolved notes, and the attempt history.
+pixel differences, actual metrics, explicit spacing/typography/alignment diagnostics, unresolved notes, and the attempt history.
 Missing generated evidence is never replaced with the original image.
 
 Acceptance checks production compilation, browser failures, exact normalized
 visible copy/reading order, heading geometry/typography, page height, broken
-images, new overflow, internal route targets, global pixel comparison (95%), and
-worst horizontal-band comparison (85%). When safe source interactions were
+images, new overflow, internal route targets, global pixel comparison (97%), and
+worst horizontal-band comparison (92%). When safe source interactions were
 observed, Molt also replays those controls in generated React and compares their
 opened/selected states; a static page match cannot hide a failed menu, disclosure,
 or tab state. These remain bounded acceptance criteria, not a universal fidelity
 guarantee or proof of every possible interaction path.
 
-The repair state machine retains only non-regressing improvements across the
-entire route/device matrix. Repeated patches skip an unnecessary rebuild.
-Rejected changes and failed writes are rolled back. The retained source is
-compiled again at the end so a rejected candidate cannot remain in `dist`.
-Default repair limit: 6; default overall budget: 30 minutes. Budget exhaustion
-returns needs-work, not fabricated success. The best measured version remains
-available for inspection. Warnings, unresolved integrations, API usage and
+The repair state machine retains measured improvements across the entire route/device matrix while protecting already-passing views and interactions. Repeated patches skip an unnecessary rebuild. Rejected changes and failed writes are rolled back. Initial generation after the first route cannot rewrite an existing shared/earlier-route file; later routes add route-specific source, and measured repair rounds may then adjust shared files with every route visible to the evaluator. High-fidelity Studio settings (4 or 6) expand on multi-page jobs only enough to give each failing page at least one direct repair opportunity, with fair route scheduling and early stopping once all checks pass. The Studio execution budget scales by page count/reasoning effort; CLI defaults remain independently configurable. Budget exhaustion returns needs-work, not fabricated success. The best measured version remains available for inspection. Warnings, unresolved integrations, API usage and
 failed checks remain explicit.
 
 The worker adapter exports only when visual checks pass and no integration

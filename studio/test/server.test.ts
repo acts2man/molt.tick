@@ -84,6 +84,13 @@ test('unverified model credential changes nothing',async()=>{const s=setup();s.s
 test('runner cannot change another workflow run',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),runId:999});const r=await handle(s.req('runner/'+ID),s.services);assert.equal(r.status,409);});
 test('runner data is not accepted without identity verification',async()=>{const s=setup();s.services.identifyRunner=async()=>{throw new Error('invalid identity');};const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'fake'}),s.services);assert.equal(r.status,500);assert.equal(s.map.size,3);});
 test('runner progress updates existing work and preserves the run identity',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'Capturing desktop'}),s.services);assert.equal(r.status,200);const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.runId,123);assert.equal(job.status,'running');assert.equal(job.events.length,1);});
+test('terminal runner events purge uploaded source bundles',async()=>{
+ const s=setup(),prefix='bundles/acts2man/'+ID+'/';
+ s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com',bundleId:ID},'acts2man'));
+ s.map.set(prefix+'manifest',{ready:true});s.map.set(prefix+'files/example',new ArrayBuffer(4));
+ const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'done',report:{status:'needs-work',evaluation:{pass:false,issues:[],views:[]},attempts:[],warnings:[],blockers:[]}}),s.services);
+ assert.equal(r.status,200);assert.equal([...s.map.keys()].some(k=>k.startsWith(prefix)),false);
+});
 test('runner milestone progress is stored and never moves backward',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
  await handle(s.req('runner/'+ID+'/events','POST',{message:'Generating React',progress:38,progressStage:'Generating React'}),s.services);

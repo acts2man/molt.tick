@@ -9,7 +9,7 @@ import type { Evidence, Evaluation, ViewCheck, Geometry, ElementEvidence } from 
 const normalize=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim();
 const TEXT_TAG=/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/;
 const INLINE_TEXT_TAG=/^(strong|b|em|i|span|a|small)$/;
-const TYPOGRAPHY_PROPS=['font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform'] as const;
+const TYPOGRAPHY_PROPS=['font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color'] as const;
 const short=(e:ElementEvidence)=>{const value=normalize(e.text);return value.length>54?value.slice(0,51)+'…':value||e.tag;};
 function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):string[]{
   const diffs:string[]=[];
@@ -88,6 +88,20 @@ export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
   problems.push(...gaps.slice(0,8).map(g=>g.message));
   return problems;
 }
+export function internalLinkIssues(source:Geometry,candidate:Geometry,captureOrigin:string,generatedOrigin:string,known:Set<string>,originalOrigin=captureOrigin):string[]{
+  const problems:string[]=[],expected=new Set<string>(),actual=new Set<string>();
+  const routeOf=(raw:string)=>{try{const u=new URL(raw);if(![captureOrigin,originalOrigin].includes(u.origin)||u.search)return null;return u.pathname.replace(/\/+$/,'')||'/';}catch{return null;}};
+  for(const raw of source.links){const route=routeOf(raw);if(route&&known.has(route))expected.add(route);}
+  for(const raw of candidate.links){
+    try{
+      const u=new URL(raw),route=u.pathname.replace(/\/+$/,'')||'/';
+      if(u.origin===generatedOrigin){if(known.has(route))actual.add(route);else if(!u.pathname.startsWith('/assets/'))problems.push(`Unresolved internal link: ${route}`);}
+      else if(u.origin===originalOrigin&&known.has(route))problems.push(`Internal link still points to the source website instead of the reconstructed route: ${route}`);
+    }catch{}
+  }
+  for(const route of expected)if(!actual.has(route))problems.push(`Missing reconstructed internal link target: ${route}`);
+  return [...new Set(problems)];
+}
 export function contentIssues(source:Geometry,candidate:Geometry):string[]{
   const problems:string[]=[];
   if(normalize(source.text)!==normalize(candidate.text))problems.push('Visible copy or reading order differs from the source');
@@ -143,9 +157,10 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
         const generated=await geometry(page);
         check.issues.push(...contentIssues(reference.geometry,generated),...errors);
-        // Literal DOM links are checked after rendering, including shared components.
+        // Literal DOM links are checked after rendering, including shared components. Same-site links
+        // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
-        for(const link of generated.links){const url=new URL(link);if(url.origin!==host.origin)continue;const route=url.pathname.replace(/\/+$/,'')||'/';if(!known.has(route)&&!url.pathname.startsWith('/assets/'))check.issues.push(`Unresolved internal link: ${route}`);}
+        check.issues.push(...internalLinkIssues(reference.geometry,generated,new URL(pageRef.url).origin,host.origin,known,new URL(evidence.site).origin));
         const metrics=await compare(check.source,check.candidate,check.diff);Object.assign(check,metrics);
         check.interactions=[];
         for(let stateIndex=0;stateIndex<(reference.interactions??[]).length;stateIndex++){
