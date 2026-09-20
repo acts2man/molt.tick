@@ -48,12 +48,25 @@ const STRUCTURAL_SOURCE_TAG=/^(header|nav|main|section|article|footer|form)$/;
 const STRUCTURAL_CANDIDATE_TAG=/^(header|nav|main|section|article|footer|form|div)$/;
 const BOX_STYLE_PROPS=['background','background-image','background-size','background-position','border','border-radius','box-shadow','padding','gap','overflow'] as const;
 const FRAME_STYLE_PROPS=['margin','padding','background','background-image'] as const;
+const PSEUDO_STYLE_PROPS=['content','position','top','left','right','bottom','width','height','background','background-image','border','border-radius','transform','opacity'] as const;
 function styleDifferences(source:Record<string,string>|undefined,candidate:Record<string,string>|undefined,properties:readonly string[]):string[]{
   if(!source||!candidate)return [];
   return properties.flatMap(property=>{
     const expected=source[property]??'',actual=candidate[property]??'';
     return expected===actual?[]:[`${property} source ${expected||'unset'}, generated ${actual||'unset'}`];
   });
+}
+function pseudoElementIssues(label:string,source:ElementEvidence,candidate:ElementEvidence):string[]{
+  const out:string[]=[];
+  for(const side of ['before','after'] as const){
+    const expected=source[side],actual=candidate[side];
+    if(expected&&!actual){out.push(`${label} ::${side} is missing in generated output`);continue;}
+    if(!expected&&actual){out.push(`${label} has unexpected generated ::${side}`);continue;}
+    if(!expected||!actual)continue;
+    const diffs=styleDifferences(expected,actual,PSEUDO_STYLE_PROPS);
+    if(diffs.length)out.push(`${label} ::${side}: ${diffs.slice(0,6).join('; ')}`);
+  }
+  return out;
 }
 function matchedVisualContainers(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence;ordinal:number}>{
   const expected=source.elements.filter(e=>STRUCTURAL_SOURCE_TAG.test(e.tag)&&e.width>0&&e.height>0).sort((a,b)=>a.y-b.y||a.x-b.x);
@@ -81,12 +94,13 @@ export function visualLayoutIssues(source:Geometry,candidate:Geometry):string[]{
     if(geometryMismatch(delta,8))issues.push({amount,message:geometryMessage(`Container ${pair.source.tag} #${pair.ordinal}`,pair.source,pair.candidate)});
     const styles=styleDifferences(pair.source.style,pair.candidate.style,BOX_STYLE_PROPS);
     if(styles.length)issues.push({amount:Math.max(20,amount),message:`Container ${pair.source.tag} #${pair.ordinal} treatment: ${styles.slice(0,5).join('; ')}`});
+    for(const message of pseudoElementIssues(`Container ${pair.source.tag} #${pair.ordinal}`,pair.source,pair.candidate))issues.push({amount:Math.max(20,amount),message});
   }
   for(const pair of matchedTextElements(source,candidate)){
     if(!/^(p|li|blockquote|button|label|a)$/.test(pair.source.tag))continue;
     const width=Math.abs(pair.candidate.width-pair.source.width),height=Math.abs(pair.candidate.height-pair.source.height);
-    if(width<=8&&height<=6)continue;
-    issues.push({amount:Math.max(width,height),message:geometryMessage(`Text box "${short(pair.source)}"`,pair.source,pair.candidate)});
+    if(width>8||height>6)issues.push({amount:Math.max(width,height),message:geometryMessage(`Text box "${short(pair.source)}"`,pair.source,pair.candidate)});
+    for(const message of pseudoElementIssues(`Text "${short(pair.source)}"`,pair.source,pair.candidate))issues.push({amount:Math.max(20,width,height),message});
   }
   return issues.sort((a,b)=>b.amount-a.amount).slice(0,12).map(i=>i.message);
 }
