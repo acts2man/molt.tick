@@ -64,6 +64,17 @@ test('capture replays duplicate icon-only carousel controls by occurrence',{skip
   const interactions=evidence.pages[0].views[0].interactions??[];
   assert.equal(interactions.length,2);assert.deepEqual(interactions.map(i=>[i.trigger.name,i.trigger.ordinal]),[['Next slide',0],['Next slide',1]]);
 }));
+test('dense long-page geometry sampling retains lower-page and footer evidence',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const paragraphs=Array.from({length:1700},(_,i)=>`<p>Row ${i}</p>`).join('');
+  const page=`<!doctype html><html><head><style>body{margin:0}p{margin:0;height:10px;line-height:10px;font-size:8px}footer{height:24px}</style></head><body><main>${paragraphs}</main><footer>End marker</footer></body></html>`;
+  await writeFile(join(dir,'bundle/home.html'),page);
+  await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'dense-long'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const geometry=evidence.pages[0].views[0].geometry;
+  assert.equal(geometry.truncated,true);
+  assert.ok(geometry.elements.some(e=>e.tag==='footer'&&/End marker/.test(e.text)),`footer missing from ${geometry.elements.length} sampled elements`);
+  assert.ok(geometry.elements.some(e=>e.tag==='p'&&e.y>14000),`lower-page paragraphs missing from sampled geometry`);
+}));
 test('capture accepts a long landing page beyond the former 18000px ceiling within the bounded pixel budget',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const longHtml='<!doctype html><html><head><meta charset="utf-8"><title>Long page</title></head><body style="margin:0"><main style="height:19500px;padding:32px"><h1>Long-form landing page</h1><p>Bottom content remains part of the same page.</p></main></body></html>';
   await writeFile(join(dir,'bundle/home.html'),longHtml);
