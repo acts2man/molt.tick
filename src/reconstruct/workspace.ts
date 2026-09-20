@@ -12,7 +12,7 @@ export function validateChanges(files: FileChange[]): void {
   const seen = new Set<string>(); let bytes = 0;
   for (const f of files) {
     if (!f || typeof f.path !== 'string' || !editable(f.path) || seen.has(f.path)) throw new Error('Disallowed or duplicate output path');
-    if (typeof f.content !== 'string' || !f.content.trim() || Buffer.byteLength(f.content) > 250000) throw new Error('Empty or oversized code file');
+    if (typeof f.content !== 'string' || !f.content.trim() || Buffer.byteLength(f.content) > 60000) throw new Error('Empty or oversized code file; split large pages/components/styles into smaller editable files');
     seen.add(f.path); bytes += Buffer.byteLength(f.content);
     if (f.path.endsWith('.css')) {
       const css = f.content.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -88,7 +88,7 @@ export async function scaffold(root: string, evidence: Evidence): Promise<void> 
   await write('tailwind.config.js', "export default {content:['./src/**/*.{ts,tsx}'],theme:{extend:{}},plugins:[]};");
   await write('postcss.config.js', "export default {plugins:{tailwindcss:{},autoprefixer:{}}};");
   await write('index.html', '<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>');
-  await write('src/index.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;');
+  await write('src/index.css', '@tailwind components;\n@tailwind utilities;');
   await write('src/fonts.css', evidence.fontFaces.join('\n'));
   await write('src/site.css', '/* Shared styles authored from the reference. */');
   const imports = evidence.pages.map((p,i)=>`import P${i} from './pages/${routeFile(p.route).split('/').pop()!.replace('.tsx','')}';`).join('\n');
