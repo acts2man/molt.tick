@@ -91,7 +91,7 @@ export async function compare(sourcePath:string,candidatePath:string,diffPath:st
   if(width*height>40_000_000)throw new Error('Comparison exceeds pixel budget');
   const fit=(src:PNG)=>{const p=new PNG({width,height});p.data.fill(255);for(let y=0;y<src.height;y++)src.data.copy(p.data,y*width*4,y*src.width*4,(y+1)*src.width*4);return p;};
   const A=fit(a),B=fit(b),diff=new PNG({width,height});
-  const pixels=pixelmatch(A.data,B.data,diff.data,width,height,{threshold:0.1});
+  const pixels=pixelmatch(A.data,B.data,diff.data,width,height,{threshold:0.1,diffColor:[255,0,0],aaColor:[255,255,0]});
   let worstBand=100,worstY=0;
   // The global score can hide a visibly wrong card, image or text block inside a wide desktop
   // screenshot. Keep the compatibility field name `worstBand`, but measure the weakest local
