@@ -11,8 +11,9 @@ import { readBundle } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
 import { repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
-import type { Evaluation, FileChange, ModelReply, Evidence } from '../src/reconstruct/types.js';
+import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy } from '../src/reconstruct/agent.js';
+import { spacingIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -24,6 +25,27 @@ test('source URL validation rejects unsafe schemes and credentials',()=>{for(con
 test('reserved networks are denied',()=>{for(const ip of ['127.0.0.1','10.0.0.1','192.168.1.1','169.254.169.254','100.64.0.1','::1','::ffff:127.0.0.1','2001:db8::1','198.51.100.1'])assert.equal(publicIP(ip),false,ip);assert.equal(publicIP('8.8.8.8'),true);});
 test('numeric and viewport limits are explicit',()=>{assert.equal(integer(undefined,6,0,20),6);for(const n of ['','-1','21','NaN','1.5'])assert.throws(()=>integer(n,6,0,20));assert.throws(()=>validateViewports([]));assert.throws(()=>validateViewports([{name:'../x',width:390,height:844}]));});
 test('child environment excludes provider credentials',()=>{process.env.MOLT_TEST_PRIVATE_VALUE='secret';assert.equal(safeEnvironment().MOLT_TEST_PRIVATE_VALUE,undefined);delete process.env.MOLT_TEST_PRIVATE_VALUE;});
+const simpleGeometry=(elements:Geometry['elements']):Geometry=>({text:elements.map(e=>e.text).filter(Boolean).join(' '),title:'Spacing test',height:1000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false});
+test('spacing evaluator reports exact element-to-element gap deltas',()=>{
+  const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
+  const source=simpleGeometry([
+    {key:'1',parent:'p',tag:'h2',text:'Our Services',x:100,y:100,width:400,height:40,style},
+    {key:'2',parent:'p',tag:'p',text:'Professional tree care for Sacramento.',x:100,y:168,width:500,height:48,style},
+  ]);
+  const candidate=simpleGeometry([
+    {key:'a',parent:'q',tag:'h2',text:'Our Services',x:100,y:100,width:400,height:40,style},
+    {key:'b',parent:'q',tag:'p',text:'Professional tree care for Sacramento.',x:100,y:190,width:500,height:48,style},
+  ]);
+  const issues=spacingIssues(source,candidate);
+  assert.ok(issues.some(i=>/source 28px, generated 50px \(22px too large\)/.test(i)),issues.join('\n'));
+});
+test('spacing evaluator grades paragraph line-height and letter spacing',()=>{
+  const base={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
+  const source=simpleGeometry([{key:'1',parent:'p',tag:'p',text:'Measured paragraph rhythm.',x:20,y:20,width:400,height:48,style:base}]);
+  const candidate=simpleGeometry([{key:'a',parent:'q',tag:'p',text:'Measured paragraph rhythm.',x:20,y:20,width:400,height:56,style:{...base,'line-height':'28px','letter-spacing':'0.5px'}}]);
+  const issues=spacingIssues(source,candidate);
+  assert.ok(issues.some(i=>/line-height, letter-spacing differ/.test(i)),issues.join('\n'));
+});
 test('zero is measured; null is missing',()=>{assert.equal(improves(score(null),score(0)),true);assert.equal(improves(score(0),score(null)),false);});
 test('measured pixel improvement is accepted even when diagnostic wording changes',()=>{const a=score(85);a.views[0].worstBand=55;a.views[0].issues=['Heading Example: y, font-weight differ'];const b=score(90);b.views[0].worstBand=64;b.views[0].issues=['Heading Example: y differ'];assert.equal(improves(a,b),true);});
 test('global gain cannot regress a passing device',()=>{const a=score(99,true);a.views.push({...a.views[0],viewport:'mobile',score:70,worstBand:70,pass:false});a.pass=false;const b=structuredClone(a);b.views[0].score=90;b.views[0].pass=false;b.views[1].score=100;b.views[1].worstBand=100;b.views[1].pass=true;assert.equal(improves(a,b),false);});
@@ -88,6 +110,18 @@ test('a passing initial output makes no model repair calls',async()=>{const {eva
 test('failed partial writes are restored',async()=>{let file='good';const before=file;const result=await repairLoop({snapshot:async()=>file,restore:async s=>{file=s;},digest:s=>s,evaluate:async()=>score(60),propose:async()=>({summary:'x',files:[]}),apply:async()=>{file='partial';throw new Error('disk failure');},save:async()=>{}},{maxRounds:1,signal:signal()});assert.equal(file,before);assert.equal(result.attempts[1].accepted,false);});
 test('pre-aborted run starts no effects',async()=>{const c=new AbortController();c.abort();await assert.rejects(loopHarness([60],[1],2,c));});
 
+test('initial reconstruction prompt includes explicit source spacing measurements',()=>{
+  const style={display:'block','font-family':'Arvo','font-size':'18px','line-height':'27px','letter-spacing':'0px',margin:'0px',padding:'0px'};
+  const geometry=simpleGeometry([
+    {key:'1',parent:'section-1',tag:'h2',text:'Welcome',x:100,y:100,width:500,height:42,style},
+    {key:'2',parent:'section-1',tag:'p',text:'Exact spacing should be reconstructed.',x:100,y:174,width:600,height:54,style},
+  ]);
+  const page={route:'/',url:'https://example.com/',title:'Spacing',views:[{viewport:{name:'desktop',width:1440,height:900},screenshot:'source.png',geometry}]};
+  const evidence:Evidence={site:'https://example.com',directory:'/tmp',pages:[page],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[]};
+  const prompt=JSON.parse(reconstructionPrompt(evidence,page,[],'Implement spacing exactly'));
+  assert.equal(prompt.reference.views[0].spacing.between[0].gap,32);
+  assert.equal(prompt.reference.views[0].spacing.textRhythm[0].lineHeight,'27px');
+});
 test('large page evidence compacts below the provider safety budget',()=>{
   const style={display:'block','font-family':'Inter','font-size':'16px','line-height':'24px',padding:'24px',margin:'12px',color:'rgb(1, 2, 3)',background:'rgb(255,255,255)','background-image':'none',width:'1200px',height:'40px'};
   const hugeSvg='<svg>'+('<path d="M0 0h10v10z"/>'.repeat(700))+'</svg>';

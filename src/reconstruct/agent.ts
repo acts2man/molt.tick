@@ -56,6 +56,25 @@ function compactElement(e:any){
     ...(e.svg?{svg:clipped(e.svg,4000)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{}),
     ...(e.before?{before:e.before}:{}),...(e.after?{after:e.after}:{})};
 }
+function spacingGuide(elements:any[],limit=60){
+  const text=elements.filter(e=>/^(h[1-6]|p|li|button|label|blockquote)$/.test(e.tag)&&String(e.text||'').trim());
+  const label=(e:any)=>{const v=String(e.text||'').replace(/\s+/g,' ').trim();return clipped(v,70)??e.tag;};
+  const rhythm=text.slice(0,Math.min(36,limit)).map(e=>({tag:e.tag,text:label(e),y:Math.round(e.y),height:Math.round(e.height),
+    lineHeight:e.style?.['line-height'],letterSpacing:e.style?.['letter-spacing'],margin:e.style?.margin,padding:e.style?.padding}));
+  const byParent=new Map<string,any[]>();
+  for(const e of text){if(!e.parent)continue;const items=byParent.get(e.parent)??[];items.push(e);byParent.set(e.parent,items);}
+  const between:any[]=[];
+  for(const items of byParent.values()){
+    items.sort((a,b)=>a.y-b.y||a.x-b.x);
+    for(let i=0;i<items.length-1&&between.length<limit;i++){
+      const a=items[i],b=items[i+1],overlap=Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))/Math.max(1,Math.min(a.width,b.width));
+      if(b.y<a.y+a.height-2||overlap<0.12)continue;
+      const gap=b.y-(a.y+a.height);if(gap<0||gap>500)continue;
+      between.push({from:label(a),to:label(b),gap:Math.round(gap),fromHeight:Math.round(a.height),toY:Math.round(b.y)});
+    }
+  }
+  return {textRhythm:rhythm,between};
+}
 function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
@@ -68,6 +87,7 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
         geometry:select(state.geometry.elements,Math.min(70,geometryLimit))})),
+      spacing:spacingGuide(v.geometry.elements,Math.min(60,geometryLimit)),
       geometry:select(v.geometry.elements,geometryLimit),
     }))};
 }
@@ -174,7 +194,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const sourceFor=async(route:string)=>{if(savedSourceCache.has(route))return savedSourceCache.get(route);const source=await savedSourceEvidence(options.bundleDir,route);savedSourceCache.set(route,source);return source;};
   for(const page of evidence.pages){
     signal.throwIfAborted();await progress(`Reconstructing ${page.route} with shared components`);
-    const files=await snapshot(outDir),savedSource=await sourceFor(page.route),request={prompt:reconstructionPrompt(evidence,page,files,'Implement this page. Reuse shared components and styles; preserve previously implemented routes. Reproduce the observed menu, disclosure, accordion, carousel and tab states with accessible React behavior when interaction evidence is supplied.',savedSource),images:await referenceImages(page.views)};
+    const files=await snapshot(outDir),savedSource=await sourceFor(page.route),request={prompt:reconstructionPrompt(evidence,page,files,'Implement this page. Reuse shared components and styles; preserve previously implemented routes. Reproduce the observed menu, disclosure, accordion, carousel and tab states with accessible React behavior when interaction evidence is supplied. Treat each viewport\'s spacing measurements as exact layout targets: match heading-to-paragraph gaps, paragraph rhythm, section whitespace, line-height, letter-spacing, margins and padding rather than estimating them from the screenshot.',savedSource),images:await referenceImages(page.views)};
     // A malformed first reply gets one self-correction opportunity with its exact validation error.
     let error='';let done=false;
     for(let attempt=0;attempt<2&&!done;attempt++){
@@ -196,7 +216,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const autopsy=rejectedRepairAutopsy(best,history,page.route);
       const rejectionGuidance=autopsy?` Most recent rejected repair autopsy: ${JSON.stringify(autopsy)}. Treat this as causal feedback: preserve the positive deltas, explicitly avoid the negative deltas and added issues, and make a narrower repair rather than repeating the rejected strategy.`:'';
       const savedSource=await sourceFor(page.route);
-      return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Aim for a visually exact 100% reconstruction. The evaluator's acceptance floor is at least 97% overall pixel match and at least 92% in the weakest measured band, with no content/interaction issues and without regressing any already-correct viewport. Do not stop optimizing merely because the acceptance floor is crossed when the attached evidence still shows visible differences. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}.${rejectionGuidance} The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`,savedSource),images:await repairImages(checks)},signal);
+      return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Aim for a visually exact 100% reconstruction. The evaluator's acceptance floor is at least 97% overall pixel match and at least 92% in the weakest measured band, with no content/interaction issues and without regressing any already-correct viewport. Do not stop optimizing merely because the acceptance floor is crossed when the attached evidence still shows visible differences. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}.${rejectionGuidance} The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. When a diagnostic gives source and generated spacing in pixels, correct toward the source measurement directly; do not eyeball the whitespace. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`,savedSource),images:await repairImages(checks)},signal);
     },
     apply:reply=>apply(outDir,reply.files,allowed),
     save:async(best,attempts)=>{
