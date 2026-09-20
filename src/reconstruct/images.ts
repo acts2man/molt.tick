@@ -41,17 +41,19 @@ export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[
   const result:ImageInput[]=[];
   for(const v of views){const png=await loadPng(v.screenshot);
     result.push(input(`${v.viewport.name} complete source overview; native dimensions ${png.width}x${png.height}`,overview(png)));
-    result.push(input(`${v.viewport.name} source y=0 at native resolution`,crop(png,0,1100)));
-    if(png.height>2200){
-      const middle=Math.max(0,Math.round(png.height/2)-550);
-      result.push(input(`${v.viewport.name} source middle y=${middle} at native resolution`,crop(png,middle,1100)));
-    }
-    if(png.height>1100)result.push(input(`${v.viewport.name} source bottom y=${png.height-1100}`,crop(png,png.height-1100,1100)));
-    for(const state of (v.interactions??[]).slice(0,2)){
+    const maxY=Math.max(0,png.height-1100),positions=new Set<number>([0]);
+    if(png.height>3300){positions.add(Math.round(maxY/3));positions.add(Math.round(maxY*2/3));}
+    else if(png.height>2200)positions.add(Math.max(0,Math.round(png.height/2)-550));
+    if(png.height>1100)positions.add(maxY);
+    for(const y of [...positions].sort((a,b)=>a-b))result.push(input(`${v.viewport.name} source detail y=${y} at native resolution`,crop(png,y,1100)));
+    const interactionLimit=png.height>3300?1:2;
+    for(const state of (v.interactions??[]).slice(0,interactionLimit)){
       const opened=await loadPng(state.screenshot);
       result.push(input(`${v.viewport.name} INTERACTION ${state.trigger.kind} "${state.trigger.name}" source state`,overview(opened)));
     }
-  }return result;
+  }
+  if(result.length>18)throw new Error('Reference image selection exceeded provider budget');
+  return result;
 }
 export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
   const result:ImageInput[]=[];
