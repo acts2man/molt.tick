@@ -39,7 +39,7 @@ test('capture preserves real reading order across inline emphasis',{skip:process
   assert.equal(evidence.pages[0].views[0].geometry.text,'Call today for a free estimate.');
 }));
 test('capture observes icon-only aria menu toggles even without aria-expanded',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
-  const page='<!doctype html><html><body><button aria-haspopup="menu" aria-controls="mobile-menu"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 2h10M0 5h10M0 8h10"/></svg></button><nav id="mobile-menu" hidden><p>Menu panel opened</p></nav><script>document.querySelector("button").addEventListener("click",()=>document.getElementById("mobile-menu").hidden=false)</script></body></html>';
+  const page='<!doctype html><html><body><h1>Menu fixture</h1><button aria-haspopup="menu" aria-controls="mobile-menu"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 2h10M0 5h10M0 8h10"/></svg></button><nav id="mobile-menu" hidden><p>Menu panel opened</p></nav><script>document.querySelector("button").addEventListener("click",()=>document.getElementById("mobile-menu").hidden=false)</script></body></html>';
   await writeFile(join(dir,'bundle/home.html'),page);
   await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
   const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'aria-menu'),viewports:[{name:'mobile',width:390,height:844}],signal:AbortSignal.timeout(60000)});
