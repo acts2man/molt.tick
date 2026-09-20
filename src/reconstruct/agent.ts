@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { capture, readBundle, type CaptureOptions } from './capture.js';
 import { assessComplexity } from './complexity.js';
+import { effectiveRepairRounds } from './budgets.js';
 import { evaluate } from './evaluate.js';
 import { referenceImages, repairImages } from './images.js';
 import { modelFromEnv } from './provider.js';
@@ -105,6 +106,26 @@ function relevantAssets(evidence:Evidence,page:EvidencePage){
 function boundedFiles(files:FileChange[],page:EvidencePage,perFile=55000){
   return relevantFiles(files,page).map(f=>({path:f.path,content:clipped(f.content,perFile)}));
 }
+export function assertInitialGenerationIsolation(before:FileChange[],changes:FileChange[],pageFile:string,pageIndex:number):void{
+  if(pageIndex===0)return;
+  const existing=new Map(before.map(file=>[file.path,file.content]));
+  for(const change of changes){
+    if(change.path===pageFile)continue;
+    const previous=existing.get(change.path);
+    if(previous!==undefined&&previous!==change.content)throw new Error(`Later page generation cannot rewrite existing shared or earlier-route file ${change.path}. Add a route-specific style/component instead; measured repair rounds may adjust shared files after every page exists.`);
+  }
+}
+export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,number>):string|undefined{
+  const failing=[...new Set(evaluation.views.filter(v=>!v.pass).map(v=>v.route))];
+  if(!failing.length)return undefined;
+  const minimum=Math.min(...failing.map(route=>attempts.get(route)??0));
+  const eligible=failing.filter(route=>(attempts.get(route)??0)===minimum);
+  const rank=(route:string)=>{
+    const views=evaluation.views.filter(v=>v.route===route&&!v.pass);
+    return Math.min(...views.flatMap(v=>[v.worstBand??101,...(v.interactions??[]).filter(i=>!i.pass).map(i=>i.worstBand??101)]));
+  };
+  return eligible.sort((a,b)=>rank(a)-rank(b))[0];
+}
 function visionFirstContext(evidence:Evidence,page:EvidencePage){
   const remap=(value:string|undefined)=>{let out=value??'';for(const asset of evidence.assets)if(out.includes(asset.original))out=out.split(asset.original).join(asset.publicPath);return clipped(out,260);};
   const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a)$/.test(e.tag))
@@ -195,23 +216,27 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const allowed=new Set(evidence.pages.map(p=>routeFile(p.route)));
   const savedSourceCache=new Map<string,SavedSourceEvidence|undefined>();
   const sourceFor=async(route:string)=>{if(savedSourceCache.has(route))return savedSourceCache.get(route);const source=await savedSourceEvidence(options.bundleDir,route);savedSourceCache.set(route,source);return source;};
-  for(const page of evidence.pages){
+  for(const [pageIndex,page] of evidence.pages.entries()){
     signal.throwIfAborted();await progress(`Reconstructing ${page.route} with shared components`);
-    const files=await snapshot(outDir),savedSource=await sourceFor(page.route),request={prompt:reconstructionPrompt(evidence,page,files,'Implement this page. Reuse shared components and styles; preserve previously implemented routes. Reproduce the observed menu, disclosure, accordion, carousel and tab states with accessible React behavior when interaction evidence is supplied. Treat each viewport\'s spacing and typography measurements as exact layout targets: match heading-to-paragraph gaps, paragraph rhythm, section whitespace, line-height, letter-spacing, margins and padding rather than estimating them from the screenshot. Preserve every visible emphasis state exactly: regular vs bold weight, normal vs italic style, capitalization, and left/center/right text alignment, including emphasized words inside sentences.',savedSource),images:await referenceImages(page.views)};
+    const files=await snapshot(outDir),savedSource=await sourceFor(page.route),request={prompt:reconstructionPrompt(evidence,page,files,'Implement this page. Reuse shared components and styles; preserve previously implemented routes. Reproduce the observed menu, disclosure, accordion, carousel and tab states with accessible React behavior when interaction evidence is supplied. Treat each viewport\'s spacing and typography measurements as exact layout targets: match heading-to-paragraph gaps, paragraph rhythm, section whitespace, line-height, letter-spacing, margins and padding rather than estimating them from the screenshot. Preserve every visible emphasis state exactly: regular vs bold weight, normal vs italic style, capitalization, and left/center/right text alignment, including emphasized words inside sentences. After the first route, preserve every existing shared file and earlier page exactly during initial generation; add route-specific styles/components instead. Shared files may be refined later only after all routes are measurable together.',savedSource),images:await referenceImages(page.views)};
     // A malformed first reply gets one self-correction opportunity with its exact validation error.
     let error='';let done=false;
     for(let attempt=0;attempt<2&&!done;attempt++){
-      try{const reply=await model.complete({...request,prompt:request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'')},signal);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(page.route)))throw new Error('Requested page file was not produced');done=true;}
+      try{const reply=await model.complete({...request,prompt:request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'')},signal);assertInitialGenerationIsolation(files,reply.files,routeFile(page.route),pageIndex);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(page.route)))throw new Error('Requested page file was not produced');done=true;}
       catch(e){await restore(outDir,files);error=(e as Error).message;if(attempt===1)throw e;}
     }
   }
+  const requestedRepairs=options.maxRepairs??integer(process.env.MOLT_MAX_REPAIRS,6,0,20);
+  const repairRounds=effectiveRepairRounds(evidence.pages.length,requestedRepairs);
+  const repairAttemptsByRoute=new Map<string,number>();
+  if(repairRounds!==requestedRepairs)await progress(`High-fidelity multi-page scope expanded the measured repair ceiling from ${requestedRepairs} to ${repairRounds} so each failing page can receive a direct correction opportunity.`);
   const result=await repairLoop({
     snapshot:()=>snapshot(outDir),restore:(s:FileChange[])=>restore(outDir,s),digest,
     evaluate:async(round:number)=>{await progress(`Building and comparing every page/device (round ${round})`);return evaluate(outDir,evidence,join(run,`attempt-${round}`),signal);},
     propose:async(best,history,round)=>{
-      const rank=(v:typeof best.views[number])=>Math.min(v.worstBand??101,...(v.interactions??[]).filter(i=>!i.pass).map(i=>i.worstBand??0));
-      const worst=[...best.views].filter(v=>!v.pass).sort((a,b)=>rank(a)-rank(b))[0];
-      const page=evidence.pages.find(p=>p.route===worst?.route)??evidence.pages[0];
+      const route=selectRepairRoute(best,repairAttemptsByRoute)??evidence.pages[0].route;
+      repairAttemptsByRoute.set(route,(repairAttemptsByRoute.get(route)??0)+1);
+      const page=evidence.pages.find(p=>p.route===route)??evidence.pages[0];
       await progress(`Repairing ${page.route}; keeping passing pages and viewports intact`);
       const checks=best.views.filter(v=>v.route===page.route);
       const targets=checks.map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand,worstY:v.worstY,issues:v.issues.slice(0,12),interactions:(v.interactions??[]).filter(i=>!i.pass).map(i=>({name:i.trigger.name,score:i.score,worstBand:i.worstBand,worstY:i.worstY,issues:i.issues.slice(0,6)}))}));
@@ -227,7 +252,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const latest=attempts.at(-1);
       if(latest&&latest.round>0)await progress(`Repair round ${latest.round} ${latest.accepted?'accepted':'not applied'}: ${latest.summary.slice(0,220)}`);
     },
-  },{maxRounds:options.maxRepairs??integer(process.env.MOLT_MAX_REPAIRS,6,0,20),signal});
+  },{maxRounds:repairRounds,signal});
   // Restore() changes source files. Never leave a rejected candidate in dist.
   await rm(join(outDir,'dist'),{recursive:true,force:true});
   const finalBuild=signal.aborted?{ok:false,log:'Run cancelled before final compilation'}:await build(outDir,AbortSignal.any([signal,AbortSignal.timeout(120000)]));
