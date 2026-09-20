@@ -94,7 +94,8 @@ export async function prepareToolchain(outDir: string): Promise<void> {
   const lock=JSON.parse(lockRaw),pkg=JSON.parse(packageRaw);
   if(!lock||Number(lock.lockfileVersion)<2||!lock.packages?.[''])throw new Error('Trusted render toolchain lockfile is missing or invalid');
   const root=lock.packages[''];
-  const same=(a:unknown,b:unknown)=>JSON.stringify(a??{})===JSON.stringify(b??{});
+  const normalized=(value:any)=>Object.fromEntries(Object.entries(value??{}).sort(([a],[b])=>a.localeCompare(b)));
+  const same=(a:unknown,b:unknown)=>JSON.stringify(normalized(a))===JSON.stringify(normalized(b));
   if(!same(root.dependencies,pkg.dependencies)||!same(root.devDependencies,pkg.devDependencies))throw new Error('Generated package dependencies do not match the trusted render toolchain lockfile');
   lock.name=pkg.name;root.name=pkg.name;root.private=true;
   await writeFile(join(outDir,'package-lock.json'),JSON.stringify(lock,null,2)+'\n');
