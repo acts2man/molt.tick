@@ -46,6 +46,13 @@ test('carousel evidence keeps reserved slots even when many disclosures appear f
   const names=(evidence.pages[0].views[0].interactions??[]).map(i=>i.trigger.name);
   assert.ok(names.includes('Next slide'),names.join(', '));assert.ok(names.length<=8);
 }));
+test('capture records a stylesheet-backed hover menu without clicking its link',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const page='<!doctype html><html><head><meta charset="utf-8"><title>Hover menu</title><style>nav{padding:20px}.menu{display:none;padding:12px}a:hover + .menu{display:block}a:hover{color:rgb(200,20,20)}</style></head><body><nav><a href="/services" aria-haspopup="true">Services</a><div class="menu"><span>Consulting</span></div></nav></body></html>';
+  await writeFile(join(dir,'bundle/home.html'),page);await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'hover-evidence'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const interactions=evidence.pages[0].views[0].interactions??[],hover=interactions.find(i=>i.trigger.kind==='hover'&&i.trigger.name==='Services');
+  assert.ok(hover,JSON.stringify(interactions.map(i=>i.trigger)));assert.match(hover.geometry.text,/Consulting/);
+}));
 test('capture replays duplicate icon-only carousel controls by occurrence',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const carousel='<!doctype html><html><head><meta charset="utf-8"><title>Carousel</title><style>button{display:block;width:44px;height:44px;margin:20px}</style></head><body><h1>Carousel controls</h1><button class="swiper-button-next"></button><button class="swiper-button-next"></button></body></html>';
   await writeFile(join(dir,'bundle/home.html'),carousel);
