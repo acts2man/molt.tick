@@ -163,7 +163,7 @@ test('material regression in any failing viewport is still rejected',()=>{
   const b=structuredClone(a);b.views[0].score=94;b.views[0].worstBand=84;b.views[1].score=88;b.views[1].worstBand=74;
   assert.equal(improves(a,b),false);
 });
-test('large page gains can be retained while a still-failing interaction temporarily regresses',()=>{
+test('large page gains cannot conceal a material regression in a still-failing interaction',()=>{
   const make=(viewport:string,scoreValue:number,worst:number,menuScore:number,menuWorst:number):Evaluation['views'][number]=>({
     route:'/',viewport,source:'source.png',score:scoreValue,worstBand:worst,pass:false,issues:['page mismatch'],
     interactions:[{id:'menu',trigger:{kind:'button',name:'Navigation Menu'},source:'source-menu.png',score:menuScore,worstBand:menuWorst,pass:false,issues:['menu mismatch']}]
@@ -174,7 +174,12 @@ test('large page gains can be retained while a still-failing interaction tempora
   const after:Evaluation={pass:false,issues:[],views:[
     make('desktop',87.93,55.51,83.11,34.91),make('tablet',84.75,59.66,81.84,52.83),make('mobile',86.02,55.08,82.40,23.05)
   ]};
-  assert.equal(improves(before,after),true);
+  assert.equal(improves(before,after),false);
+});
+test('measured interaction states cannot disappear during a repair',()=>{
+  const before=score(85);before.views[0].worstBand=38;before.views[0].interactions=[{id:'menu',trigger:{kind:'button',name:'Navigation Menu'},source:'menu.png',score:82,worstBand:60,pass:false,issues:['menu mismatch']}];
+  const after=structuredClone(before);after.views[0].score=96;after.views[0].worstBand=90;after.views[0].interactions=[];
+  assert.equal(improves(before,after),false);
 });
 test('a passing interaction can never be broken to improve the rest of the page',()=>{
   const before=score(85);before.views[0].worstBand=38;before.views[0].interactions=[{id:'menu',trigger:{kind:'button',name:'Navigation Menu'},source:'menu.png',score:98,worstBand:95,pass:true,issues:[]}];
