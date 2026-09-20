@@ -157,6 +157,8 @@ function generatedAssetPaths(candidate:Geometry):Set<string>{
   return found;
 }
 export function mediaAssetPresenceIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  // A truncated candidate geometry is an intentionally sampled inventory. Never infer absence from incomplete evidence.
+  if(candidate.truncated)return [];
   const assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath])),used=generatedAssetPaths(candidate);
   const expected=new Map<string,string>();
   for(const element of source.elements){
