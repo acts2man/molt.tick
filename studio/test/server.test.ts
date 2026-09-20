@@ -131,6 +131,40 @@ test('runner handoff preserves repository and live Netlify URLs',async()=>{
  const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.outputRepoUrl,'https://github.com/acts2man/example-com-react');assert.equal(job.liveSiteUrl,'https://example-com-react.netlify.app');
 });
 
+test('runner records only job-owned reservation metadata and publication state',async()=>{
+ const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));
+ await handle(s.req('runner/'+ID+'/events','POST',{message:'reserved',reservedOutputRepository:'acts2man/example-com-react-v2',reservedNetlifySiteId:'site-12345678'}),s.services);
+ let job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.reservedOutputRepository,'acts2man/example-com-react-v2');assert.equal(job.reservedNetlifySiteId,'site-12345678');
+ await handle(s.req('runner/'+ID+'/events','POST',{message:'ignore foreign repo',reservedOutputRepository:'acts2man/unrelated-project',sourcePublished:true}),s.services);
+ job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.reservedOutputRepository,'acts2man/example-com-react-v2');assert.equal(job.sourcePublished,true);
+});
+test('completed hard cancellation cleans unused GitHub and Netlify reservations during Studio reconciliation',async()=>{
+ const s=setup();let githubDeleted='',netlifyDeleted='';
+ s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),status:'cancelling',runId:123,reservedOutputRepository:'acts2man/example-com-react',reservedNetlifySiteId:'site-12345678'});
+ s.services.github=async(_token,path,init)=>{
+   if(path==='/repos/acts2man/molt.tick/actions/runs/123')return{status:'completed',conclusion:'cancelled'};
+   if(path==='/repos/acts2man/molt.tick/actions/runs/123/artifacts')return{artifacts:[]};
+   if(path==='/repos/acts2man/example-com-react'&&init?.method==='DELETE'){githubDeleted=path;return{};}
+   return{};
+ };
+ s.services.cleanupNetlify=async(token,siteId)=>{assert.match(token,/netlify_test_token/);netlifyDeleted=siteId;};
+ const r=await handle(s.req('jobs/'+ID),s.services);assert.equal(r.status,200);
+ const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.status,'cancelled');assert.ok(job.reservationCleanupAt);assert.equal(job.reservationCleanupError,undefined);
+ assert.equal(githubDeleted,'/repos/acts2man/example-com-react');assert.equal(netlifyDeleted,'site-12345678');
+});
+test('hard cancellation preserves reservations after useful React source was published',async()=>{
+ const s=setup();let deleted=false;
+ s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),status:'cancelling',runId:123,reservedOutputRepository:'acts2man/example-com-react',reservedNetlifySiteId:'site-12345678',sourcePublished:true});
+ s.services.github=async(_token,path,init)=>{
+   if(path==='/repos/acts2man/molt.tick/actions/runs/123')return{status:'completed',conclusion:'cancelled'};
+   if(path==='/repos/acts2man/molt.tick/actions/runs/123/artifacts')return{artifacts:[]};
+   if(init?.method==='DELETE')deleted=true;
+   return{};
+ };
+ s.services.cleanupNetlify=async()=>{deleted=true;};
+ await handle(s.req('jobs/'+ID),s.services);assert.equal(deleted,false);assert.equal(s.map.get('jobs/acts2man/'+ID).sourcePublished,true);
+});
+
 test('old GitHub connections are not run-ready until delivery permissions are verified',async()=>{
  const s=setup();const record=s.map.get('integrations/owner/github-v1');delete record.deliveryVerifiedAt;delete record.deliveryVersion;s.map.set('integrations/owner/github-v1',record);
  const settings=await (await handle(s.req('settings'),s.services)).json();assert.equal(settings.githubDeliveryReady,false);assert.equal(settings.ready,false);
