@@ -51,15 +51,20 @@ export async function readBundle(root: string): Promise<Bundle> {
 }
 /** Script string avoids transpiler-injected helpers in browser evaluation. */
 const GEOMETRY = `(() => {
- const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility'];
+ const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility','appearance','accent-color'];
  const allNodes=Array.from(document.querySelectorAll('body *')); const index=new Map(allNodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
- const attrs=(el)=>Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
+ const attrs=(el)=>{
+  const out=Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel','placeholder','disabled','readonly'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
+  if(el.tagName==='INPUT'&&/^(checkbox|radio)$/i.test(el.type))out.checked=String(Boolean(el.checked));
+  if(el.tagName==='SELECT')out['selected-text']=String(el.selectedOptions?.[0]?.textContent||'').replace(/\s+/g,' ').trim().slice(0,160);
+  return out;
+ };
  const candidates=allNodes.filter(el=>{const tag=el.tagName.toLowerCase();if(/^(script|style|noscript|link|meta)$/.test(tag))return false;const b=el.getBoundingClientRect();return !!b.width&&!!b.height&&b.right>0&&b.left<innerWidth;});
  let nodes=candidates,truncated=candidates.length>1400;
  const evenly=(items,limit)=>items.length<=limit?items:Array.from({length:limit},(_,i)=>items[Math.round(i*(items.length-1)/(limit-1))]);
  if(truncated){
-  const priority=candidates.filter(el=>/^(header|nav|main|section|article|footer|h[1-6]|p|li|img|button|form)$/.test(el.tagName.toLowerCase()));
+  const priority=candidates.filter(el=>/^(header|nav|main|section|article|footer|h[1-6]|p|li|img|button|form|input|select|textarea)$/.test(el.tagName.toLowerCase()));
   const selected=[],seen=new Set();
   for(const el of [...evenly(priority,700),...evenly(candidates,1400)]){if(seen.has(el))continue;seen.add(el);selected.push(el);if(selected.length>=1400)break;}
   nodes=selected.sort((a,b)=>Number(index.get(a))-Number(index.get(b)));
