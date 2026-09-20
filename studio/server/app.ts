@@ -142,7 +142,9 @@ export async function handle(req: Request, services: Services): Promise<Response
         if(event.previewReady===true)job.previewReady=true;
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
         if(event.report){job.report=safeReport(event.report);job.status=(event.deploymentError||event.outputRepoError)?'needs-work':job.report.status;job.progress=100;job.progressStage='Complete';job.progressUpdatedAt=now;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);job.progressStage='Stopped';job.progressUpdatedAt=now;}else if(job.status!=='cancelling')job.status='running';
-        await store.setJSON(key,job);return json({saved:true});
+        await store.setJSON(key,job);
+        if((event.report||event.error)&&job.bundleId)await deletePrefix(store,bundleKey(OWNER,job.bundleId));
+        return json({saved:true});
       }
       throw new HttpError(404,'Runner route not found.');
     }
@@ -292,7 +294,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         let workflow:any=null,artifacts:any[]=[];
         if(job.runId&&token){
           try {workflow=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}`);
-            if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();await store.setJSON(key,job);}
+            if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();await store.setJSON(key,job);if(job.bundleId)await deletePrefix(store,bundleKey(owner,job.bundleId));}
             if(workflow.status==='completed'){const a=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}/artifacts`);artifacts=a.artifacts.filter((f:any)=>!f.expired).map((f:any)=>({name:f.name,size:f.size_in_bytes,url:`https://github.com/${REPOSITORY}/actions/runs/${job!.runId}/artifacts/${f.id}`}));}
           }catch{}
         }else if(ACTIVE.has(job.status)&&token) {
@@ -315,6 +317,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         await store.delete(key);
         await deletePrefix(store,`images/${owner}/${id}/`);
         await deletePrefix(store,`previews/${owner}/${id}/`);
+        if(job.bundleId)await deletePrefix(store,bundleKey(owner,job.bundleId));
         return json({deleted:true,outputRepoUrl,note:outputRepoUrl?'The generated GitHub repository was not deleted.':null});
       }
       if(method==='POST' && path[2]==='cancel') {
