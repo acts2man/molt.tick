@@ -97,7 +97,7 @@ function visionFirstContext(evidence:Evidence,page:EvidencePage){
 export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string,savedSource?:SavedSourceEvidence):string{
   const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
-    const saved=packSavedSource(savedSource,htmlLimit,styleCount,styleLimit);
+    const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
     return JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
       editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
@@ -106,7 +106,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   // Keep detailed live geometry first. Saved HTML/CSS is supplemental and is progressively clipped
   // before we ever fall back to the vision-first outline. This prevents a ZIP from crowding out the
   // browser evidence that produced the strongest visual reconstruction.
-  for(const [g,t,f,h,sc,sl] of [[180,42000,42000,18000,8,1000],[150,36000,36000,15000,7,900],[110,28000,30000,12000,6,800],[80,20000,22000,9000,4,650],[56,15000,16000,6500,3,500]] as const){
+  for(const [g,t,f,h,sc,sl] of [[180,42000,42000,18000,8,1000],[150,36000,36000,15000,7,900],[110,28000,30000,12000,6,800],[80,20000,22000,9000,4,650],[56,15000,16000,6500,3,500],[36,12000,14000,0,0,0]] as const){
     const text=build(g,t,f,h,sc,sl); if(text.length<=300000)return text;
   }
   const visionFirst=JSON.stringify({
