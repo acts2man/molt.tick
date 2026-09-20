@@ -41,7 +41,7 @@ This public repository's Actions artifacts are intended for public website mater
 ## Develop
 
 ```sh
-npm --prefix studio install
+npm --prefix studio ci
 npm --prefix studio run dev
 npm --prefix studio run build
 npm --prefix studio test
