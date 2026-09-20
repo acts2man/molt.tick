@@ -137,9 +137,10 @@ try{
   await progress('Zero-cost preflight: fresh runner identity verified.');
   await studio('/preview?file=preflight.json',{method:'PUT',headers:{'content-type':'application/octet-stream'},body:new TextEncoder().encode(JSON.stringify({job:id,at:new Date().toISOString()}))});
   const plannedRepo=await reserveOutputRepository(process.cwd(),'acts2man',job.outputRepo,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');reservedRepository=plannedRepo.repository;
-  await progress(`Reserved output repository and proved workflow/secret access: ${plannedRepo.repository}`,{outputRepoUrl:plannedRepo.url});
+  await progress(`Reserved output repository and proved workflow/secret access: ${plannedRepo.repository}`,{outputRepoUrl:plannedRepo.url,reservedOutputRepository:plannedRepo.repository});
   await preflightNetlify(process.env.MOLT_NETLIFY_TEAM_SLUG??'',process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
   const plannedSite=await createNetlifySite(process.env.MOLT_NETLIFY_TEAM_SLUG??'',plannedRepo.repository.split('/')[1],process.env.MOLT_NETLIFY_AUTH_TOKEN??'');reservedSite=plannedSite;
+  await progress(`Reserved Netlify site for delivery: ${plannedSite.name}`,{reservedNetlifySiteId:plannedSite.id});
   const netlifyProbeDir=resolve('studio-work/netlify-preflight');await mkdir(netlifyProbeDir,{recursive:true});
   await writeFile(join(netlifyProbeDir,'index.html'),'<!doctype html><meta name="robots" content="noindex"><title>Molt delivery preflight</title><p>Molt reserved this deployment target before reconstruction.</p>');
   await deployNetlifyDirectory(netlifyProbeDir,plannedSite.id,process.env.MOLT_NETLIFY_AUTH_TOKEN??'');
