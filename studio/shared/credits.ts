@@ -12,7 +12,7 @@ export const PLANS = [
   { id: 'agency', name: 'Agency', credits: 1500, for: 'For a growing portfolio.', feature: 'A larger shared monthly allocation.' },
 ] as const;
 export function estimateCredits(pages: number, complexity: Complexity, repairs = 2) {
-  if (!Number.isInteger(pages) || pages < 1 || pages > 100 || !Object.hasOwn(COMPLEXITY, complexity) || !Number.isInteger(repairs) || repairs < 0 || repairs > 6) throw new Error('Invalid estimate inputs');
+  if (!Number.isInteger(pages) || pages < 1 || pages > 100 || !Object.hasOwn(COMPLEXITY, complexity) || !Number.isInteger(repairs) || repairs < 0 || repairs > 20) throw new Error('Invalid estimate inputs');
   const setup = 10, pageCredits = pages * COMPLEXITY[complexity].credits;
   const extraRefinement = Math.ceil(pageCredits * Math.max(0, repairs - 2) * .15);
   return { version: CREDIT_VERSION, setup, pageCredits, extraRefinement, total: setup + pageCredits + extraRefinement, pages, complexity, repairs, binding: false as const };
