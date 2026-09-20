@@ -87,7 +87,7 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
     .slice(0,limit).map(e=>JSON.parse(remap(JSON.stringify(compactElement(e)))));
   return {route:page.route,title:page.title,file:routeFile(page.route),fullVisibleText:desktopText,mediaQueries,
     views:page.views.map((v,index)=>({
-      viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,
+      viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,rootStyle:v.geometry.rootStyle,bodyStyle:v.geometry.bodyStyle,
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
         geometry:select(state.geometry.elements,Math.min(70,geometryLimit))})),
@@ -96,15 +96,40 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
     }))};
 }
 function relevantFiles(files:FileChange[],page:EvidencePage):FileChange[]{
-  const pageFile=routeFile(page.route);
-  return files.filter(f=>f.path===pageFile||f.path==='src/site.css'||f.path.startsWith('src/components/')||f.path.startsWith('src/styles/'));
+  const pageFile=routeFile(page.route),byPath=new Map(files.map(file=>[file.path,file])),pageSource=byPath.get(pageFile);
+  // Before a route exists, show the available shared workspace so a later first-pass page can reuse it.
+  if(!pageSource)return files.filter(f=>f.path==='src/site.css'||f.path.startsWith('src/components/')||f.path.startsWith('src/styles/'));
+  const wanted=new Set<string>([pageFile]);if(byPath.has('src/site.css'))wanted.add('src/site.css');
+  const queue=[pageFile];
+  while(queue.length){
+    const current=queue.shift()!,file=byPath.get(current);if(!file)continue;
+    for(const match of file.content.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)){
+      const spec=match[1];if(!spec.startsWith('.'))continue;
+      const base=posix.normalize(posix.join(posix.dirname(current),spec));
+      const target=[base,base+'.tsx',base+'.ts',base+'.css',base+'/index.tsx',base+'/index.ts'].find(candidate=>byPath.has(candidate));
+      if(target&&!wanted.has(target)){wanted.add(target);queue.push(target);}
+    }
+  }
+  return [...wanted].map(path=>byPath.get(path)!).filter(Boolean);
 }
 function relevantAssets(evidence:Evidence,page:EvidencePage){
   const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),interactions:(v.interactions??[]).map(i=>i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})))})));
   return evidence.assets.filter(a=>haystack.includes(a.original)).map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath}));
 }
-function boundedFiles(files:FileChange[],page:EvidencePage,perFile=55000){
-  return relevantFiles(files,page).map(f=>({path:f.path,content:clipped(f.content,perFile)}));
+function boundedFiles(files:FileChange[],page:EvidencePage,perFile=60000){
+  const pageFile=routeFile(page.route);
+  return relevantFiles(files,page).map(f=>{
+    const keepFull=f.path===pageFile||f.content.length<=perFile;
+    return {path:f.path,content:keepFull?f.content:windowed(f.content,perFile),complete:keepFull,
+      ...(keepFull?{}:{note:'Existing file is only partially shown. Do NOT replace this path in this call; create a smaller route-specific file or edit a fully supplied caller instead.'})};
+  });
+}
+export function protectedPromptPaths(prompt:string):Set<string>{
+  try{const value=JSON.parse(prompt);return new Set((value.currentFiles??[]).filter((file:any)=>file?.complete===false&&typeof file.path==='string').map((file:any)=>file.path));}catch{return new Set();}
+}
+export function assertNoPartialFileRewrite(prompt:string,changes:FileChange[]):void{
+  const protectedPaths=protectedPromptPaths(prompt);
+  for(const change of changes)if(protectedPaths.has(change.path))throw new Error(`Model attempted to replace partially supplied file ${change.path}; split the change into a smaller route-specific file instead`);
 }
 export function assertInitialGenerationIsolation(before:FileChange[],changes:FileChange[],pageFile:string,pageIndex:number):void{
   if(pageIndex===0)return;
@@ -143,7 +168,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
     return JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
-      editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
+      editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
   };
@@ -162,7 +187,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   const visionFirst=JSON.stringify({
     task:task+' The attached desktop, tablet and mobile screenshots are the primary visual authority. Implement from the screenshots plus this compact structural outline.',
     sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
-    editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],
+    editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
     reference:visionFirstContext(evidence,page),
     ...(savedSource?{savedSource:{...savedSource,html:windowed(savedSource.html,26000),styles:savedSource.styles.slice(0,12).map(style=>({...style,content:windowed(style.content,1800)}))}}:{}),
     assets:assets.slice(0,100).map(a=>a.path),
@@ -222,7 +247,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
     // A malformed first reply gets one self-correction opportunity with its exact validation error.
     let error='';let done=false;
     for(let attempt=0;attempt<2&&!done;attempt++){
-      try{const reply=await model.complete({...request,prompt:request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'')},signal);assertInitialGenerationIsolation(files,reply.files,routeFile(page.route),pageIndex);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(page.route)))throw new Error('Requested page file was not produced');done=true;}
+      try{const fullPrompt=request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'');const reply=await model.complete({...request,prompt:fullPrompt},signal);assertNoPartialFileRewrite(request.prompt,reply.files);assertInitialGenerationIsolation(files,reply.files,routeFile(page.route),pageIndex);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(page.route)))throw new Error('Requested page file was not produced');done=true;}
       catch(e){await restore(outDir,files);error=(e as Error).message;if(attempt===1)throw e;}
     }
   }
@@ -244,7 +269,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const autopsy=rejectedRepairAutopsy(best,history,page.route);
       const rejectionGuidance=autopsy?` Most recent rejected repair autopsy: ${JSON.stringify(autopsy)}. Treat this as causal feedback: preserve the positive deltas, explicitly avoid the negative deltas and added issues, and make a narrower repair rather than repeating the rejected strategy.`:'';
       const savedSource=await sourceFor(page.route);
-      return model.complete({prompt:reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Aim for a visually exact 100% reconstruction. The evaluator's acceptance floor is at least 97% overall pixel match and at least 92% in the weakest measured band, with no content/interaction issues and without regressing any already-correct viewport. Do not stop optimizing merely because the acceptance floor is crossed when the attached evidence still shows visible differences. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}.${rejectionGuidance} The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. When a diagnostic gives source and generated spacing in pixels, correct toward the source measurement directly; do not eyeball the whitespace. Likewise, treat source font-weight, font-style, text-align and horizontal position as exact targets: do not replace bold with regular, italic with normal, or centered text with left/right alignment. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`,savedSource),images:await repairImages(checks)},signal);
+      const repairPrompt=reconstructionPrompt(evidence,page,await snapshot(outDir),`Repair round ${round}. Aim for a visually exact 100% reconstruction. The evaluator's acceptance floor is at least 97% overall pixel match and at least 92% in the weakest measured band, with no content/interaction issues and without regressing any already-correct viewport. Do not stop optimizing merely because the acceptance floor is crossed when the attached evidence still shows visible differences. Current targets: ${JSON.stringify(targets)}. Recent attempts: ${JSON.stringify(historySummary)}.${rejectionGuidance} The attached DIFF heatmap and source/candidate crops show the worst measured bands. Fix the largest shared geometry/typography causes first, then viewport-specific spacing. When a diagnostic gives source and generated spacing in pixels, correct toward the source measurement directly; do not eyeball the whitespace. Likewise, treat source font-weight, font-style, text-align and horizontal position as exact targets: do not replace bold with regular, italic with normal, or centered text with left/right alignment. Do not invent hidden content merely to satisfy diagnostics; reproduce what is actually visible in the reference screenshots. Keep correct regions intact.`,savedSource);const reply=await model.complete({prompt:repairPrompt,images:await repairImages(checks)},signal);assertNoPartialFileRewrite(repairPrompt,reply.files);return reply;
     },
     apply:reply=>apply(outDir,reply.files,allowed),
     save:async(best,attempts)=>{
