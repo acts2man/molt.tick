@@ -63,7 +63,10 @@ export async function referenceImages(views:ReferenceView[]):Promise<ImageInput[
 }
 export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
   const result:ImageInput[]=[];
-  const views=checks.slice(0,3);
+  const views=[...checks].sort((a,b)=>{
+    if(a.pass!==b.pass)return a.pass?1:-1;
+    return (a.worstBand??101)-(b.worstBand??101)||(a.score??101)-(b.score??101);
+  }).slice(0,3);
   for(const v of views){
     const source=await loadPng(v.source);const y=Math.max(0,(v.worstY??0)-100);
     result.push(input(`${v.viewport} SOURCE complete overview`,overview(source)));
