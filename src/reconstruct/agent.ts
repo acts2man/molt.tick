@@ -131,8 +131,11 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
       viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,rootStyle:v.geometry.rootStyle,bodyStyle:v.geometry.bodyStyle,
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
-        geometry:select(state.geometry.elements,Math.min(70,geometryLimit))})),
+        geometry:select(state.geometry.elements,Math.min(70,geometryLimit)),carousels:carouselInventory(state.geometry,remap)})),
+      criticalTypography:criticalTypography(v.geometry.elements),
       spacing:spacingGuide(v.geometry.elements,Math.min(60,geometryLimit)),
+      mediaSlots:exactMediaSlots(v.geometry.elements,remap),
+      carousels:carouselInventory(v.geometry,remap),
       geometry:select(v.geometry.elements,geometryLimit),
     }))};
 }
@@ -208,7 +211,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
-    return JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+    return JSON.stringify({task,fidelityContract:'Treat computed typography, spacing, route identity, media-slot asset paths and carousel slide inventories as exact constraints. Never substitute, shuffle or reuse a different image merely because it is visually plausible. Hidden carousel slides are source content and must be implemented in the same count, order and image-to-slide mapping.',fidelityContract:'Typography sizes/weights, spacing, media-slot identity and carousel inventories are exact. Do not shuffle assets, duplicate a different image, collapse a slideshow to one image, or invent a shorter carousel.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
       editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
