@@ -239,6 +239,12 @@ test('default input type and explicit text type are equivalent',()=>{
   const candidate=simpleGeometry([{key:'2',tag:'input',text:'',x:0,y:0,width:200,height:40,style,attributes:{type:'text',placeholder:'Name',disabled:'false',readonly:'false'}}]);
   assert.deepEqual(formControlIssues(source,candidate),[]);
 });
+test('priority typography diagnostics give exact source and generated heading sizes',()=>{
+  const source=simpleGeometry([{key:'s',tag:'h1',text:'Sacramento Tree Services',x:100,y:100,width:900,height:72,style:{'font-family':'Arvo','font-size':'58px','font-weight':'700','font-style':'normal','line-height':'72px','letter-spacing':'0px','text-align':'center','text-transform':'uppercase','color':'rgb(255, 255, 255)'}}]);
+  const candidate=simpleGeometry([{key:'c',tag:'h1',text:'Sacramento Tree Services',x:100,y:100,width:700,height:52,style:{'font-family':'Arvo','font-size':'42px','font-weight':'700','font-style':'normal','line-height':'52px','letter-spacing':'0px','text-align':'center','text-transform':'uppercase','color':'rgb(255, 255, 255)'}}]);
+  const issues=typographyIssues(source,candidate);
+  assert.ok(issues.some(i=>/font-size source 58px, generated 42px/.test(i)&&/line-height source 72px, generated 52px/.test(i)),issues.join('\n'));
+});
 test('spacing evaluator reports exact element-to-element gap deltas',()=>{
   const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
   const source=simpleGeometry([
@@ -347,20 +353,20 @@ test('auto-discovery distinguishes broken route navigation from engine-wide capt
   assert.equal(skippableDiscoveredCaptureError(new Error('Source page is empty')),true);
   assert.equal(skippableDiscoveredCaptureError(new Error('Asset budget exceeded')),false);
 });
-test('page discovery keeps navigation first and promotes core business pages over incidental content',()=>{
+test('page discovery reserves capped scope for core business pages regardless of discovery region',()=>{
   const links=prioritizeDiscoveredLinks([
     {href:'https://example.com/blog',region:'nav',index:1},
-    {href:'https://example.com/about',region:'header',index:2},
+    {href:'https://example.com/about2',region:'header',index:2},
     {href:'https://example.com/news',region:'main',index:3},
     {href:'https://example.com/feature-story',region:'main',index:4},
-    {href:'https://example.com/tree-services',region:'main',index:5},
+    {href:'https://example.com/ourservices2',region:'main',index:5},
     {href:'https://example.com/privacy',region:'footer',index:8},
-    {href:'https://example.com/contact',region:'footer',index:9},
-    {href:'https://example.com/gallery',region:'footer',index:10},
-    {href:'https://example.com/about',region:'footer',index:11},
+    {href:'https://example.com/contact2',region:'sitemap',index:10009},
+    {href:'https://example.com/gallery-2',region:'footer',index:10},
+    {href:'https://example.com/about2',region:'footer',index:11},
   ]);
   assert.deepEqual(links,[
-    'https://example.com/blog','https://example.com/about','https://example.com/tree-services','https://example.com/contact','https://example.com/gallery','https://example.com/feature-story','https://example.com/news','https://example.com/privacy'
+    'https://example.com/about2','https://example.com/ourservices2','https://example.com/contact2','https://example.com/gallery-2','https://example.com/blog','https://example.com/feature-story','https://example.com/news','https://example.com/privacy'
   ]);
 });
 test('bundle validates explicit routes and files before browsing',()=>temporary(async dir=>{await writeFile(join(dir,'home.html'),'<h1>Home</h1>');await writeFile(join(dir,'bundle.json'),JSON.stringify({site:'https://example.com',pages:[{route:'/',file:'home.html'}]}));assert.equal((await readBundle(dir)).pages.length,1);await writeFile(join(dir,'bundle.json'),JSON.stringify({site:'https://example.com',pages:[{route:'/',file:'home.html'},{route:'/',file:'home.html'}]}));await assert.rejects(readBundle(dir),/Duplicate/);}));
