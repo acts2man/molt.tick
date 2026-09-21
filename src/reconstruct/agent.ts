@@ -211,7 +211,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
-    return JSON.stringify({task,fidelityContract:'Treat computed typography, spacing, route identity, media-slot asset paths and carousel slide inventories as exact constraints. Never substitute, shuffle or reuse a different image merely because it is visually plausible. Hidden carousel slides are source content and must be implemented in the same count, order and image-to-slide mapping.',fidelityContract:'Typography sizes/weights, spacing, media-slot identity and carousel inventories are exact. Do not shuffle assets, duplicate a different image, collapse a slideshow to one image, or invent a shorter carousel.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+    return JSON.stringify({task,fidelityContract:'Treat computed typography, spacing, route identity, media-slot asset paths and carousel slide inventories as exact constraints. Never substitute, shuffle or reuse a different image merely because it is visually plausible. Hidden carousel slides are source content and must be implemented in the same count, order and image-to-slide mapping. Never collapse a slideshow to a single image.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
       editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
@@ -230,6 +230,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   }
   const visionFirst=JSON.stringify({
     task:task+' The attached desktop, tablet and mobile screenshots are the primary visual authority. Implement from the screenshots plus this compact structural outline.',
+    fidelityContract:'Typography sizes/weights, spacing, media-slot identity and carousel inventories are exact. Do not shuffle assets, duplicate a different image, collapse a slideshow to one image, or invent a shorter carousel.',
     sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
     reference:visionFirstContext(evidence,page),
@@ -242,6 +243,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   if(visionFirst.length<=300000)return visionFirst;
   return JSON.stringify({
     task:task+' Use the attached screenshots as the primary visual authority. This source required an ultra-compact evidence fallback; prioritize visual fidelity, visible copy, responsive layout and local assets.',
+    fidelityContract:'Keep exact type scale, media-slot identity and full carousel/slider content; never substitute or shuffle images.',
     sourceSite:evidence.site,route:page.route,file:routeFile(page.route),title:page.title,
     visibleText:clipped(page.views[0]?.geometry.text??'',9000),
     viewports:page.views.map(v=>({viewport:v.viewport,pageHeight:v.geometry.height})),
