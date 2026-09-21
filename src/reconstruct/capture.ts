@@ -17,6 +17,10 @@ export interface CaptureOptions {
 }
 interface Bundle { site: string; pages: Array<{ route: string; file: string }> }
 export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'; index:number }
+export function skippableDiscoveredCaptureError(error:unknown):boolean{
+  const message=error instanceof Error?error.message:String(error);
+  return /page\.goto:|net::ERR_|\bHTTP \d{3}\b|Source page is empty|Page text exceeds reconstruction context budget/i.test(message);
+}
 export function prioritizeDiscoveredLinks(links:DiscoveredLink[]):string[]{
   const bucket=(item:DiscoveredLink)=>{
     if(item.region==='nav'||item.region==='header')return 0;
@@ -270,7 +274,8 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
     }
   };
   let local: Awaited<ReturnType<typeof serve>> | undefined;
-  let targets: Array<{route:string;url:string}> = [];
+  let targets: Array<{route:string;url:string;discovered?:boolean}> = [];
+  const autoDiscovery=Boolean(options.url&&!options.urls?.length&&!options.bundleDir);
   if(options.bundleDir){
     const bundle=await readBundle(options.bundleDir);
     if(bundle.pages.length>maxPages)throw new Error('Bundle has more pages than maxPages; no pages were silently skipped');
@@ -302,23 +307,26 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
   options.signal.addEventListener('abort',stop,{once:true});
   try{
     options.signal.throwIfAborted(); engine=await browser();
-    if(options.url&&!options.urls?.length&&!options.bundleDir){
+    if(autoDiscovery){
       const ctx=await engine.newContext({viewport:views[0],serviceWorkers:'block',acceptDownloads:false});
       try{
         await restrictNetwork(ctx);const page=await ctx.newPage();
         const resp=await page.goto(targets[0].url,{waitUntil:'load',timeout:30000});
         if(!resp?.ok())throw new Error(`Source returned HTTP ${resp?.status()}`);
         const discovered=await page.evaluate(`Array.from(document.querySelectorAll('header a[href],nav a[href],main a[href],footer a[href]')).map((a,index)=>({href:a.href,region:a.closest('nav')?'nav':a.closest('header')?'header':a.closest('main')?'main':'footer',index}))`) as DiscoveredLink[];
-        const found=prioritizeDiscoveredLinks(discovered),known=new Set(targets.map(t=>t.route));
-        for(const value of found){try{const u=new URL(value);if(u.origin!==new URL(evidence.site).origin||u.search||/\.(pdf|png|jpg|zip|mp4)$/i.test(u.pathname))continue;const route=routePath(u.pathname);if(!known.has(route)){targets.push({route,url:u.origin+route});known.add(route);}}catch{}}
-        if(targets.length>maxPages){evidence.warnings.push(`Discovery found ${targets.length} routes; only the first ${maxPages} were selected.`);targets=targets.slice(0,maxPages);}
+        const found=prioritizeDiscoveredLinks(discovered),known=new Set(targets.map(t=>t.route)),candidateLimit=Math.min(100,Math.max(maxPages*3,20));
+        for(const value of found){try{const u=new URL(value);if(u.origin!==new URL(evidence.site).origin||u.search||/\.(pdf|png|jpg|zip|mp4)$/i.test(u.pathname))continue;const route=routePath(u.pathname);if(!known.has(route)){targets.push({route,url:u.origin+route,discovered:true});known.add(route);if(targets.length>=candidateLimit)break;}}catch{}}
+        if(targets.length>maxPages)evidence.warnings.push(`Discovery found ${targets.length} candidate routes; Molt will retain the first ${maxPages} that capture successfully.`);
       }finally{await ctx.close();}
     }
-    if(targets.length>maxPages||new Set(targets.map(t=>t.route)).size!==targets.length)throw new Error('Too many or duplicate requested routes');
+    if((!autoDiscovery&&targets.length>maxPages)||new Set(targets.map(t=>t.route)).size!==targets.length)throw new Error('Too many or duplicate requested routes');
     const stabilityEnabled=(options.sourceStability??true)&&Boolean(options.url)&&!local;
     const adaptiveEnabled=(options.adaptiveViewports??Boolean(options.url))&&options.viewports===undefined;
     const stabilityFingerprints=new Map<string,string>();
     for(const target of targets){
+      if(autoDiscovery&&evidence.pages.length>=maxPages)break;
+      const warningStart=evidence.warnings.length,blockerStart=evidence.blockers.length;
+      try{
       if(stabilityEnabled){
         const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         try{
@@ -405,7 +413,13 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         }finally{await ctx.close();}
       }
       evidence.pages.push(item);
+      }catch(error){
+        if(!target.discovered||options.signal.aborted||!skippableDiscoveredCaptureError(error))throw error;
+        evidence.warnings.length=warningStart;evidence.blockers.length=blockerStart;
+        evidence.warnings.push(`${target.route}: skipped discovered route because source capture failed (${(error as Error).message}).`);
+      }
     }
+    if(autoDiscovery&&evidence.pages.length<maxPages)evidence.warnings.push(`Discovery retained ${evidence.pages.length} of the requested maximum ${maxPages} pages after validating available candidates.`);
     evidence.assets=[...assetMap.values()];
     for(const face of faces){
       let resolved=face;
