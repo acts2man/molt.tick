@@ -156,9 +156,21 @@ try{
   let bundleDir:string|undefined;
   if(job.bundleId){
     await progress('Retrieving the saved-page bundle.');bundleDir=resolve('studio-work/bundle');await mkdir(bundleDir,{recursive:true});
-    const manifest=await (await studio('/bundle')).json() as {files:{path:string;size:number}[]};
-    if(manifest.files.length>300)throw new Error('Bundle has too many files');let total=0;
-    for(const f of manifest.files){if(f.size>4_000_000||(total+=f.size)>50_000_000)throw new Error('Bundle size limit exceeded');const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});const bytes=await (await studio(`/bundle?file=${encodeURIComponent(f.path)}`)).arrayBuffer();if(bytes.byteLength!==f.size)throw new Error('Bundle file size mismatch');await writeFile(dest,Buffer.from(bytes));}
+    const manifest=await (await studio('/bundle')).json() as {files:{path:string;size:number;parts?:number}[]};
+    if(manifest.files.length>BUNDLE_MAX_FILES)throw new Error('Bundle has too many files');let total=0;
+    for(const f of manifest.files){
+      if(f.size>BUNDLE_MAX_FILE_BYTES||(total+=f.size)>BUNDLE_MAX_TOTAL_BYTES)throw new Error('Bundle size limit exceeded');
+      const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});
+      const parts=Math.max(1,Math.ceil(f.size/BUNDLE_CHUNK_BYTES)),chunks:Buffer[]=[];let received=0;
+      for(let part=0;part<parts;part++){
+        const response=await studio(`/bundle?file=${encodeURIComponent(f.path)}${parts>1?`&part=${part}`:''}`);
+        const bytes=Buffer.from(await response.arrayBuffer()),expected=part===parts-1?f.size-part*BUNDLE_CHUNK_BYTES:BUNDLE_CHUNK_BYTES;
+        if(bytes.length!==expected)throw new Error(`Bundle file chunk size mismatch for ${f.path} (${part+1}/${parts})`);
+        chunks.push(bytes);received+=bytes.length;
+      }
+      if(received!==f.size)throw new Error('Bundle file size mismatch');
+      await writeFile(dest,Buffer.concat(chunks,received));
+    }
   }
   const elapsedBeforeModel=Date.now()-runnerStartedAt;
   const availableMinutes=availableAgentMinutes(budget.agentMinutes,budget.runnerMinutes,budget.deliveryReserveMinutes,elapsedBeforeModel);
