@@ -234,7 +234,7 @@ export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,numb
   };
   return eligible.sort((a,b)=>rank(a)-rank(b))[0];
 }
-function shellRegion(elements:any[],tag:'header'|'nav'|'footer',limit=28){
+function shellRegion(elements:any[],tag:'header'|'nav'|'footer',limit=8){
   const byKey=new Map(elements.map(e=>[String(e.key??''),e]));
   const insideRegion=(element:any)=>{
     let current=element,depth=0;
@@ -244,27 +244,38 @@ function shellRegion(elements:any[],tag:'header'|'nav'|'footer',limit=28){
     }
     return false;
   };
+  const compact=(e:any)=>({
+    tag:e.tag,text:clipped(String(e.text||'').replace(/\s+/g,' ').trim(),120),
+    x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
+    ...(e.href?{href:clipped(e.href,180)}:{}),...(e.src?{src:clipped(e.src,180)}:{}),
+    ...(e.style?{style:Object.fromEntries(['display','position','width','height','justify-content','align-items','gap','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','color','background','background-image','border','border-radius'].map(key=>[key,e.style[key]]).filter(([,value])=>value&&value!=='none'&&value!=='normal'&&value!=='auto'))}:{})
+  });
   return elements.filter(e=>insideRegion(e)&&(e.text||e.src||e.href||e.tag===tag||visualSurface(e)))
-    .sort((a,b)=>a.y-b.y||a.x-b.x).slice(0,limit).map(compactElement);
+    .sort((a,b)=>a.y-b.y||a.x-b.x).slice(0,limit).map(compact);
 }
 export function siteWideShellContext(evidence:Evidence){
-  return {
+  const context={
     purpose:'Site-wide shared-shell evidence. Compare every route before authoring shared header, navigation, footer, global page frame, typography and responsive shell. Preserve real route-specific variations instead of assuming the first page represents the whole site.',
     routes:evidence.pages.map(page=>({
       route:page.route,title:page.title,
       views:page.views.map(view=>({
-        viewport:view.viewport,pageHeight:view.geometry.height,rootStyle:view.geometry.rootStyle,bodyStyle:view.geometry.bodyStyle,
+        viewport:view.viewport,
+        rootStyle:Object.fromEntries(['font-family','font-size','color','background'].map(key=>[key,view.geometry.rootStyle?.[key]]).filter(([,value])=>value)),
+        bodyStyle:Object.fromEntries(['margin','padding','font-family','font-size','color','background','background-image'].map(key=>[key,view.geometry.bodyStyle?.[key]]).filter(([,value])=>value)),
         header:shellRegion(view.geometry.elements,'header'),
         navigation:shellRegion(view.geometry.elements,'nav'),
         footer:shellRegion(view.geometry.elements,'footer'),
-        motion:motionSummary(view.motion,2),
-        interactions:(view.interactions??[]).filter(state=>state.trigger.kind==='hover'||/menu|nav|drawer|toggle/i.test(state.trigger.name)).slice(0,3).map(state=>({
-          trigger:state.trigger,visibleText:clipped(state.geometry.text,1800),
-          header:shellRegion(state.geometry.elements,'header',16),navigation:shellRegion(state.geometry.elements,'nav',16)
+        motion:view.motion?{libraries:view.motion.libraries,hasEntranceMotion:view.motion.hasEntranceMotion,hasScrollLinkedMotion:view.motion.hasScrollLinkedMotion,hasStickyOrFixedMotion:view.motion.hasStickyOrFixedMotion}:undefined,
+        interactions:(view.interactions??[]).filter(state=>state.trigger.kind==='hover'||/menu|nav|drawer|toggle/i.test(state.trigger.name)).slice(0,2).map(state=>({
+          trigger:state.trigger,visibleText:clipped(state.geometry.text,700),
+          header:shellRegion(state.geometry.elements,'header',5),navigation:shellRegion(state.geometry.elements,'nav',5)
         }))
       }))
     }))
   };
+  const encoded=JSON.stringify(context);
+  if(encoded.length>120000)throw new Error('Site-wide shared-shell evidence exceeded its bounded context budget');
+  return context;
 }
 
 function visionFirstContext(evidence:Evidence,page:EvidencePage){
