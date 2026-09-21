@@ -1,0 +1,58 @@
+name: Verify Molt production deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-moltick-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.MOLT_NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: 9e71d64e-4dfc-4195-a496-4ccfc73d8b63
+    steps:
+      - name: Wait for this exact commit to reach Netlify production
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NETLIFY_AUTH_TOKEN:-}" ]; then
+            echo "MOLT_NETLIFY_AUTH_TOKEN is missing"
+            exit 1
+          fi
+          echo "Waiting for Netlify production deploy for ${GITHUB_SHA}"
+          for attempt in $(seq 1 90); do
+            payload="$(curl --fail --silent --show-error               --header "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}"               "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?per_page=20")"
+            result="$(PAYLOAD="${payload}" EXPECTED="${GITHUB_SHA}" node - <<'NODE'
+const rows=JSON.parse(process.env.PAYLOAD||'[]');
+const expected=process.env.EXPECTED;
+const deploy=rows.find(d=>String(d.commit_ref||'')===expected && String(d.context||'')==='production');
+if(!deploy){console.log('missing');process.exit(0);}
+console.log(String(deploy.state||'unknown'));
+if(deploy.state==='ready')process.exit(10);
+if(['error','failed','canceled','cancelled'].includes(String(deploy.state)))process.exit(20);
+NODE
+            )" || code=$?
+            code="${code:-0}"
+            if [ "${code}" -eq 10 ]; then
+              echo "Verified Netlify production is serving commit ${GITHUB_SHA}"
+              exit 0
+            fi
+            if [ "${code}" -eq 20 ]; then
+              echo "Netlify production deploy for ${GITHUB_SHA} entered terminal state: ${result}"
+              exit 1
+            fi
+            echo "Attempt ${attempt}/90: ${result}; waiting..."
+            unset code
+            sleep 10
+          done
+          echo "Timed out waiting for Netlify production deploy for ${GITHUB_SHA}"
+          exit 1

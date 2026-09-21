@@ -2,6 +2,10 @@
   base = "studio"
   command = "npm run build"
   publish = "dist"
+  # Molt's production runtime spans root src/scripts/functions as well as studio/.
+  # Netlify's default monorepo change detection only watches the base directory and
+  # was canceling main deploys when a merge changed files outside studio/.
+  ignore = "false"
 
 [build.environment]
   NODE_VERSION = "22"
