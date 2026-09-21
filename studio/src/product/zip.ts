@@ -58,3 +58,57 @@ export async function unzipSavedPage(file:File):Promise<ExtractedZipFile[]>{
   }
   return out;
 }
+
+
+function pageSlug(name:string,index:number):string{
+  const base=name.replace(/\.zip$/i,'').trim().toLowerCase().replace(/https?:\/\//g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+  return (base||`page-${index+1}`).slice(0,70);
+}
+function routeFromHtml(html:string,fallback:string):string{
+  const candidates=[
+    /<link\b[^>]*\brel=["'][^"']*canonical[^"']*["'][^>]*\bhref=["']([^"']+)["']/i,
+    /<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\brel=["'][^"']*canonical[^"']*["']/i,
+    /<meta\b[^>]*\bproperty=["']og:url["'][^>]*\bcontent=["']([^"']+)["']/i,
+    /<meta\b[^>]*\bcontent=["']([^"']+)["'][^>]*\bproperty=["']og:url["']/i,
+    /\bdata-sf-original-url=["']([^"']+)["']/i,
+  ];
+  for(const pattern of candidates){
+    const raw=pattern.exec(html)?.[1];
+    if(!raw)continue;
+    try{const path=new URL(raw).pathname.replace(/\/+$/,'')||'/';if(path.startsWith('/'))return path;}catch{}
+  }
+  return /^(?:index|home|homepage|front-page)$/i.test(fallback)?'/':'/'+fallback;
+}
+export async function unzipSavedPages(archives:File[]):Promise<{files:ExtractedZipFile[];pages:Array<{file:string;route:string}>}>{
+  if(archives.length<1||archives.length>12)throw new Error('Choose 1 to 12 saved-page ZIP files at once.');
+  if(archives.some(file=>!file.name.toLowerCase().endsWith('.zip')))throw new Error('Every selected saved page must be a ZIP file.');
+  const used=new Set<string>(),combined:ExtractedZipFile[]=[],pages:Array<{file:string;route:string}>=[],resources:Record<string,string>={};
+  let originalUrl:string|undefined,total=0;
+  for(const [index,archive] of archives.entries()){
+    const extracted=await unzipSavedPage(archive),html=extracted.filter(item=>/\.html?$/i.test(item.path));
+    if(html.length!==1)throw new Error(`${archive.name} contains ${html.length} HTML pages. Select one SingleFile page ZIP per website page.`);
+    let slug=pageSlug(archive.name,index),suffix=2;while(used.has(slug))slug=`${pageSlug(archive.name,index)}-${suffix++}`;used.add(slug);
+    const prefix=`saved-pages/${String(index+1).padStart(2,'0')}-${slug}/`;
+    const pageItem=html[0],pageText=await pageItem.file.text();
+    const route=routeFromHtml(pageText,slug);
+    for(const item of extracted){
+      if(item.path==='manifest.json'){
+        try{
+          const manifest=JSON.parse(await item.file.text());
+          if(!originalUrl&&typeof manifest.originalUrl==='string')originalUrl=manifest.originalUrl;
+          if(manifest.resources&&typeof manifest.resources==='object'&&!Array.isArray(manifest.resources)){
+            for(const [path,url] of Object.entries(manifest.resources))if(typeof url==='string')resources[prefix+String(path).replace(/^\.\//,'')]=url;
+          }
+        }catch{}
+      }
+      const path=prefix+item.path;total+=item.file.size;
+      if(total>49_900_000)throw new Error('The combined extracted ZIPs exceed the 50 MB saved-page limit.');
+      combined.push({path,file:new File([item.file],item.file.name,{type:item.file.type,lastModified:item.file.lastModified})});
+    }
+    pages.push({file:prefix+pageItem.path,route});
+  }
+  if(combined.length>1200)throw new Error('The combined saved pages contain more than 1,200 files. Reduce the saved assets or split the reconstruction.');
+  const manifest=new File([JSON.stringify({...(originalUrl?{originalUrl}:{}),resources})],'manifest.json',{type:'application/json'});
+  combined.push({path:'manifest.json',file:manifest});
+  return {files:combined,pages};
+}
