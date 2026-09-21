@@ -8,14 +8,17 @@ function validRepo(name:string):string{
   if(!/^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/.test(value)||value.includes('..'))throw new Error('Invalid output repository name');
   return value;
 }
-async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={}):Promise<string>{
+async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=120000):Promise<string>{
   return await new Promise((resolve,reject)=>{
     const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});
-    let out='',err='';
+    let out='',err='',settled=false;
+    const timer=setTimeout(()=>{if(settled)return;child.kill('SIGTERM');setTimeout(()=>child.kill('SIGKILL'),2000).unref();settled=true;reject(new Error(`${command} timed out after ${Math.round(timeoutMs/1000)}s`));},timeoutMs);
+    timer.unref();
+    const finish=(fn:()=>void)=>{if(settled)return;settled=true;clearTimeout(timer);fn();};
     child.stdout.on('data',b=>{if(out.length<12000)out+=String(b);});
     child.stderr.on('data',b=>{if(err.length<12000)err+=String(b);});
-    child.on('error',reject);
-    child.on('close',code=>code===0?resolve(out.trim()):reject(new Error(`${command} failed (exit ${code}): ${(err||out).trim().slice(0,1200)}`)));
+    child.on('error',error=>finish(()=>reject(error)));
+    child.on('close',code=>finish(()=>code===0?resolve(out.trim()):reject(new Error(`${command} failed (exit ${code}): ${(err||out).trim().slice(0,1200)}`))));
   });
 }
 async function exists(owner:string,repo:string,token:string,cwd:string):Promise<boolean>{
