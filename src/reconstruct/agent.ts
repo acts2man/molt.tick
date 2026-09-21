@@ -234,6 +234,39 @@ export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,numb
   };
   return eligible.sort((a,b)=>rank(a)-rank(b))[0];
 }
+function shellRegion(elements:any[],tag:'header'|'nav'|'footer',limit=28){
+  const byKey=new Map(elements.map(e=>[String(e.key??''),e]));
+  const insideRegion=(element:any)=>{
+    let current=element,depth=0;
+    while(current&&depth++<12){
+      if(current.tag===tag)return true;
+      current=current.parent?byKey.get(String(current.parent)):undefined;
+    }
+    return false;
+  };
+  return elements.filter(e=>insideRegion(e)&&(e.text||e.src||e.href||e.tag===tag||visualSurface(e)))
+    .sort((a,b)=>a.y-b.y||a.x-b.x).slice(0,limit).map(compactElement);
+}
+export function siteWideShellContext(evidence:Evidence){
+  return {
+    purpose:'Site-wide shared-shell evidence. Compare every route before authoring shared header, navigation, footer, global page frame, typography and responsive shell. Preserve real route-specific variations instead of assuming the first page represents the whole site.',
+    routes:evidence.pages.map(page=>({
+      route:page.route,title:page.title,
+      views:page.views.map(view=>({
+        viewport:view.viewport,pageHeight:view.geometry.height,rootStyle:view.geometry.rootStyle,bodyStyle:view.geometry.bodyStyle,
+        header:shellRegion(view.geometry.elements,'header'),
+        navigation:shellRegion(view.geometry.elements,'nav'),
+        footer:shellRegion(view.geometry.elements,'footer'),
+        motion:motionSummary(view.motion,2),
+        interactions:(view.interactions??[]).filter(state=>state.trigger.kind==='hover'||/menu|nav|drawer|toggle/i.test(state.trigger.name)).slice(0,3).map(state=>({
+          trigger:state.trigger,visibleText:clipped(state.geometry.text,1800),
+          header:shellRegion(state.geometry.elements,'header',16),navigation:shellRegion(state.geometry.elements,'nav',16)
+        }))
+      }))
+    }))
+  };
+}
+
 function visionFirstContext(evidence:Evidence,page:EvidencePage){
   const remap=(value:string|undefined)=>{let out=value??'';for(const asset of evidence.assets)if(out.includes(asset.original))out=out.split(asset.original).join(asset.publicPath);return clipped(out,260);};
   const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a|input|select|textarea)$/.test(e.tag)||visualSurface(e))
@@ -246,14 +279,14 @@ function visionFirstContext(evidence:Evidence,page:EvidencePage){
       interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500),carousels:carouselInventory(i.geometry,value=>remap(value)??'')}))}))
   };
 }
-export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string,savedSource?:SavedSourceEvidence):string{
+export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string,savedSource?:SavedSourceEvidence,sharedShell?:unknown):string{
   const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
     return JSON.stringify({task,visualAuthority:'The attached source screenshots are the primary visual authority. Reconstruct the page as a skilled front-end engineer would: reason holistically about composition, hierarchy, proportions, rhythm, responsive behavior and interaction feel. Structured evidence is supporting ground truth and helps recover exact facts; it is not an exhaustive list of what you are allowed to notice.',hardConstraints:'Preserve route identity, visible copy, exact source assets for their observed slots, full carousel/slider inventories, observed interaction states, and observed motion behavior when motion evidence is supplied. Never substitute, shuffle or duplicate a different image merely because it looks plausible. Never collapse a multi-slide component into one static image. Do not break previously correct routes or viewports.',measurementGuidance:'Typography, spacing and geometry measurements are precise anchors when supplied, but they are not an exhaustive checklist. Use visual judgment across the complete screenshot to identify additional discrepancies that diagnostics did not name.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
       editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
-      reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
+      reference:pageContext(evidence,page,geometryLimit,textLimit),...(sharedShell?{siteWideSharedShell:sharedShell}:{}),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
   };
   // First find the exact live-evidence level URL-only reconstruction would receive. Then add
   // saved HTML/CSS only when it fits at that same level. A ZIP may enrich a prompt, never downgrade it.
@@ -273,6 +306,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
     sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
     reference:visionFirstContext(evidence,page),
+    ...(sharedShell?{siteWideSharedShell:sharedShell}:{}),
     ...(savedSource?{savedSource:{...savedSource,html:windowed(savedSource.html,26000),styles:savedSource.styles.slice(0,12).map(style=>({...style,content:windowed(style.content,1800)}))}}:{}),
     assets:assets.slice(0,100).map(a=>a.path),
     fonts:evidence.fontFaces.slice(0,16).map(f=>clipped(f,900)),
@@ -284,6 +318,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
     task:task+' Use the attached screenshots as the primary visual authority. This source required an ultra-compact evidence fallback; prioritize visual fidelity, visible copy, responsive layout and local assets.',
     visualAuthority:'Use the attached screenshots as the primary visual authority and reconstruct the complete visual experience holistically.',hardConstraints:'Keep visible copy, route identity, source asset-to-slot identity, full carousel/slider content and observed motion behavior; never substitute or shuffle images.',
     sourceSite:evidence.site,route:page.route,file:routeFile(page.route),title:page.title,
+    ...(sharedShell?{siteWideSharedShell:sharedShell}:{}),
     visibleText:clipped(page.views[0]?.geometry.text??'',9000),
     viewports:page.views.map(v=>({viewport:v.viewport,pageHeight:v.geometry.height})),
     assets:assets.slice(0,60).map(a=>a.path),
@@ -330,7 +365,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const seed=evidence.pages[0];
   if(seed){
     signal.throwIfAborted();await progress(`Reconstructing ${seed.route} as the shared site shell`);
-    const files=await snapshot(outDir),savedSource=await sourceFor(seed.route),request={prompt:reconstructionPrompt(evidence,seed,files,initialTask+' Establish reusable shared structure where the source clearly repeats it across routes; later page workers will reuse this shell.',savedSource),images:await referenceImages(seed.views)};
+    const files=await snapshot(outDir),savedSource=await sourceFor(seed.route),sharedShell=siteWideShellContext(evidence),request={prompt:reconstructionPrompt(evidence,seed,files,initialTask+' Establish reusable shared structure only after comparing the supplied site-wide shared-shell evidence across every captured route and viewport. Reuse what is genuinely shared, and preserve route-specific header/footer/navigation variations rather than forcing the first page shell everywhere. Later page workers will reuse this shell.',savedSource,sharedShell),images:await referenceImages(seed.views)};
     let error='';let done=false;
     for(let attempt=0;attempt<2&&!done;attempt++){
       try{const fullPrompt=request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'');const reply=await model.complete({...request,prompt:fullPrompt},signal);assertNoPartialFileRewrite(request.prompt,reply.files);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(seed.route)))throw new Error('Requested page file was not produced');done=true;}
