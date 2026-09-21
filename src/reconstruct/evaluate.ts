@@ -220,6 +220,63 @@ export function mediaGeometryIssues(source:Geometry,candidate:Geometry,evidence:
   }
   return issues.sort((a,b)=>b.amount-a.amount).slice(0,8).map(i=>i.message);
 }
+function backgroundLocalAsset(element:ElementEvidence,assetByOriginal:Map<string,string>,sourceSide:boolean):string{
+  const value=element.style['background-image']??'';
+  const urls=[...value.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(m=>m[1]);
+  for(const url of urls){const mapped=sourceSide?(assetByOriginal.get(url)??''):assetPath(url);if(mapped.startsWith('/assets/'))return mapped;}
+  return '';
+}
+function mediaDistance(a:ElementEvidence,b:ElementEvidence):number{return Math.abs(a.x-b.x)+Math.abs(a.y-b.y)+Math.abs(a.width-b.width)*0.4+Math.abs(a.height-b.height)*0.4;}
+export function mediaIdentityIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  const assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath])),issues:string[]=[];
+  const expectedImages=source.elements.filter(e=>e.tag==='img'&&e.src&&e.width*e.height>=1024).map(e=>({element:e,asset:assetByOriginal.get(e.src!)??''})).filter(x=>x.asset);
+  const actualImages=candidate.elements.filter(e=>e.tag==='img'&&e.src&&e.width*e.height>=256).map(e=>({element:e,asset:assetPath(e.src)})).filter(x=>x.asset.startsWith('/assets/'));
+  const used=new Set<number>();
+  for(const expected of expectedImages){
+    let best=-1,bestDistance=Infinity;
+    for(let index=0;index<actualImages.length;index++){if(used.has(index))continue;const distance=mediaDistance(expected.element,actualImages[index].element);if(distance<bestDistance){best=index;bestDistance=distance;}}
+    if(best<0)continue;used.add(best);const actual=actualImages[best];
+    if(actual.asset!==expected.asset){
+      const appearsElsewhere=actualImages.some((item,index)=>index!==best&&item.asset===expected.asset);
+      const label=expected.element.attributes?.alt?'"'+String(expected.element.attributes.alt).slice(0,60)+'"':expected.asset;
+      issues.push('Wrong image in source slot '+Math.round(expected.element.x)+'/'+Math.round(expected.element.y)+'px ('+label+'): expected '+expected.asset+', generated '+actual.asset+(appearsElsewhere?'; expected asset appears in a different slot':''));
+    }
+  }
+  const count=(items:Array<{asset:string}>)=>{const out=new Map<string,number>();for(const item of items)out.set(item.asset,(out.get(item.asset)??0)+1);return out;};
+  const expectedCount=count(expectedImages),actualCount=count(actualImages);
+  for(const [asset,total] of expectedCount){const generated=actualCount.get(asset)??0;if(generated!==total)issues.push('Image usage count differs for '+asset+': source '+total+', generated '+generated);}
+  const sourceBackgrounds=source.elements.map(e=>({element:e,asset:backgroundLocalAsset(e,assetByOriginal,true)})).filter(x=>x.asset&&x.element.width*x.element.height>=4096);
+  const candidateBackgrounds=candidate.elements.map(e=>({element:e,asset:backgroundLocalAsset(e,assetByOriginal,false)})).filter(x=>x.asset&&x.element.width*x.element.height>=4096);
+  const usedBackgrounds=new Set<number>();
+  for(const expected of sourceBackgrounds){
+    let best=-1,bestDistance=Infinity;
+    for(let index=0;index<candidateBackgrounds.length;index++){if(usedBackgrounds.has(index))continue;const distance=mediaDistance(expected.element,candidateBackgrounds[index].element);if(distance<bestDistance){best=index;bestDistance=distance;}}
+    if(best<0)continue;usedBackgrounds.add(best);const actual=candidateBackgrounds[best];
+    if(actual.asset!==expected.asset)issues.push('Wrong background image in source slot '+Math.round(expected.element.x)+'/'+Math.round(expected.element.y)+'px: expected '+expected.asset+', generated '+actual.asset);
+  }
+  return [...new Set(issues)].slice(0,12);
+}
+function carouselImagePath(raw:string,assetByOriginal:Map<string,string>,sourceSide:boolean):string{const value=sourceSide?(assetByOriginal.get(raw)??''):assetPath(raw);return value.startsWith('/assets/')?value:'';}
+export function carouselIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  const expected=source.carousels??[];if(!expected.length)return [];
+  const actual=candidate.carousels??[],assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath])),issues:string[]=[],used=new Set<number>();
+  for(let carouselIndex=0;carouselIndex<expected.length;carouselIndex++){
+    const before=expected[carouselIndex];let best=-1,bestScore=-Infinity;
+    for(let index=0;index<actual.length;index++){if(used.has(index))continue;const overlap=before.slides.filter(slide=>actual[index].slides.some(candidateSlide=>normalize(candidateSlide.text)===normalize(slide.text)&&Boolean(normalize(slide.text)))).length;const score=overlap*20-Math.abs(before.slides.length-actual[index].slides.length);if(score>bestScore){best=index;bestScore=score;}}
+    const label=before.label||'#'+(carouselIndex+1);
+    if(best<0){issues.push('Carousel "'+label+'" is missing; source has '+before.slides.length+' unique slides');continue;}
+    used.add(best);const after=actual[best];
+    if(before.slides.length!==after.slides.length)issues.push('Carousel "'+label+'" slide count differs: source '+before.slides.length+', generated '+after.slides.length);
+    for(let slideIndex=0;slideIndex<Math.min(before.slides.length,after.slides.length);slideIndex++){
+      const beforeSlide=before.slides[slideIndex],afterSlide=after.slides[slideIndex],beforeText=normalize(beforeSlide.text),afterText=normalize(afterSlide.text);
+      if(beforeText&&beforeText!==afterText)issues.push('Carousel "'+label+'" slide '+(slideIndex+1)+' content/order differs; source starts "'+beforeText.slice(0,90)+'", generated "'+afterText.slice(0,90)+'"');
+      const expectedImages=beforeSlide.images.map(raw=>carouselImagePath(raw,assetByOriginal,true)).filter(Boolean),actualImages=afterSlide.images.map(raw=>carouselImagePath(raw,assetByOriginal,false)).filter(Boolean);
+      if(JSON.stringify(expectedImages)!==JSON.stringify(actualImages))issues.push('Carousel "'+label+'" slide '+(slideIndex+1)+' images differ: source ['+expectedImages.join(', ')+'], generated ['+actualImages.join(', ')+']');
+      if(issues.length>=14)return issues;
+    }
+  }
+  return issues.slice(0,14);
+}
 export function controlGeometryIssues(source:Geometry,candidate:Geometry):string[]{
   const issues:Array<{amount:number;message:string}>=[];
   for(const pair of matchedTextElements(source,candidate)){
