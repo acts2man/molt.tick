@@ -23,11 +23,11 @@ export function skippableDiscoveredCaptureError(error:unknown):boolean{
 }
 export function prioritizeDiscoveredLinks(links:DiscoveredLink[]):string[]{
   const bucket=(item:DiscoveredLink)=>{
-    if(item.region==='nav'||item.region==='header')return 0;
     let pathname='';try{pathname=new URL(item.href).pathname.toLowerCase();}catch{}
     const core=/(?:^|[-/])(contact|about|(?:our)?services?|pricing|faq|team|staff|locations?|gallery|portfolio|projects?|testimonials?|reviews?)(?:[-_]?\d+)?(?:[-/]|$)/i.test(pathname);
     const lowValue=/(?:^|[-/])(blog|news|privacy|terms|cookie|category|tag|author)(?:[-/]|$)/i.test(pathname);
-    if(core)return 1;
+    if(core)return 0;
+    if(item.region==='nav'||item.region==='header')return 1;
     if(lowValue)return 4;
     return item.region==='main'?2:3;
   };

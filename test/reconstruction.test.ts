@@ -12,7 +12,7 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
@@ -239,6 +239,12 @@ test('default input type and explicit text type are equivalent',()=>{
   const candidate=simpleGeometry([{key:'2',tag:'input',text:'',x:0,y:0,width:200,height:40,style,attributes:{type:'text',placeholder:'Name',disabled:'false',readonly:'false'}}]);
   assert.deepEqual(formControlIssues(source,candidate),[]);
 });
+test('priority typography diagnostics give exact source and generated heading sizes',()=>{
+  const source=simpleGeometry([{key:'s',tag:'h1',text:'Sacramento Tree Services',x:100,y:100,width:900,height:72,style:{'font-family':'Arvo','font-size':'58px','font-weight':'700','font-style':'normal','line-height':'72px','letter-spacing':'0px','text-align':'center','text-transform':'uppercase','color':'rgb(255, 255, 255)'}}]);
+  const candidate=simpleGeometry([{key:'c',tag:'h1',text:'Sacramento Tree Services',x:100,y:100,width:700,height:52,style:{'font-family':'Arvo','font-size':'42px','font-weight':'700','font-style':'normal','line-height':'52px','letter-spacing':'0px','text-align':'center','text-transform':'uppercase','color':'rgb(255, 255, 255)'}}]);
+  const issues=typographyIssues(source,candidate);
+  assert.ok(issues.some(i=>/font-size source 58px, generated 42px/.test(i)&&/line-height source 72px, generated 52px/.test(i)),issues.join('\n'));
+});
 test('spacing evaluator reports exact element-to-element gap deltas',()=>{
   const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
   const source=simpleGeometry([
@@ -294,6 +300,23 @@ test('heading evaluator also enforces italic and text alignment',()=>{
   const issues=contentIssues(source,candidate);
   assert.ok(issues.some(i=>/Heading \"Tree Experts\"/.test(i)&&/font-style source italic, generated normal/.test(i)&&/text-align source center, generated left/.test(i)),issues.join('\n'));
 });
+test('repair brief balances typography spacing media and structural diagnostics',()=>{
+  const issues=[
+    'Typography "Hero" (h1): font-size source 58px, generated 42px',
+    'Typography "Menu" (a): font-size source 16px, generated 13px',
+    'Typography "Welcome" (h2): font-size source 38px, generated 30px',
+    'Spacing "Welcome" → "100% SATISFACTION": source 24px, generated 91px (67px too large)',
+    'Container section #2: source x/y 0/600px, 1440×500px; generated 0/600px, 1440×390px',
+    'Wrong image in source slot 100/900px: expected /assets/a.jpg, generated /assets/cat.jpg',
+    'Carousel "Customer reviews" slide count differs: source 13, generated 4',
+    'Visible copy or reading order differs from the source',
+  ];
+  const selected=repairIssueSubset(issues,6);
+  assert.ok(selected.some(i=>i.startsWith('Typography')),selected.join('\n'));
+  assert.ok(selected.some(i=>i.startsWith('Spacing')||i.startsWith('Container')),selected.join('\n'));
+  assert.ok(selected.some(i=>i.startsWith('Wrong image')||i.startsWith('Carousel')),selected.join('\n'));
+  assert.ok(selected.some(i=>i.startsWith('Visible copy')),selected.join('\n'));
+});
 test('zero is measured; null is missing',()=>{assert.equal(improves(score(null),score(0)),true);assert.equal(improves(score(0),score(null)),false);});
 test('measured pixel improvement is accepted even when diagnostic wording changes',()=>{const a=score(85);a.views[0].worstBand=55;a.views[0].issues=['Heading Example: y, font-weight differ'];const b=score(90);b.views[0].worstBand=64;b.views[0].issues=['Heading Example: y differ'];assert.equal(improves(a,b),true);});
 test('global gain cannot regress a passing device',()=>{const a=score(99,true);a.views.push({...a.views[0],viewport:'mobile',score:70,worstBand:70,pass:false});a.pass=false;const b=structuredClone(a);b.views[0].score=90;b.views[0].pass=false;b.views[1].score=100;b.views[1].worstBand=100;b.views[1].pass=true;assert.equal(improves(a,b),false);});
@@ -347,21 +370,23 @@ test('auto-discovery distinguishes broken route navigation from engine-wide capt
   assert.equal(skippableDiscoveredCaptureError(new Error('Source page is empty')),true);
   assert.equal(skippableDiscoveredCaptureError(new Error('Asset budget exceeded')),false);
 });
-test('page discovery keeps navigation first and promotes core business pages over incidental content',()=>{
+test('page discovery reserves capped scope for core business pages regardless of discovery region',()=>{
   const links=prioritizeDiscoveredLinks([
     {href:'https://example.com/blog',region:'nav',index:1},
-    {href:'https://example.com/about',region:'header',index:2},
+    {href:'https://example.com/about2',region:'header',index:2},
     {href:'https://example.com/news',region:'main',index:3},
     {href:'https://example.com/feature-story',region:'main',index:4},
-    {href:'https://example.com/tree-services',region:'main',index:5},
+    {href:'https://example.com/ourservices2',region:'main',index:5},
     {href:'https://example.com/privacy',region:'footer',index:8},
-    {href:'https://example.com/contact',region:'footer',index:9},
-    {href:'https://example.com/gallery',region:'footer',index:10},
-    {href:'https://example.com/about',region:'footer',index:11},
+    {href:'https://example.com/contact2',region:'sitemap',index:10009},
+    {href:'https://example.com/gallery-2',region:'footer',index:10},
+    {href:'https://example.com/about2',region:'footer',index:11},
   ]);
-  assert.deepEqual(links,[
-    'https://example.com/blog','https://example.com/about','https://example.com/tree-services','https://example.com/contact','https://example.com/gallery','https://example.com/feature-story','https://example.com/news','https://example.com/privacy'
-  ]);
+  assert.deepEqual(new Set(links.slice(0,4)),new Set([
+    'https://example.com/about2','https://example.com/ourservices2','https://example.com/contact2','https://example.com/gallery-2'
+  ]));
+  assert.equal(links[4],'https://example.com/blog');
+  assert.ok(links.indexOf('https://example.com/contact2')<links.indexOf('https://example.com/blog'));
 });
 test('bundle validates explicit routes and files before browsing',()=>temporary(async dir=>{await writeFile(join(dir,'home.html'),'<h1>Home</h1>');await writeFile(join(dir,'bundle.json'),JSON.stringify({site:'https://example.com',pages:[{route:'/',file:'home.html'}]}));assert.equal((await readBundle(dir)).pages.length,1);await writeFile(join(dir,'bundle.json'),JSON.stringify({site:'https://example.com',pages:[{route:'/',file:'home.html'},{route:'/',file:'home.html'}]}));await assert.rejects(readBundle(dir),/Duplicate/);}));
 test('static server does not return home for missing routes or expose dotfiles',()=>temporary(async dir=>{await writeFile(join(dir,'index.html'),'home');await writeFile(join(dir,'.env'),'private');const server=await serve(dir,{'/':'index.html'});try{assert.equal(await(await fetch(server.origin)).text(),'home');assert.equal((await fetch(server.origin+'/missing')).status,404);assert.equal((await fetch(server.origin+'/.env')).status,404);}finally{await server.close();}}));

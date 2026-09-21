@@ -430,7 +430,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         check.candidate=join(directory,`${stem}.png`);check.diff=join(directory,`${stem}.diff.png`);
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
         const generated=await geometry(page);
-        check.issues.push(...contentIssues(reference.geometry,generated),...mediaIdentityIssues(reference.geometry,generated,evidence),...carouselIssues(reference.geometry,generated,evidence),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
+        check.issues.push(...typographyIssues(reference.geometry,generated),...contentIssues(reference.geometry,generated),...mediaIdentityIssues(reference.geometry,generated,evidence),...carouselIssues(reference.geometry,generated,evidence),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
         // Literal DOM links are checked after rendering, including shared components. Same-site links
         // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
@@ -455,7 +455,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
             stateCheck.diff=join(directory,`${stem}-${state.id}.diff.png`);
             await page.screenshot({path:stateCheck.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
             const stateGenerated=await geometry(page);
-            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaIdentityIssues(state.geometry,stateGenerated,evidence),...carouselIssues(state.geometry,stateGenerated,evidence),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
+            stateCheck.issues.push(...typographyIssues(state.geometry,stateGenerated),...contentIssues(state.geometry,stateGenerated),...mediaIdentityIssues(state.geometry,stateGenerated,evidence),...carouselIssues(state.geometry,stateGenerated,evidence),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
             const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
             if(stateMetrics.score<threshold||stateMetrics.worstBand<bandThreshold)stateCheck.issues.push(...visualLayoutIssues(state.geometry,stateGenerated),...mediaPresentationIssues(state.geometry,stateGenerated,evidence));
             stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;
