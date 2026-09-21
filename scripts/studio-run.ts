@@ -6,7 +6,7 @@ import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
-import { productionRunBudget } from '../src/reconstruct/budgets.js';
+import { availableAgentMinutes, productionRunBudget } from '../src/reconstruct/budgets.js';
 import { reserveOutputRepository, publishReservedOutputRepository, deleteReservedOutputRepository } from './publish-output.js';
 import { preflightNetlify, createNetlifySite, deployNetlifyDirectory, configureContinuousNetlifyDeploy, deleteNetlifySite, type NetlifySite } from './publish-netlify.js';
 import { finalStudioEvent } from './studio-report.js';
@@ -16,6 +16,7 @@ let reservedRepository:string|undefined,reservedSite:NetlifySite|undefined,publi
 
 const origin=process.env.MOLT_STUDIO_ORIGIN??'',id=process.env.MOLT_JOB_ID??'';
 if(origin!=='https://moltick.netlify.app'||!/^[a-f0-9-]{36}$/i.test(id))throw new Error('Invalid studio job configuration');
+const runnerStartedAt=Date.now();
 const artifacts=resolve('studio-artifacts');await mkdir(artifacts,{recursive:true});
 let progressFloor=1,progressStage='Submitting',progressRepairRounds=4;
 function milestone(message:string):{progress:number;stage:string}|null{
@@ -126,12 +127,11 @@ try{
   progressRepairRounds=Math.max(1,budget.repairRounds||1);
   if(job.model)process.env.MOLT_AI_MODEL=job.model;
   if(job.reasoningEffort)process.env.MOLT_REASONING_EFFORT=job.reasoningEffort;
-  process.env.MOLT_AGENT_MINUTES=String(budget.agentMinutes);
   process.env.MOLT_MODEL_TIMEOUT_MS=String(budget.requestMs);
   process.env.MOLT_AI_MAX_TOKENS=String(budget.maxOutputTokens);
   process.env.MOLT_MAX_MODEL_CALLS=String(budget.maxModelCalls);
   process.env.MOLT_MAX_TRANSPORT_ATTEMPTS=String(budget.maxTransportAttempts);
-  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning. Scope guard: up to ${budget.agentMinutes} minutes, ${budget.repairRounds} measured repair calls, ${budget.maxModelCalls} logical model calls, and ${budget.maxTransportAttempts} bounded provider transport attempts.`);
+  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning. Runtime envelope: ${budget.runnerMinutes} runner minutes with ${budget.deliveryReserveMinutes} minutes reserved for checkpoint/export/deploy; reconstruction may use up to ${budget.agentMinutes} minutes, ${budget.repairRounds} measured repair calls, ${budget.maxModelCalls} logical model calls, and ${budget.maxTransportAttempts} bounded provider transport attempts.`);
   if(!process.env.MOLT_AI_MODEL||!(process.env.MOLT_MODEL_PROVIDER==='anthropic'?process.env.ANTHROPIC_API_KEY:process.env.OPENAI_API_KEY))throw new Error('Model configuration is missing. Open Connections in Molt Studio.');
   // Everything below this preflight is still zero-cost. Prove runner rotation, Blob writes and GitHub export access before the first model request.
   runnerIdentityCache=undefined;
@@ -157,6 +157,11 @@ try{
     if(manifest.files.length>300)throw new Error('Bundle has too many files');let total=0;
     for(const f of manifest.files){if(f.size>4_000_000||(total+=f.size)>50_000_000)throw new Error('Bundle size limit exceeded');const dest=pathIn(bundleDir,f.path);await mkdir(dirname(dest),{recursive:true});const bytes=await (await studio(`/bundle?file=${encodeURIComponent(f.path)}`)).arrayBuffer();if(bytes.byteLength!==f.size)throw new Error('Bundle file size mismatch');await writeFile(dest,Buffer.from(bytes));}
   }
+  const elapsedBeforeModel=Date.now()-runnerStartedAt;
+  const availableMinutes=availableAgentMinutes(budget.agentMinutes,budget.runnerMinutes,budget.deliveryReserveMinutes,elapsedBeforeModel);
+  if(availableMinutes<5)throw new Error(`Preflight/source preparation consumed too much of the runner envelope to safely start paid reconstruction while preserving the ${budget.deliveryReserveMinutes}-minute delivery reserve.`);
+  process.env.MOLT_AGENT_MINUTES=String(availableMinutes);
+  if(availableMinutes<budget.agentMinutes)await progress(`Runtime guard reduced reconstruction to ${availableMinutes} minutes so the ${budget.deliveryReserveMinutes}-minute delivery reserve remains protected.`);
   liveModel=modelFromEnv();
   const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir,url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
   // Checkpoint the expensive work before any nonessential callback, preview, or export step.
