@@ -130,9 +130,10 @@ const INTERACTIONS = `(() => {
  const clean=(s)=>String(s||'').replace(/\\s+/g,' ').trim().slice(0,120);
  const name=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent||el.getAttribute('aria-controls'));
  const seenElements=new Set(),counts=new Map();
- const groups={priority:[],carousel:[],tabs:[],other:[],details:[]};
+ const groups={priority:[],hover:[],carousel:[],tabs:[],other:[],details:[]};
+ const visible=(el)=>{const b=el.getBoundingClientRect(),s=getComputedStyle(el);return !!b.width&&!!b.height&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0;};
  const push=(group,kind,el)=>{
-   if(seenElements.has(el))return;
+   if(seenElements.has(el)||!visible(el))return;
    const n=name(el),controls=el.getAttribute('aria-controls')||undefined,key=kind+'|'+n+'|'+(controls||'');
    if(!n)return;
    const ordinal=counts.get(key)||0;counts.set(key,ordinal+1);seenElements.add(el);
@@ -144,6 +145,8 @@ const INTERACTIONS = `(() => {
    const n=name(el),important=/menu|navigation|nav|drawer|toggle/i.test(n+' '+(el.getAttribute('aria-controls')||''))||el.getAttribute('aria-haspopup');
    push(important?'priority':'other','button',el);
  }
+ // Desktop navigation often exposes submenus only through CSS :hover rather than a click handler.
+ for(const el of Array.from(document.querySelectorAll('header a[aria-haspopup],nav a[aria-haspopup],header li.menu-item-has-children > a,nav li.menu-item-has-children > a,header li:has(> ul) > a,nav li:has(> ul) > a')))push('hover','hover',el);
  // Explicit Previous/Next carousel controls get reserved evidence slots so accordions cannot starve them.
  const carousel=/^(?:previous|prev|next)(?:\\s+(?:slide|testimonial|review|item|image|photo|project))?\\b/i;
  for(const el of Array.from(document.querySelectorAll('button,[role="button"]'))){
@@ -153,22 +156,36 @@ const INTERACTIONS = `(() => {
  }
  for(const el of Array.from(document.querySelectorAll('[role="tab"]:not([aria-selected="true"])')))push('tabs','tab',el);
  for(const d of Array.from(document.querySelectorAll('details:not([open])'))){const summary=d.querySelector(':scope > summary');if(summary)push('details','details',summary);}
- return [...groups.priority.slice(0,2),...groups.carousel.slice(0,2),...groups.tabs.slice(0,2),...groups.other.slice(0,1),...groups.details.slice(0,1)].slice(0,8);
+ return [...groups.priority.slice(0,2),...groups.hover.slice(0,1),...groups.carousel.slice(0,2),...groups.tabs.slice(0,1),...groups.other.slice(0,1),...groups.details.slice(0,1)].slice(0,8);
 })()`;
 export async function discoverInteractions(page: Page): Promise<InteractionTrigger[]> {
   return await page.evaluate(INTERACTIONS) as InteractionTrigger[];
 }
 export async function activateInteraction(page: Page, trigger: InteractionTrigger): Promise<boolean> {
   const payload=JSON.stringify(trigger).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+  if(trigger.kind==='hover'){
+    const point=await page.evaluate(`(() => {
+      const trigger=${payload};
+      const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
+      const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||el.textContent||el.getAttribute('aria-controls'));
+      const visible=(el)=>{const b=el.getBoundingClientRect(),s=getComputedStyle(el);return !!b.width&&!!b.height&&b.bottom>0&&b.top<innerHeight&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0;};
+      const items=Array.from(document.querySelectorAll('header a,nav a,header button,nav button,header [role="button"],nav [role="button"]')).filter(visible);
+      const matches=items.filter(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+      const target=matches[Math.max(0,Number(trigger.ordinal)||0)];if(!target)return null;
+      const b=target.getBoundingClientRect();return {x:Math.max(1,Math.min(innerWidth-2,b.left+b.width/2)),y:Math.max(1,Math.min(innerHeight-2,b.top+b.height/2))};
+    })()`) as {x:number;y:number}|null;
+    if(!point)return false;await page.mouse.move(point.x,point.y);return true;
+  }
   const script=`(() => {
     const trigger=${payload};
     const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
     const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||(el.classList?.contains('swiper-button-next')?'Next slide':el.classList?.contains('swiper-button-prev')?'Previous slide':'')||el.textContent||el.getAttribute('aria-controls'));
+    const visible=(el)=>{const b=el.getBoundingClientRect(),s=getComputedStyle(el);return !!b.width&&!!b.height&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0;};
     let items=[];
     if(trigger.kind==='details')items=Array.from(document.querySelectorAll('details:not([open]) > summary'));
     else if(trigger.kind==='tab')items=Array.from(document.querySelectorAll('[role="tab"]'));
     else items=Array.from(document.querySelectorAll('button,[role="button"]')).filter(el=>!el.matches('[type="submit"],[type="reset"]'));
-    const matches=items.filter(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
+    const matches=items.filter(el=>visible(el)&&label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
     const target=matches[Math.max(0,Number(trigger.ordinal)||0)];
     if(!target)return false;
     target.click();
@@ -378,7 +395,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
             if(index<triggers.length-1){
               const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});
               if(!reset?.ok()){evidence.warnings.push(`${target.route} ${viewport.name}: interaction-state reset returned HTTP ${reset?.status()}.`);break;}
-              await settle(page,options.signal);
+              await page.mouse.move(0,0);await settle(page,options.signal);
             }
           }
           item.title=g.title;item.views.push({viewport,screenshot,geometry:g,interactions});
