@@ -55,7 +55,9 @@ const GEOMETRY = `(() => {
  const allNodes=Array.from(document.querySelectorAll('body *')); const index=new Map(allNodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
  const attrs=(el)=>{
-  const out=Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel','placeholder','disabled','readonly'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
+  const out=Object.fromEntries(['role','aria-label','aria-expanded','aria-selected','aria-controls','aria-haspopup','type','alt','title','target','rel','placeholder'].map(n=>[n,el.getAttribute(n)]).filter(([,v])=>v!==null));
+  if(/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName))out.disabled=String(Boolean(el.disabled));
+  if(/^(INPUT|TEXTAREA)$/.test(el.tagName))out.readonly=String(Boolean(el.readOnly));
   if(el.tagName==='INPUT'&&/^(checkbox|radio)$/i.test(el.type))out.checked=String(Boolean(el.checked));
   if(el.tagName==='SELECT')out['selected-text']=String(el.selectedOptions?.[0]?.textContent||'').replace(/\s+/g,' ').trim().slice(0,160);
   return out;
