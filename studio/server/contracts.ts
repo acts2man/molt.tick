@@ -4,6 +4,10 @@ export const WORKFLOW = 'reconstruct-site.yml';
 export const BRANCH = 'main';
 export const ACTIVE = new Set(['dispatching', 'queued', 'running', 'cancelling']);
 export const OPENAI_JOB_MODELS = new Set(['gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-6-astra']);
+export const BUNDLE_MAX_FILES=1600;
+export const BUNDLE_MAX_TOTAL_BYTES=180_000_000;
+export const BUNDLE_MAX_FILE_BYTES=16_000_000;
+export const BUNDLE_CHUNK_BYTES=3_500_000;
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 export function uuid(value: string): string {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)) throw new HttpError(400, 'Invalid request identifier.');
