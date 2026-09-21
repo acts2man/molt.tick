@@ -8,6 +8,11 @@ import { preflightNetlify, createNetlifySite, configureContinuousNetlifyDeploy, 
 const target='https://ceballostreeservices.com';
 const selectedPages=5,selectedRepairs=4,effort='medium' as const;
 const budget=productionRunBudget(selectedPages,selectedRepairs,effort);
+process.env.MOLT_AGENT_MINUTES=String(budget.agentMinutes);
+process.env.MOLT_MAX_MODEL_CALLS=String(budget.maxModelCalls);
+process.env.MOLT_MAX_TRANSPORT_ATTEMPTS=String(budget.maxTransportAttempts);
+process.env.MOLT_AI_MAX_TOKENS=String(budget.maxOutputTokens);
+process.env.MOLT_MODEL_TIMEOUT_MS=String(budget.requestMs);
 const githubToken=process.env.MOLT_GITHUB_EXPORT_TOKEN??'';
 const netlifyToken=process.env.MOLT_NETLIFY_AUTH_TOKEN??'';
 const teamSlug=process.env.MOLT_NETLIFY_TEAM_SLUG??'';
@@ -19,7 +24,7 @@ let repository:string|undefined,site:NetlifySite|undefined,published=false;
 await rm(root,{recursive:true,force:true});await mkdir(root,{recursive:true});
 const summary:any={
   ok:false,target,configuration:{provider:'openai',model:'gpt-5.6-sol',reasoningEffort:effort,maxPages:selectedPages,selectedCorrectionRounds:selectedRepairs,effectiveRepairCeiling:budget.repairRounds},
-  budget:{agentMinutes:budget.agentMinutes,maxModelCalls:budget.maxModelCalls,maxOutputTokens:budget.maxOutputTokens,requestMs:budget.requestMs},
+  budget:{agentMinutes:budget.agentMinutes,maxModelCalls:budget.maxModelCalls,maxTransportAttempts:budget.maxTransportAttempts,maxOutputTokens:budget.maxOutputTokens,requestMs:budget.requestMs},
   startedAt:new Date().toISOString()
 };
 try{
