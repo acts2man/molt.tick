@@ -14,7 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -79,6 +79,58 @@ test('source geometry fingerprints are stable for identical evidence and change 
   const same=structuredClone(base),changed=structuredClone(base);changed.elements[0].y=120;
   assert.equal(geometryFingerprint(base),geometryFingerprint(same));
   assert.notEqual(geometryFingerprint(base),geometryFingerprint(changed));
+});
+test('discovery promotes legacy core-page slugs from sitemaps ahead of incidental content',()=>{
+  const links=prioritizeDiscoveredLinks([
+    {href:'https://example.com/story',region:'main',index:1},
+    {href:'https://example.com/privacy',region:'footer',index:2},
+    {href:'https://example.com/contact2/',region:'sitemap',index:100},
+    {href:'https://example.com/ourservices2/',region:'sitemap',index:101},
+  ]);
+  assert.deepEqual(links.slice(0,2),['https://example.com/contact2/','https://example.com/ourservices2/']);
+});
+test('typography diagnostics report exact heading and navigation font-size values',()=>{
+  const source=simpleGeometry([
+    {key:'h',tag:'h1',text:'Sacramento Premier Tree Service',x:100,y:200,width:700,height:80,style:{'font-size':'58px','font-weight':'700','line-height':'72px','font-family':'Arvo','font-style':'normal','letter-spacing':'0px','text-align':'left','text-transform':'none','color':'rgb(255,255,255)'}},
+    {key:'a',tag:'a',text:'OUR SERVICES',x:900,y:60,width:110,height:24,style:{'font-size':'16px','font-weight':'600','line-height':'24px','font-family':'Arvo','font-style':'normal','letter-spacing':'0px','text-align':'left','text-transform':'uppercase','color':'rgb(0,0,0)'}},
+  ]);
+  const candidate=simpleGeometry([
+    {key:'h2',tag:'h1',text:'Sacramento Premier Tree Service',x:100,y:200,width:620,height:60,style:{'font-size':'42px','font-weight':'700','line-height':'54px','font-family':'Arvo','font-style':'normal','letter-spacing':'0px','text-align':'left','text-transform':'none','color':'rgb(255,255,255)'}},
+    {key:'a2',tag:'a',text:'OUR SERVICES',x:900,y:60,width:90,height:20,style:{'font-size':'12px','font-weight':'600','line-height':'20px','font-family':'Arvo','font-style':'normal','letter-spacing':'0px','text-align':'left','text-transform':'uppercase','color':'rgb(0,0,0)'}},
+  ]);
+  const issues=typographyIssues(source,candidate);
+  assert.ok(issues.some(i=>/Sacramento Premier/.test(i)&&/font-size source 58px, generated 42px/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/OUR SERVICES/.test(i)&&/font-size source 16px, generated 12px/.test(i)),issues.join('\n'));
+});
+test('media identity diagnostics reject swapped slots and duplicate reuse of the wrong photo',()=>{
+  const source=simpleGeometry([
+    {key:'hero',tag:'img',text:'',x:0,y:200,width:800,height:420,style:{},src:'https://source.example/hero.jpg',attributes:{alt:'About hero'}},
+    {key:'cat',tag:'img',text:'',x:200,y:900,width:120,height:120,style:{},src:'https://source.example/cat.jpg',attributes:{alt:'Reviewer'}},
+  ]);
+  const candidate=simpleGeometry([
+    {key:'badhero',tag:'img',text:'',x:0,y:200,width:800,height:420,style:{},src:'http://generated.test/assets/cat.jpg'},
+    {key:'badreview',tag:'img',text:'',x:200,y:900,width:120,height:120,style:{},src:'http://generated.test/assets/hero.jpg'},
+    {key:'duplicate',tag:'img',text:'',x:500,y:900,width:120,height:120,style:{},src:'http://generated.test/assets/cat.jpg'},
+  ]);
+  const evidence={site:'https://source.example',directory:'',pages:[],assets:[
+    {original:'https://source.example/hero.jpg',file:'/tmp/hero.jpg',publicPath:'/assets/hero.jpg'},
+    {original:'https://source.example/cat.jpg',file:'/tmp/cat.jpg',publicPath:'/assets/cat.jpg'},
+  ],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
+  const issues=mediaIdentityIssues(source,candidate,evidence);
+  assert.ok(issues.some(i=>/Wrong image in source slot/.test(i)&&/expected \/assets\/hero.jpg, generated \/assets\/cat.jpg/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Image usage count differs for \/assets\/cat.jpg: source 1, generated 2/.test(i)),issues.join('\n'));
+});
+test('carousel diagnostics require the complete slide count, order and image mapping',()=>{
+  const source=simpleGeometry([]);source.carousels=[{label:'Customer reviews',slides:[
+    {text:'Review One Person A',images:['https://source.example/a.jpg']},{text:'Review Two Person B',images:['https://source.example/b.jpg']},{text:'Review Three Person C',images:['https://source.example/c.jpg']},{text:'Review Four Person D',images:['https://source.example/d.jpg']}
+  ]}];
+  const candidate=simpleGeometry([]);candidate.carousels=[{label:'Customer reviews',slides:[
+    {text:'Review One Person A',images:['http://generated.test/assets/b.jpg']},{text:'Review Two Person B',images:['http://generated.test/assets/b.jpg']}
+  ]}];
+  const evidence={site:'https://source.example',directory:'',pages:[],assets:['a','b','c','d'].map(name=>({original:`https://source.example/${name}.jpg`,file:`/tmp/${name}.jpg`,publicPath:`/assets/${name}.jpg`})),fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
+  const issues=carouselIssues(source,candidate,evidence);
+  assert.ok(issues.some(i=>/slide count differs: source 4, generated 2/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/slide 1 images differ/.test(i)&&/a.jpg/.test(i)&&/b.jpg/.test(i)),issues.join('\n'));
 });
 test('media geometry diagnostics identify exact localized image placement deltas without guessing by DOM order',()=>{
   const source=simpleGeometry([{key:'1',tag:'img',text:'',x:100,y:200,width:500,height:300,style:{},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
@@ -240,7 +292,7 @@ test('heading evaluator also enforces italic and text alignment',()=>{
   const source=simpleGeometry([{key:'1',parent:'root',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:base}]);
   const candidate=simpleGeometry([{key:'a',parent:'root2',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:{...base,'font-style':'normal','text-align':'left'}}]);
   const issues=contentIssues(source,candidate);
-  assert.ok(issues.some(i=>/Heading Tree Experts/.test(i)&&/font-style/.test(i)&&/text-align/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Heading \"Tree Experts\"/.test(i)&&/font-style source italic, generated normal/.test(i)&&/text-align source center, generated left/.test(i)),issues.join('\n'));
 });
 test('zero is measured; null is missing',()=>{assert.equal(improves(score(null),score(0)),true);assert.equal(improves(score(0),score(null)),false);});
 test('measured pixel improvement is accepted even when diagnostic wording changes',()=>{const a=score(85);a.views[0].worstBand=55;a.views[0].issues=['Heading Example: y, font-weight differ'];const b=score(90);b.views[0].worstBand=64;b.views[0].issues=['Heading Example: y differ'];assert.equal(improves(a,b),true);});

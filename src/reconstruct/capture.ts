@@ -16,7 +16,7 @@ export interface CaptureOptions {
   sourceStability?: boolean;
 }
 interface Bundle { site: string; pages: Array<{ route: string; file: string }> }
-export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'; index:number }
+export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'|'sitemap'; index:number }
 export function skippableDiscoveredCaptureError(error:unknown):boolean{
   const message=error instanceof Error?error.message:String(error);
   return /page\.goto:|net::ERR_|\bHTTP \d{3}\b|Source page is empty|Page text exceeds reconstruction context budget/i.test(message);
@@ -25,7 +25,7 @@ export function prioritizeDiscoveredLinks(links:DiscoveredLink[]):string[]{
   const bucket=(item:DiscoveredLink)=>{
     if(item.region==='nav'||item.region==='header')return 0;
     let pathname='';try{pathname=new URL(item.href).pathname.toLowerCase();}catch{}
-    const core=/(?:^|[-/])(contact|about|services?|pricing|faq|team|staff|locations?|gallery|portfolio|projects?|testimonials?|reviews?)(?:[-/]|$)/i.test(pathname);
+    const core=/(?:^|[-/])(contact|about|(?:our)?services?|pricing|faq|team|staff|locations?|gallery|portfolio|projects?|testimonials?|reviews?)(?:[-_]?\d+)?(?:[-/]|$)/i.test(pathname);
     const lowValue=/(?:^|[-/])(blog|news|privacy|terms|cookie|category|tag|author)(?:[-/]|$)/i.test(pathname);
     if(core)return 1;
     if(lowValue)return 4;
@@ -90,9 +90,9 @@ const GEOMETRY = `(() => {
  const fontFaces=[],mediaQueries=[];
  const rules=(list)=>{for(const r of Array.from(list||[])){if(r.type===5)fontFaces.push(r.cssText);else if(r.type===4)mediaQueries.push(r.conditionText);if(r.cssRules)rules(r.cssRules);}};
  for(const s of Array.from(document.styleSheets)){try{rules(s.cssRules);}catch{}}
- const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n const visibleText=String(document.body?.innerText||'').replace(/\\s+/g,' ').trim();\n const rootStyle=read(getComputedStyle(document.documentElement)),bodyStyle=read(getComputedStyle(document.body));\n return {text:visibleText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,rootStyle,bodyStyle,
+ const signatures=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||''),document.querySelector('meta[name="generator"]')?.getAttribute('content')||''].join(' ');\n const platformHints=[]; for(const [label,re] of [['WordPress',/wordpress|wp-content|wp-includes/i],['Elementor',/elementor/i],['WPBakery',/wpbakery|js_composer|vc_/i],['Divi',/divi|et_pb_/i],['WooCommerce',/woocommerce|wc-/i],['Shopify',/shopify/i],['Wix',/wix/i],['Squarespace',/squarespace/i]])if(re.test(signatures))platformHints.push(label);\n const cleanText=(node)=>{const walk=(current)=>current?.nodeType===3?String(current.textContent||''):Array.from(current?.childNodes||[]).map(walk).join(' ');return walk(node).replace(/\\s+/g,' ').trim().slice(0,2200);};\n const carouselRoots=Array.from(document.querySelectorAll('[aria-roledescription="carousel"],.swiper,.swiper-container,.slick-slider,[class*="carousel"],[class*="slider"],[class*="testimonial"],[class*="review"]'));\n const carousels=[],seenCarouselRoots=new Set(),seenCarouselSignatures=new Set();\n for(const root of carouselRoots){\n  if(seenCarouselRoots.has(root))continue;seenCarouselRoots.add(root);\n  const selectors=['.swiper-slide:not(.swiper-slide-duplicate)','.slick-slide:not(.slick-cloned)','[aria-roledescription="slide"]','[data-swiper-slide-index]',':scope > article',':scope > li','article','[class*="testimonial"]','[class*="review"]'];\n  let slides=[];\n  for(const selector of selectors){try{const found=Array.from(root.querySelectorAll(selector)).filter(el=>el!==root);if(found.length>=2){slides=found;break;}}catch{}}\n  if(slides.length<2)continue;\n  const unique=[],seenSlides=new Set();\n  for(const slide of slides){const text=cleanText(slide),images=Array.from(slide.querySelectorAll('img')).map(i=>{const raw=i.getAttribute('data-src')||i.getAttribute('data-lazy-src')||i.getAttribute('data-original')||i.currentSrc||i.src;try{return raw?new URL(raw,document.baseURI).href:'';}catch{return raw||'';}}).filter(Boolean).slice(0,4);const signature=text+'|'+images.join('|');if(!signature||seenSlides.has(signature))continue;seenSlides.add(signature);unique.push({text,images});if(unique.length>=24)break;}\n  if(unique.length<2)continue;\n  const inventorySignature=unique.map(slide=>slide.text+'|'+slide.images.join('|')).join('||');if(seenCarouselSignatures.has(inventorySignature))continue;seenCarouselSignatures.add(inventorySignature);\n  const label=String(root.getAttribute('aria-label')||root.id||root.className||'carousel').replace(/\\s+/g,' ').trim().slice(0,160);\n  carousels.push({label,slides:unique});if(carousels.length>=6)break;\n }\n const visibleText=String(document.body?.innerText||'').replace(/\\s+/g,' ').trim();\n const rootStyle=read(getComputedStyle(document.documentElement)),bodyStyle=read(getComputedStyle(document.body));\n return {text:visibleText,title:document.title,height:document.documentElement.scrollHeight,overflow:document.documentElement.scrollWidth>innerWidth+1,rootStyle,bodyStyle,
  brokenImages:Array.from(document.images).filter(i=>{const b=i.getBoundingClientRect(),s=getComputedStyle(i);return b.width>0&&b.height>0&&b.right>0&&b.left<innerWidth&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&i.naturalWidth===0;}).length,
- elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),platformHints:Array.from(new Set(platformHints)),truncated};
+ elements,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),embeds:Array.from(document.querySelectorAll('iframe')).map(f=>f.src),forms:document.forms.length,carousels,fontFaces,mediaQueries:Array.from(new Set(mediaQueries)),platformHints:Array.from(new Set(platformHints)),truncated};
 })()`;
 export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
@@ -196,6 +196,16 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
     return true;
   })()`;
   return await page.evaluate(script) as boolean;
+}
+async function primeCarouselAssets(page:Page,signal:AbortSignal):Promise<number>{
+  const triggers=await discoverInteractions(page),next=triggers.find(trigger=>trigger.kind==='button'&&/^next(?:\s+(?:slide|testimonial|review|item|image|photo|project))?\b/i.test(trigger.name));
+  if(!next)return 0;
+  const seen=new Set<string>();
+  for(let step=0;step<16;step++){
+    signal.throwIfAborted();const fingerprint=geometryFingerprint(await geometry(page));if(seen.has(fingerprint))break;seen.add(fingerprint);
+    if(!await activateInteraction(page,next))break;await page.waitForTimeout(140);
+  }
+  return seen.size;
 }
 /** Do not erase transforms, reveal hidden menus, or resize the viewport to page height. */
 export async function settle(page: Page, signal: AbortSignal): Promise<void> {
@@ -314,7 +324,9 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         const resp=await page.goto(targets[0].url,{waitUntil:'load',timeout:30000});
         if(!resp?.ok())throw new Error(`Source returned HTTP ${resp?.status()}`);
         const discovered=await page.evaluate(`Array.from(document.querySelectorAll('header a[href],nav a[href],main a[href],footer a[href]')).map((a,index)=>({href:a.href,region:a.closest('nav')?'nav':a.closest('header')?'header':a.closest('main')?'main':'footer',index}))`) as DiscoveredLink[];
-        const found=prioritizeDiscoveredLinks(discovered),known=new Set(targets.map(t=>t.route)),candidateLimit=Math.min(100,Math.max(maxPages*3,20));
+        const sitemapUrls=await page.evaluate(`(async()=>{const origin=location.origin,queue=['/wp-sitemap.xml','/sitemap.xml','/wp-sitemap-posts-page-1.xml'].map(path=>origin+path),seen=new Set(),pages=[];while(queue.length&&seen.size<8&&pages.length<200){const url=queue.shift();if(!url||seen.has(url))continue;seen.add(url);try{const response=await fetch(url,{credentials:'omit'});if(!response.ok)continue;const text=await response.text(),doc=new DOMParser().parseFromString(text,'application/xml');for(const node of Array.from(doc.querySelectorAll('loc'))){const raw=String(node.textContent||'').trim();if(!raw)continue;const parsed=new URL(raw,origin);if(parsed.origin!==origin)continue;if(/\\.xml$/i.test(parsed.pathname)){if(queue.length<12)queue.push(parsed.href);}else pages.push(parsed.href);if(pages.length>=200)break;}}catch{}}return pages;})()`) as string[];
+        const sitemapLinks:DiscoveredLink[]=sitemapUrls.map((href,index)=>({href,region:'sitemap',index:10000+index}));
+        const found=prioritizeDiscoveredLinks([...discovered,...sitemapLinks]),known=new Set(targets.map(t=>t.route)),candidateLimit=Math.min(100,Math.max(maxPages*4,24));
         for(const value of found){try{const u=new URL(value);if(u.origin!==new URL(evidence.site).origin||u.search||/\.(pdf|png|jpg|zip|mp4)$/i.test(u.pathname))continue;const route=routePath(u.pathname);if(!known.has(route)){targets.push({route,url:u.origin+route,discovered:true});known.add(route);if(targets.length>=candidateLimit)break;}}catch{}}
         if(targets.length>maxPages)evidence.warnings.push(`Discovery found ${targets.length} candidate routes; Molt will retain the first ${maxPages} that capture successfully.`);
       }finally{await ctx.close();}
@@ -387,6 +399,8 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           if(g.brokenImages)evidence.blockers.push(`${target.route} ${viewport.name}: ${g.brokenImages} source images did not load.`);
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
+          const primedCarouselStates=await primeCarouselAssets(page,options.signal);
+          if(primedCarouselStates>1){const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});if(reset?.ok())await settle(page,options.signal);else evidence.warnings.push(`${target.route} ${viewport.name}: carousel asset priming could not restore the initial page state.`);}
           const interactions:NonNullable<Evidence['pages'][number]['views'][number]['interactions']>=[];
           const triggers=await discoverInteractions(page);
           for(let index=0;index<triggers.length;index++){

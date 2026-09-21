@@ -23,6 +23,19 @@ function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):strin
   }
   return diffs;
 }
+function cssNumber(value:string|undefined):number|null{const n=Number.parseFloat(value??'');return Number.isFinite(n)?n:null;}
+export function typographyIssues(source:Geometry,candidate:Geometry):string[]{
+  const ranked:Array<{score:number;message:string}>=[];
+  for(const pair of matchedTextElements(source,candidate)){
+    const diffs=typographyDiffs(pair.source,pair.candidate);if(!diffs.length)continue;
+    const sourceSize=cssNumber(pair.source.style['font-size']),candidateSize=cssNumber(pair.candidate.style['font-size']);
+    const sizeDelta=sourceSize!==null&&candidateSize!==null?Math.abs(candidateSize-sourceSize):0;
+    const priority=/^h[1-6]$/.test(pair.source.tag)?140:(pair.source.tag==='a'||pair.source.tag==='button'?90:30);
+    const position=Math.abs(pair.candidate.y-pair.source.y)+Math.abs(pair.candidate.x-pair.source.x)*0.25;
+    ranked.push({score:priority+sizeDelta*8+Math.min(80,position),message:'Typography "'+short(pair.source)+'" ('+pair.source.tag+'): '+diffs.join('; ')});
+  }
+  return ranked.sort((a,b)=>b.score-a.score).slice(0,14).map(item=>item.message);
+}
 function matchedTextElements(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence}>{
   const visibleCandidate=candidate.elements.filter(e=>normalize(e.text)&&TEXT_TAG.test(e.tag));
   const key=(e:ElementEvidence,text:string)=>(INLINE_TEXT_TAG.test(e.tag)?'inline':e.tag)+'\0'+text;
@@ -207,6 +220,63 @@ export function mediaGeometryIssues(source:Geometry,candidate:Geometry,evidence:
   }
   return issues.sort((a,b)=>b.amount-a.amount).slice(0,8).map(i=>i.message);
 }
+function backgroundLocalAsset(element:ElementEvidence,assetByOriginal:Map<string,string>,sourceSide:boolean):string{
+  const value=element.style['background-image']??'';
+  const urls=[...value.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(m=>m[1]);
+  for(const url of urls){const mapped=sourceSide?(assetByOriginal.get(url)??''):assetPath(url);if(mapped.startsWith('/assets/'))return mapped;}
+  return '';
+}
+function mediaDistance(a:ElementEvidence,b:ElementEvidence):number{return Math.abs(a.x-b.x)+Math.abs(a.y-b.y)+Math.abs(a.width-b.width)*0.4+Math.abs(a.height-b.height)*0.4;}
+export function mediaIdentityIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  const assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath])),issues:string[]=[];
+  const expectedImages=source.elements.filter(e=>e.tag==='img'&&e.src&&e.width*e.height>=1024).map(e=>({element:e,asset:assetByOriginal.get(e.src!)??''})).filter(x=>x.asset);
+  const actualImages=candidate.elements.filter(e=>e.tag==='img'&&e.src&&e.width*e.height>=256).map(e=>({element:e,asset:assetPath(e.src)})).filter(x=>x.asset.startsWith('/assets/'));
+  const used=new Set<number>();
+  for(const expected of expectedImages){
+    let best=-1,bestDistance=Infinity;
+    for(let index=0;index<actualImages.length;index++){if(used.has(index))continue;const distance=mediaDistance(expected.element,actualImages[index].element);if(distance<bestDistance){best=index;bestDistance=distance;}}
+    if(best<0)continue;used.add(best);const actual=actualImages[best];
+    if(actual.asset!==expected.asset){
+      const appearsElsewhere=actualImages.some((item,index)=>index!==best&&item.asset===expected.asset);
+      const label=expected.element.attributes?.alt?'"'+String(expected.element.attributes.alt).slice(0,60)+'"':expected.asset;
+      issues.push('Wrong image in source slot '+Math.round(expected.element.x)+'/'+Math.round(expected.element.y)+'px ('+label+'): expected '+expected.asset+', generated '+actual.asset+(appearsElsewhere?'; expected asset appears in a different slot':''));
+    }
+  }
+  const count=(items:Array<{asset:string}>)=>{const out=new Map<string,number>();for(const item of items)out.set(item.asset,(out.get(item.asset)??0)+1);return out;};
+  const expectedCount=count(expectedImages),actualCount=count(actualImages);
+  for(const [asset,total] of expectedCount){const generated=actualCount.get(asset)??0;if(generated!==total)issues.push('Image usage count differs for '+asset+': source '+total+', generated '+generated);}
+  const sourceBackgrounds=source.elements.map(e=>({element:e,asset:backgroundLocalAsset(e,assetByOriginal,true)})).filter(x=>x.asset&&x.element.width*x.element.height>=4096);
+  const candidateBackgrounds=candidate.elements.map(e=>({element:e,asset:backgroundLocalAsset(e,assetByOriginal,false)})).filter(x=>x.asset&&x.element.width*x.element.height>=4096);
+  const usedBackgrounds=new Set<number>();
+  for(const expected of sourceBackgrounds){
+    let best=-1,bestDistance=Infinity;
+    for(let index=0;index<candidateBackgrounds.length;index++){if(usedBackgrounds.has(index))continue;const distance=mediaDistance(expected.element,candidateBackgrounds[index].element);if(distance<bestDistance){best=index;bestDistance=distance;}}
+    if(best<0)continue;usedBackgrounds.add(best);const actual=candidateBackgrounds[best];
+    if(actual.asset!==expected.asset)issues.push('Wrong background image in source slot '+Math.round(expected.element.x)+'/'+Math.round(expected.element.y)+'px: expected '+expected.asset+', generated '+actual.asset);
+  }
+  return [...new Set(issues)].slice(0,12);
+}
+function carouselImagePath(raw:string,assetByOriginal:Map<string,string>,sourceSide:boolean):string{const value=sourceSide?(assetByOriginal.get(raw)??''):assetPath(raw);return value.startsWith('/assets/')?value:'';}
+export function carouselIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  const expected=source.carousels??[];if(!expected.length)return [];
+  const actual=candidate.carousels??[],assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath])),issues:string[]=[],used=new Set<number>();
+  for(let carouselIndex=0;carouselIndex<expected.length;carouselIndex++){
+    const before=expected[carouselIndex];let best=-1,bestScore=-Infinity;
+    for(let index=0;index<actual.length;index++){if(used.has(index))continue;const overlap=before.slides.filter(slide=>actual[index].slides.some(candidateSlide=>normalize(candidateSlide.text)===normalize(slide.text)&&Boolean(normalize(slide.text)))).length;const score=overlap*20-Math.abs(before.slides.length-actual[index].slides.length);if(score>bestScore){best=index;bestScore=score;}}
+    const label=before.label||'#'+(carouselIndex+1);
+    if(best<0){issues.push('Carousel "'+label+'" is missing; source has '+before.slides.length+' unique slides');continue;}
+    used.add(best);const after=actual[best];
+    if(before.slides.length!==after.slides.length)issues.push('Carousel "'+label+'" slide count differs: source '+before.slides.length+', generated '+after.slides.length);
+    for(let slideIndex=0;slideIndex<Math.min(before.slides.length,after.slides.length);slideIndex++){
+      const beforeSlide=before.slides[slideIndex],afterSlide=after.slides[slideIndex],beforeText=normalize(beforeSlide.text),afterText=normalize(afterSlide.text);
+      if(beforeText&&beforeText!==afterText)issues.push('Carousel "'+label+'" slide '+(slideIndex+1)+' content/order differs; source starts "'+beforeText.slice(0,90)+'", generated "'+afterText.slice(0,90)+'"');
+      const expectedImages=beforeSlide.images.map(raw=>carouselImagePath(raw,assetByOriginal,true)).filter(Boolean),actualImages=afterSlide.images.map(raw=>carouselImagePath(raw,assetByOriginal,false)).filter(Boolean);
+      if(JSON.stringify(expectedImages)!==JSON.stringify(actualImages))issues.push('Carousel "'+label+'" slide '+(slideIndex+1)+' images differ: source ['+expectedImages.join(', ')+'], generated ['+actualImages.join(', ')+']');
+      if(issues.length>=14)return issues;
+    }
+  }
+  return issues.slice(0,14);
+}
 export function controlGeometryIssues(source:Geometry,candidate:Geometry):string[]{
   const issues:Array<{amount:number;message:string}>=[];
   for(const pair of matchedTextElements(source,candidate)){
@@ -252,25 +322,19 @@ function formControlPresentationIssues(source:Geometry,candidate:Geometry):strin
   return issues.slice(0,6);
 }
 export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
-  const pairs=matchedTextElements(source,candidate),problems:string[]=[];
-  const typography:string[]=[];
-  const horizontal:Array<{amount:number;message:string}>=[];
+  const pairs=matchedTextElements(source,candidate),problems:string[]=[...typographyIssues(source,candidate)];
+  const horizontal:Array<{amount:number;message:string}>=[],vertical:Array<{amount:number;message:string}>=[];
   for(const pair of pairs){
-    if(/^h[1-6]$/.test(pair.source.tag))continue;
-    const diffs=typographyDiffs(pair.source,pair.candidate);
-    if(diffs.length&&typography.length<8)typography.push(`Text "${short(pair.source)}": ${diffs.join('; ')}`);
-    if(!INLINE_TEXT_TAG.test(pair.source.tag)){
-      const leftDelta=pair.candidate.x-pair.source.x;
-      const sourceCenter=pair.source.x+pair.source.width/2,candidateCenter=pair.candidate.x+pair.candidate.width/2;
-      const centerDelta=candidateCenter-sourceCenter;
-      if(Math.abs(leftDelta)>8&&Math.abs(centerDelta)>8){
-        horizontal.push({amount:Math.max(Math.abs(leftDelta),Math.abs(centerDelta)),message:`Horizontal alignment "${short(pair.source)}": source x ${Math.round(pair.source.x)}px, generated x ${Math.round(pair.candidate.x)}px; source center ${Math.round(sourceCenter)}px, generated center ${Math.round(candidateCenter)}px`});
-      }
-    }
+    if(INLINE_TEXT_TAG.test(pair.source.tag))continue;
+    const leftDelta=pair.candidate.x-pair.source.x;
+    const sourceCenter=pair.source.x+pair.source.width/2,candidateCenter=pair.candidate.x+pair.candidate.width/2;
+    const centerDelta=candidateCenter-sourceCenter;
+    if(Math.abs(leftDelta)>8&&Math.abs(centerDelta)>8)horizontal.push({amount:Math.max(Math.abs(leftDelta),Math.abs(centerDelta)),message:`Horizontal alignment "${short(pair.source)}": source x ${Math.round(pair.source.x)}px, generated x ${Math.round(pair.candidate.x)}px; source center ${Math.round(sourceCenter)}px, generated center ${Math.round(candidateCenter)}px`});
+    const yDelta=pair.candidate.y-pair.source.y;
+    if(Math.abs(yDelta)>10)vertical.push({amount:Math.abs(yDelta),message:`Vertical placement "${short(pair.source)}": source y ${Math.round(pair.source.y)}px, generated y ${Math.round(pair.candidate.y)}px (${Math.round(Math.abs(yDelta))}px ${yDelta>0?'too low':'too high'})`});
   }
-  problems.push(...typography);
-  horizontal.sort((a,b)=>b.amount-a.amount);
-  problems.push(...horizontal.slice(0,5).map(item=>item.message));
+  horizontal.sort((a,b)=>b.amount-a.amount);vertical.sort((a,b)=>b.amount-a.amount);
+  problems.push(...horizontal.slice(0,5).map(item=>item.message),...vertical.slice(0,6).map(item=>item.message));
 
   const byParent=new Map<string,typeof pairs>();
   for(const pair of pairs){
@@ -320,9 +384,12 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     const index=headings.findIndex(e=>e.tag===original.tag&&normalize(e.text)===normalize(original.text));
     if(index<0){problems.push(`Missing heading: ${original.text}`);continue;}
     const actual=headings.splice(index,1)[0];
-    const mismatches=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
-    for(const property of TYPOGRAPHY_PROPS)if(original.style[property]!==actual.style[property])mismatches.push(property);
-    if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
+    const geometryKeys=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
+    const typeDiffs=typographyDiffs(original,actual);
+    if(geometryKeys.length||typeDiffs.length){
+      const geometryPart=geometryKeys.length?geometryMessage(`Heading "${short(original)}"`,original,actual):'';
+      problems.push([`Heading "${short(original)}"`,...typeDiffs,geometryPart].filter(Boolean).join('; '));
+    }
   }
   problems.push(...spacingIssues(source,candidate),...controlGeometryIssues(source,candidate),...formControlIssues(source,candidate));
   if(Math.abs(source.height-candidate.height)>Math.max(3,source.height*0.005))problems.push(`Page height differs: source ${source.height}px, generated ${candidate.height}px`);
@@ -363,7 +430,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         check.candidate=join(directory,`${stem}.png`);check.diff=join(directory,`${stem}.diff.png`);
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
         const generated=await geometry(page);
-        check.issues.push(...contentIssues(reference.geometry,generated),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
+        check.issues.push(...contentIssues(reference.geometry,generated),...mediaIdentityIssues(reference.geometry,generated,evidence),...carouselIssues(reference.geometry,generated,evidence),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
         // Literal DOM links are checked after rendering, including shared components. Same-site links
         // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
@@ -388,7 +455,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
             stateCheck.diff=join(directory,`${stem}-${state.id}.diff.png`);
             await page.screenshot({path:stateCheck.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
             const stateGenerated=await geometry(page);
-            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
+            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaIdentityIssues(state.geometry,stateGenerated,evidence),...carouselIssues(state.geometry,stateGenerated,evidence),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
             const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
             if(stateMetrics.score<threshold||stateMetrics.worstBand<bandThreshold)stateCheck.issues.push(...visualLayoutIssues(state.geometry,stateGenerated),...mediaPresentationIssues(state.geometry,stateGenerated,evidence));
             stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;

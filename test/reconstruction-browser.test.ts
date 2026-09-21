@@ -73,6 +73,17 @@ test('capture records visible form field text state and geometry',{skip:process.
   assert.equal(checkbox?.attributes?.checked,'true');
   assert.equal(textarea?.attributes?.placeholder,'Tell us about the project');assert.equal(textarea?.attributes?.readonly,'false');
 }));
+test('capture inventories hidden carousel slides with exact text and image order',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  for(const name of ['a','b','c','d'])await writeFile(join(dir,'bundle',name+'.svg'),`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><text x="2" y="20">${name}</text></svg>`);
+  const slides=['a','b','c','d'].map((name,index)=>`<article class="swiper-slide" style="${index?'display:none':''}"><img src="${name}.svg"><h3>Review ${index+1}</h3><p>Person ${name.toUpperCase()}</p></article>`).join('');
+  const page=`<!doctype html><html><body><h1>Reviews</h1><section class="swiper" aria-label="Customer reviews">${slides}<button class="swiper-button-next"></button></section></body></html>`;
+  await writeFile(join(dir,'bundle/home.html'),page);await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'carousel-inventory'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const carousel=evidence.pages[0].views[0].geometry.carousels?.find(item=>item.label==='Customer reviews');
+  assert.ok(carousel,JSON.stringify(evidence.pages[0].views[0].geometry.carousels));assert.equal(carousel.slides.length,4);
+  assert.deepEqual(carousel.slides.map(slide=>slide.text),['Review 1 Person A','Review 2 Person B','Review 3 Person C','Review 4 Person D']);
+  assert.ok(carousel.slides.every(slide=>slide.images.length===1));
+}));
 test('carousel evidence keeps reserved slots even when many disclosures appear first',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const details=Array.from({length:7},(_,i)=>`<details><summary>Question ${i}</summary><p>Answer</p></details>`).join('');
   const page=`<!doctype html><html><body>${details}<button class="swiper-button-next"></button></body></html>`;

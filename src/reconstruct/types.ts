@@ -12,9 +12,11 @@ export interface ElementEvidence {
   attributes?: Record<string, string>;
   before?: Record<string, string>; after?: Record<string, string>;
 }
+export interface CarouselSlideEvidence { text:string; images:string[] }
+export interface CarouselEvidence { label:string; slides:CarouselSlideEvidence[] }
 export interface Geometry {
   text: string; title: string; height: number; overflow: boolean; brokenImages: number;
-  elements: ElementEvidence[]; links: string[]; embeds: string[]; forms: number;
+  elements: ElementEvidence[]; links: string[]; embeds: string[]; forms: number; carousels?: CarouselEvidence[];
   fontFaces: string[]; mediaQueries: string[]; platformHints?: string[]; rootStyle?: Record<string,string>; bodyStyle?: Record<string,string>; truncated: boolean;
 }
 export type InteractionKind = 'button' | 'tab' | 'details' | 'hover';

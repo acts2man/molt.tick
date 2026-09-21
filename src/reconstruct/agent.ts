@@ -95,6 +95,25 @@ function spacingGuide(elements:any[],limit=60){
   }
   return {textRhythm:rhythm,between:evenly(allBetween.sort((a,b)=>a.toY-b.toY),limit)};
 }
+function criticalTypography(elements:any[],limit=48){
+  const rank=(e:any)=>/^h1$/.test(e.tag)?120:/^h[2-3]$/.test(e.tag)?100:(e.tag==='a'||e.tag==='button'?80:/^(strong|b)$/.test(e.tag)?70:/^(p|li)$/.test(e.tag)?30:10);
+  return elements.filter(e=>/^(h[1-6]|p|li|button|a|label|blockquote|strong|b)$/.test(e.tag)&&String(e.text||'').trim()).map(e=>({e,score:rank(e)+(e.y<1000?30:0)})).sort((a,b)=>b.score-a.score||a.e.y-b.e.y).slice(0,limit).map(({e})=>({
+    tag:e.tag,text:clipped(String(e.text).replace(/\s+/g,' ').trim(),120),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
+    fontFamily:e.style?.['font-family'],fontSize:e.style?.['font-size'],fontWeight:e.style?.['font-weight'],fontStyle:e.style?.['font-style'],lineHeight:e.style?.['line-height'],letterSpacing:e.style?.['letter-spacing'],textAlign:e.style?.['text-align'],textTransform:e.style?.['text-transform']
+  }));
+}
+function exactMediaSlots(elements:any[],remap:(value:string)=>string,limit=90){
+  const slots:any[]=[];
+  for(const e of elements){
+    if(e.tag==='img'&&e.src&&e.width*e.height>=256)slots.push({kind:'img',asset:remap(e.src),alt:e.attributes?.alt??'',x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),objectFit:e.style?.['object-fit'],objectPosition:e.style?.['object-position'],borderRadius:e.style?.['border-radius']});
+    const bg=String(e.style?.['background-image']??'');if(bg&&bg!=='none'&&/url\(/.test(bg)&&e.width*e.height>=1024)slots.push({kind:'background',asset:remap(bg),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),backgroundSize:e.style?.['background-size'],backgroundPosition:e.style?.['background-position'],borderRadius:e.style?.['border-radius']});
+    if(slots.length>=limit)break;
+  }
+  return slots;
+}
+function carouselInventory(geometry:any,remap:(value:string)=>string){
+  return (geometry.carousels??[]).slice(0,6).map((carousel:any)=>({label:carousel.label,slideCount:carousel.slides.length,slides:carousel.slides.slice(0,24).map((slide:any)=>({text:clipped(String(slide.text||'').replace(/\s+/g,' ').trim(),700),images:(slide.images??[]).map((image:string)=>remap(image))}))}));
+}
 function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
@@ -112,8 +131,11 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
       viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,rootStyle:v.geometry.rootStyle,bodyStyle:v.geometry.bodyStyle,
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
-        geometry:select(state.geometry.elements,Math.min(70,geometryLimit))})),
+        geometry:select(state.geometry.elements,Math.min(70,geometryLimit)),carousels:carouselInventory(state.geometry,remap)})),
+      criticalTypography:criticalTypography(v.geometry.elements),
       spacing:spacingGuide(v.geometry.elements,Math.min(60,geometryLimit)),
+      mediaSlots:exactMediaSlots(v.geometry.elements,remap),
+      carousels:carouselInventory(v.geometry,remap),
       geometry:select(v.geometry.elements,geometryLimit),
     }))};
 }
@@ -135,7 +157,7 @@ function relevantFiles(files:FileChange[],page:EvidencePage):FileChange[]{
   return [...wanted].map(path=>byPath.get(path)!).filter(Boolean);
 }
 function relevantAssets(evidence:Evidence,page:EvidencePage){
-  const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),interactions:(v.interactions??[]).map(i=>i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})))})));
+  const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),carousels:v.geometry.carousels,interactions:(v.interactions??[]).map(i=>({elements:i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),carousels:i.geometry.carousels}))})));
   return evidence.assets.filter(a=>haystack.includes(a.original)).map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath}));
 }
 function boundedFiles(files:FileChange[],page:EvidencePage,perFile=60000){
@@ -180,16 +202,16 @@ function visionFirstContext(evidence:Evidence,page:EvidencePage){
   return {
     route:page.route,title:page.title,file:routeFile(page.route),
     fullVisibleText:clipped(page.views[0]?.geometry.text??'',14000),
-    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,outline:outline(v.geometry.elements),
+    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,outline:outline(v.geometry.elements),criticalTypography:criticalTypography(v.geometry.elements,24),mediaSlots:exactMediaSlots(v.geometry.elements,value=>remap(value)??'',45),carousels:carouselInventory(v.geometry,value=>remap(value)??''),
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,5000)}:{}),
-      interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500)}))}))
+      interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500),carousels:carouselInventory(i.geometry,value=>remap(value)??'')}))}))
   };
 }
 export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string,savedSource?:SavedSourceEvidence):string{
   const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
-    return JSON.stringify({task,sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+    return JSON.stringify({task,fidelityContract:'Treat computed typography, spacing, route identity, media-slot asset paths and carousel slide inventories as exact constraints. Never substitute, shuffle or reuse a different image merely because it is visually plausible. Hidden carousel slides are source content and must be implemented in the same count, order and image-to-slide mapping. Never collapse a slideshow to a single image.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
       editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
@@ -208,6 +230,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   }
   const visionFirst=JSON.stringify({
     task:task+' The attached desktop, tablet and mobile screenshots are the primary visual authority. Implement from the screenshots plus this compact structural outline.',
+    fidelityContract:'Typography sizes/weights, spacing, media-slot identity and carousel inventories are exact. Do not shuffle assets, duplicate a different image, collapse a slideshow to one image, or invent a shorter carousel.',
     sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
     reference:visionFirstContext(evidence,page),
@@ -220,6 +243,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   if(visionFirst.length<=300000)return visionFirst;
   return JSON.stringify({
     task:task+' Use the attached screenshots as the primary visual authority. This source required an ultra-compact evidence fallback; prioritize visual fidelity, visible copy, responsive layout and local assets.',
+    fidelityContract:'Keep exact type scale, media-slot identity and full carousel/slider content; never substitute or shuffle images.',
     sourceSite:evidence.site,route:page.route,file:routeFile(page.route),title:page.title,
     visibleText:clipped(page.views[0]?.geometry.text??'',9000),
     viewports:page.views.map(v=>({viewport:v.viewport,pageHeight:v.geometry.height})),
