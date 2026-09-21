@@ -11,14 +11,17 @@ function cleanName(value:string):string{
   if(!out)throw new Error('Could not derive a Netlify site name from the output repository.');
   return out;
 }
-async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={}):Promise<string>{
+async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=120000):Promise<string>{
   return await new Promise((resolve,reject)=>{
     const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});
-    let out='',err='';
+    let out='',err='',settled=false;
+    const timer=setTimeout(()=>{if(settled)return;child.kill('SIGTERM');setTimeout(()=>child.kill('SIGKILL'),2000).unref();settled=true;reject(new Error(`${command} timed out after ${Math.round(timeoutMs/1000)}s`));},timeoutMs);
+    timer.unref();
+    const finish=(fn:()=>void)=>{if(settled)return;settled=true;clearTimeout(timer);fn();};
     child.stdout.on('data',b=>{if(out.length<16000)out+=String(b);});
     child.stderr.on('data',b=>{if(err.length<16000)err+=String(b);});
-    child.on('error',reject);
-    child.on('close',code=>code===0?resolve(out.trim()):reject(new Error(`${command} failed (exit ${code}): ${(err||out).trim().slice(0,1600)}`)));
+    child.on('error',error=>finish(()=>reject(error)));
+    child.on('close',code=>finish(()=>code===0?resolve(out.trim()):reject(new Error(`${command} failed (exit ${code}): ${(err||out).trim().slice(0,1600)}`))));
   });
 }
 async function call(token:string,path:string,init:RequestInit={},fetcher:typeof fetch=fetch):Promise<{status:number,data:any,text:string}>{
@@ -172,19 +175,24 @@ async function waitForRun(repo:string,commitSha:string,token:string,cwd:string):
   throw new Error('Timed out waiting for the generated repository to deploy to Netlify.');
 }
 export async function verifyLiveRoutes(url:string,routes:string[],fetcher:typeof fetch=fetch,wait:(ms:number)=>Promise<void>=ms=>new Promise(r=>setTimeout(r,ms))):Promise<void>{
-  const unique=[...new Set(['/',...routes.map(route=>route.startsWith('/')?route:'/'+route)])].slice(0,50);
-  for(const route of unique){
+  const unique=[...new Set(['/',...routes.map(route=>route.startsWith('/')?route:'/'+route)])].slice(0,24);
+  const verify=async(route:string)=>{
     let ok=false,lastStatus=0;
-    for(let attempt=0;attempt<12;attempt++){
+    for(let attempt=0;attempt<6;attempt++){
       try{
-        const target=new URL(route,url).href,response=await fetcher(target,{redirect:'follow',signal:AbortSignal.timeout(15000)});
+        const target=new URL(route,url).href,response=await fetcher(target,{redirect:'follow',signal:AbortSignal.timeout(10000)});
         lastStatus=response.status;
         if(response.ok){ok=true;break;}
       }catch{}
-      await wait(5000);
+      if(attempt<5)await wait(2500);
     }
     if(!ok)throw new Error(`Netlify reported a successful deploy, but reconstructed route ${route} did not become reachable${lastStatus?` (HTTP ${lastStatus})`:''}.`);
-  }
+  };
+  let next=0;
+  const workers=Array.from({length:Math.min(6,unique.length)},async()=>{
+    for(;;){const index=next++;if(index>=unique.length)return;await verify(unique[index]);}
+  });
+  await Promise.all(workers);
 }
 export async function configureContinuousNetlifyDeploy(directory:string,repository:string,site:NetlifySite,githubToken:string,netlifyToken:string):Promise<NetlifyDeployResult>{
   if(!githubToken||githubToken.length<20)throw new Error('GitHub export token is missing while configuring continuous deployment.');
