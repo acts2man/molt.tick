@@ -16,7 +16,7 @@ export interface CaptureOptions {
   sourceStability?: boolean;
 }
 interface Bundle { site: string; pages: Array<{ route: string; file: string }> }
-export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'; index:number }
+export interface DiscoveredLink { href:string; region:'nav'|'header'|'main'|'footer'|'sitemap'; index:number }
 export function skippableDiscoveredCaptureError(error:unknown):boolean{
   const message=error instanceof Error?error.message:String(error);
   return /page\.goto:|net::ERR_|\bHTTP \d{3}\b|Source page is empty|Page text exceeds reconstruction context budget/i.test(message);
@@ -25,7 +25,7 @@ export function prioritizeDiscoveredLinks(links:DiscoveredLink[]):string[]{
   const bucket=(item:DiscoveredLink)=>{
     if(item.region==='nav'||item.region==='header')return 0;
     let pathname='';try{pathname=new URL(item.href).pathname.toLowerCase();}catch{}
-    const core=/(?:^|[-/])(contact|about|services?|pricing|faq|team|staff|locations?|gallery|portfolio|projects?|testimonials?|reviews?)(?:[-/]|$)/i.test(pathname);
+    const core=/(?:^|[-/])(contact|about|(?:our)?services?|pricing|faq|team|staff|locations?|gallery|portfolio|projects?|testimonials?|reviews?)(?:[-_]?\\d+)?(?:[-/]|$)/i.test(pathname);
     const lowValue=/(?:^|[-/])(blog|news|privacy|terms|cookie|category|tag|author)(?:[-/]|$)/i.test(pathname);
     if(core)return 1;
     if(lowValue)return 4;
