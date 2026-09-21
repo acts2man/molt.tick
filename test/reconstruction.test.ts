@@ -7,7 +7,7 @@ import { improves, routePath, routeFile, publicUrl, publicIP, inside, integer, v
 import { validateChanges, apply, snapshot, restore } from '../src/reconstruct/workspace.js';
 import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
-import { readBundle, adaptiveViewports, geometryFingerprint, prioritizeDiscoveredLinks } from '../src/reconstruct/capture.js';
+import { readBundle, adaptiveViewports, geometryFingerprint, prioritizeDiscoveredLinks, skippableDiscoveredCaptureError } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
@@ -289,6 +289,12 @@ test('rejected repair autopsy exposes gains and regressions for the next model r
 });
 test('malformed evaluator success and changed scope cannot pass',()=>{assert.equal(improves(score(50),score(null,true)),false);const next=score(99,true);next.views[0].viewport='mobile';assert.equal(improves(score(50),next),false);});
 test('asset paths cannot escape a bundle through a symlink',()=>temporary(async dir=>{await writeFile(join(dir,'page.html'),'x');assert.equal(await inside(dir,'page.html'),join(dir,'page.html'));await symlink('/etc/passwd',join(dir,'escape'));await assert.rejects(inside(dir,'escape'));await assert.rejects(inside(dir,'../outside'));}));
+test('auto-discovery distinguishes broken route navigation from engine-wide capture failures',()=>{
+  assert.equal(skippableDiscoveredCaptureError(new Error('page.goto: net::ERR_FAILED at https://example.com/about2')),true);
+  assert.equal(skippableDiscoveredCaptureError(new Error('/missing: HTTP 404')),true);
+  assert.equal(skippableDiscoveredCaptureError(new Error('Source page is empty')),true);
+  assert.equal(skippableDiscoveredCaptureError(new Error('Asset budget exceeded')),false);
+});
 test('page discovery keeps navigation first and promotes core business pages over incidental content',()=>{
   const links=prioritizeDiscoveredLinks([
     {href:'https://example.com/blog',region:'nav',index:1},
