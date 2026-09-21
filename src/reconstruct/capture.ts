@@ -169,7 +169,7 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
       const clean=(s)=>String(s==null?'':s).replace(/\\s+/g,' ').trim().slice(0,120);
       const label=(el)=>clean(el.getAttribute('aria-label')||el.getAttribute('title')||el.textContent||el.getAttribute('aria-controls'));
       const visible=(el)=>{const b=el.getBoundingClientRect(),s=getComputedStyle(el);return !!b.width&&!!b.height&&b.bottom>0&&b.top<innerHeight&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0;};
-      const items=Array.from(document.querySelectorAll('header a[aria-haspopup],nav a[aria-haspopup],header li.menu-item-has-children > a,nav li.menu-item-has-children > a,header li:has(> ul) > a,nav li:has(> ul) > a')).filter(visible);
+      const items=Array.from(document.querySelectorAll('header a,nav a,header button,nav button,header [role="button"],nav [role="button"]')).filter(visible);
       const matches=items.filter(el=>label(el)===trigger.name&&(!trigger.controls||el.getAttribute('aria-controls')===trigger.controls));
       const target=matches[Math.max(0,Number(trigger.ordinal)||0)];if(!target)return null;
       const b=target.getBoundingClientRect();return {x:Math.max(1,Math.min(innerWidth-2,b.left+b.width/2)),y:Math.max(1,Math.min(innerHeight-2,b.top+b.height/2))};
