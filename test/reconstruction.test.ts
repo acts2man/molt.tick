@@ -292,7 +292,7 @@ test('heading evaluator also enforces italic and text alignment',()=>{
   const source=simpleGeometry([{key:'1',parent:'root',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:base}]);
   const candidate=simpleGeometry([{key:'a',parent:'root2',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:{...base,'font-style':'normal','text-align':'left'}}]);
   const issues=contentIssues(source,candidate);
-  assert.ok(issues.some(i=>/Heading Tree Experts/.test(i)&&/font-style/.test(i)&&/text-align/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Heading \"Tree Experts\"/.test(i)&&/font-style source italic, generated normal/.test(i)&&/text-align source center, generated left/.test(i)),issues.join('\n'));
 });
 test('zero is measured; null is missing',()=>{assert.equal(improves(score(null),score(0)),true);assert.equal(improves(score(0),score(null)),false);});
 test('measured pixel improvement is accepted even when diagnostic wording changes',()=>{const a=score(85);a.views[0].worstBand=55;a.views[0].issues=['Heading Example: y, font-weight differ'];const b=score(90);b.views[0].worstBand=64;b.views[0].issues=['Heading Example: y differ'];assert.equal(improves(a,b),true);});
