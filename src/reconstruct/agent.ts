@@ -254,7 +254,7 @@ function shellRegion(elements:any[],tag:'header'|'nav'|'footer',limit=8){
     .sort((a,b)=>a.y-b.y||a.x-b.x).slice(0,limit).map(compact);
 }
 export function siteWideShellContext(evidence:Evidence){
-  const context={
+  const build=(regionLimit:number,includeInteractions:boolean)=>({
     purpose:'Site-wide shared-shell evidence. Compare every route before authoring shared header, navigation, footer, global page frame, typography and responsive shell. Preserve real route-specific variations instead of assuming the first page represents the whole site.',
     routes:evidence.pages.map(page=>({
       route:page.route,title:page.title,
@@ -262,20 +262,30 @@ export function siteWideShellContext(evidence:Evidence){
         viewport:view.viewport,
         rootStyle:Object.fromEntries(['font-family','font-size','color','background'].map(key=>[key,view.geometry.rootStyle?.[key]]).filter(([,value])=>value)),
         bodyStyle:Object.fromEntries(['margin','padding','font-family','font-size','color','background','background-image'].map(key=>[key,view.geometry.bodyStyle?.[key]]).filter(([,value])=>value)),
-        header:shellRegion(view.geometry.elements,'header'),
-        navigation:shellRegion(view.geometry.elements,'nav'),
-        footer:shellRegion(view.geometry.elements,'footer'),
+        header:shellRegion(view.geometry.elements,'header',regionLimit),
+        navigation:shellRegion(view.geometry.elements,'nav',regionLimit),
+        footer:shellRegion(view.geometry.elements,'footer',regionLimit),
         motion:view.motion?{libraries:view.motion.libraries,hasEntranceMotion:view.motion.hasEntranceMotion,hasScrollLinkedMotion:view.motion.hasScrollLinkedMotion,hasStickyOrFixedMotion:view.motion.hasStickyOrFixedMotion}:undefined,
-        interactions:(view.interactions??[]).filter(state=>state.trigger.kind==='hover'||/menu|nav|drawer|toggle/i.test(state.trigger.name)).slice(0,2).map(state=>({
-          trigger:state.trigger,visibleText:clipped(state.geometry.text,700),
-          header:shellRegion(state.geometry.elements,'header',5),navigation:shellRegion(state.geometry.elements,'nav',5)
-        }))
+        ...(includeInteractions?{interactions:(view.interactions??[]).filter(state=>state.trigger.kind==='hover'||/menu|nav|drawer|toggle/i.test(state.trigger.name)).slice(0,2).map(state=>({
+          trigger:state.trigger,visibleText:clipped(state.geometry.text,500),
+          header:shellRegion(state.geometry.elements,'header',Math.min(4,regionLimit)),navigation:shellRegion(state.geometry.elements,'nav',Math.min(4,regionLimit))
+        }))}:{})
       }))
     }))
+  });
+  for(const [regionLimit,includeInteractions] of [[8,true],[5,false],[3,false],[1,false]] as const){
+    const context=build(regionLimit,includeInteractions);
+    if(JSON.stringify(context).length<=120000)return context;
+  }
+  return {
+    purpose:'Ultra-compact site-wide shell evidence; all captured routes remain represented.',
+    routes:evidence.pages.map(page=>({route:page.route,title:page.title,views:page.views.map(view=>({
+      viewport:view.viewport,
+      header:shellRegion(view.geometry.elements,'header',1),
+      navigation:shellRegion(view.geometry.elements,'nav',1),
+      footer:shellRegion(view.geometry.elements,'footer',1)
+    }))}))
   };
-  const encoded=JSON.stringify(context);
-  if(encoded.length>120000)throw new Error('Site-wide shared-shell evidence exceeded its bounded context budget');
-  return context;
 }
 
 function visionFirstContext(evidence:Evidence,page:EvidencePage){
