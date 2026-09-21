@@ -62,7 +62,7 @@ function styleDifferences(source:Record<string,string>|undefined,candidate:Recor
 function significantVisualSurface(e:ElementEvidence):boolean{
   if(!/^(div|aside|figure)$/.test(e.tag))return false;
   const s=e.style??{},background=String(s.background??'');
-  const hasBackground=Boolean(s['background-image']&&s['background-image']!=='none')||Boolean(background&&!/^(?:rgba\(0, 0, 0, 0\)|transparent)\b/i.test(background));
+  const hasBackground=Boolean(s['background-image']&&s['background-image']!=='none')||Boolean(background&&!/^(?:rgba\(0, 0, 0, 0\)|transparent)(?:\s|$)/i.test(background));
   const hasBorder=Boolean(s.border&&!/^0px\s+none\b/i.test(String(s.border)));
   const hasRadius=Boolean(s['border-radius']&&!/^0px(?:\s+0px){0,3}$/.test(String(s['border-radius'])));
   const hasShadow=Boolean(s['box-shadow']&&s['box-shadow']!=='none');
