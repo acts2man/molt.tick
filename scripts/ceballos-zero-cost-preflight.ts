@@ -33,6 +33,8 @@ const discovery=await capture({
 });
 assert.ok(discovery.pages.length>=2&&discovery.pages.length<=5,`live discovery must retain useful pages without exceeding scope; got ${discovery.pages.length}`);
 assert.ok(discovery.pages.every(page=>page.views.length===1&&page.views[0].geometry.text.trim()),'every retained discovered page must have usable browser evidence');
+const discoveredRoutes=new Set(discovery.pages.map(page=>page.route));
+for(const route of ['/ourservices2','/about2','/gallery-2','/contact2'])assert.ok(discoveredRoutes.has(route),`Ceballos five-page discovery must retain core route ${route}; got ${[...discoveredRoutes].join(', ')}`);
 const result=await runReconstruction({
   model,url:'https://ceballostreeservices.com',bundleDir,workDir,maxPages:1,maxRepairs:1,
   onProgress:message=>{console.log('[preflight]',message);}
