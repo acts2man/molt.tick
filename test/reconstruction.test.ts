@@ -14,6 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, siteWideShellContext, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { availableAgentMinutes, effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
+import { verifyLiveRoutes } from '../scripts/publish-netlify.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues, motionIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
@@ -66,6 +67,19 @@ test('runtime envelope preserves delivery reserve after slow preflight work',()=
   assert.equal(availableAgentMinutes(65,85,20,64*60000),1);
   assert.throws(()=>availableAgentMinutes(65,20,20,0),/Invalid runtime envelope/);
 });
+test('live-route verification is bounded and retries transient deployment lag',async()=>{
+  let calls=0;
+  const fetcher=async()=>{calls++;return new Response('',{status:calls<=2?503:200});};
+  await verifyLiveRoutes('https://example.netlify.app',['/about'],fetcher as typeof fetch,async()=>{});
+  assert.ok(calls>=3&&calls<=12,calls);
+});
+test('live-route verification stops after six attempts per route',async()=>{
+  let calls=0;
+  const fetcher=async()=>{calls++;return new Response('',{status:503});};
+  await assert.rejects(verifyLiveRoutes('https://example.netlify.app',['/about'],fetcher as typeof fetch,async()=>{}),/did not become reachable/);
+  assert.ok(calls<=12,`expected at most 6 attempts for each of two unique routes, got ${calls}`);
+});
+
 test('later initial pages cannot rewrite existing shared or earlier-route files',()=>{
   const before:FileChange[]=[{path:'src/site.css',content:'body{margin:0}'},{path:'src/components/Header.tsx',content:'export const Header=()=>null'},{path:'src/pages/home.tsx',content:'export default()=>null'}];
   assert.throws(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/about.tsx',1),/cannot rewrite existing/);
