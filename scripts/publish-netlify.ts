@@ -11,7 +11,7 @@ function cleanName(value:string):string{
   if(!out)throw new Error('Could not derive a Netlify site name from the output repository.');
   return out;
 }
-async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=120000):Promise<string>{
+async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=45000):Promise<string>{
   return await new Promise((resolve,reject)=>{
     const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});
     let out='',err='',settled=false;
