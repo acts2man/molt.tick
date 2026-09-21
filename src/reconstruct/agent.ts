@@ -184,6 +184,18 @@ export function assertInitialGenerationIsolation(before:FileChange[],changes:Fil
     if(previous!==undefined&&previous!==change.content)throw new Error(`Later page generation cannot rewrite existing shared or earlier-route file ${change.path}. Add a route-specific style/component instead; measured repair rounds may adjust shared files after every page exists.`);
   }
 }
+function parallelPageCss(pageFile:string):string{return pageFile.replace(/\.tsx$/i,'.css');}
+export function assertParallelGenerationIsolation(changes:FileChange[],pageFile:string):void{
+  const css=parallelPageCss(pageFile);
+  for(const change of changes)if(change.path!==pageFile&&change.path!==css)throw new Error(`Parallel page worker may only write ${pageFile} or ${css}; attempted ${change.path}. Shared components are frozen until measured repair rounds.`);
+}
+async function mapConcurrent<T,R>(items:T[],limit:number,worker:(item:T,index:number)=>Promise<R>):Promise<R[]>{
+  const results=new Array<R>(items.length);let next=0;
+  const runners=Array.from({length:Math.min(limit,items.length)},async()=>{
+    for(;;){const index=next++;if(index>=items.length)return;results[index]=await worker(items[index],index);}
+  });
+  await Promise.all(runners);return results;
+}
 export function repairIssueSubset(issues:string[],limit=12):string[]{
   const groups=[
     issues.filter(i=>/^Typography\b|^Heading\b/i.test(i)),
@@ -302,15 +314,33 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const allowed=new Set(evidence.pages.map(p=>routeFile(p.route)));
   const savedSourceCache=new Map<string,SavedSourceEvidence|undefined>();
   const sourceFor=async(route:string)=>{if(savedSourceCache.has(route))return savedSourceCache.get(route);const source=await savedSourceEvidence(options.bundleDir,route);savedSourceCache.set(route,source);return source;};
-  for(const [pageIndex,page] of evidence.pages.entries()){
-    signal.throwIfAborted();await progress(`Reconstructing ${page.route} with shared components`);
-    const files=await snapshot(outDir),savedSource=await sourceFor(page.route),request={prompt:reconstructionPrompt(evidence,page,files,'Implement this page as a visually faithful reconstruction, using the attached screenshots as your primary visual authority. Think like a senior front-end engineer comparing the intended design to your implementation: infer hierarchy, proportions, whitespace rhythm, typography scale, responsive composition and component behavior from the whole page. Use DOM/CSS measurements as precise factual anchors where helpful, but do not limit yourself to supplied diagnostics if the screenshots reveal additional visual relationships. Reproduce observed menu, disclosure, accordion, carousel, slider and tab behavior with accessible React behavior when interaction evidence is supplied. Preserve visible emphasis, alignment and copy. After the first route, preserve existing shared files and earlier pages during initial generation; add route-specific styles/components instead. Shared files may be refined later only after every route is measurable together.',savedSource),images:await referenceImages(page.views)};
-    // A malformed first reply gets one self-correction opportunity with its exact validation error.
+  const initialTask='Implement this page as a visually faithful reconstruction, using the attached screenshots as your primary visual authority. Think like a senior front-end engineer comparing the intended design to your implementation: infer hierarchy, proportions, whitespace rhythm, typography scale, responsive composition and component behavior from the whole page. Use DOM/CSS measurements as precise factual anchors where helpful, but do not limit yourself to supplied diagnostics if the screenshots reveal additional visual relationships. Reproduce observed menu, disclosure, accordion, carousel, slider and tab behavior with accessible React behavior when interaction evidence is supplied. Preserve visible emphasis, alignment and copy.';
+  const seed=evidence.pages[0];
+  if(seed){
+    signal.throwIfAborted();await progress(`Reconstructing ${seed.route} as the shared site shell`);
+    const files=await snapshot(outDir),savedSource=await sourceFor(seed.route),request={prompt:reconstructionPrompt(evidence,seed,files,initialTask+' Establish reusable shared structure where the source clearly repeats it across routes; later page workers will reuse this shell.',savedSource),images:await referenceImages(seed.views)};
     let error='';let done=false;
     for(let attempt=0;attempt<2&&!done;attempt++){
-      try{const fullPrompt=request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'');const reply=await model.complete({...request,prompt:fullPrompt},signal);assertNoPartialFileRewrite(request.prompt,reply.files);assertInitialGenerationIsolation(files,reply.files,routeFile(page.route),pageIndex);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(page.route)))throw new Error('Requested page file was not produced');done=true;}
+      try{const fullPrompt=request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files.`:'');const reply=await model.complete({...request,prompt:fullPrompt},signal);assertNoPartialFileRewrite(request.prompt,reply.files);await apply(outDir,reply.files,allowed);const current=await snapshot(outDir);if(!current.some(f=>f.path===routeFile(seed.route)))throw new Error('Requested page file was not produced');done=true;}
       catch(e){await restore(outDir,files);error=(e as Error).message;if(attempt===1)throw e;}
     }
+  }
+  const remaining=evidence.pages.slice(1);
+  if(remaining.length){
+    const concurrency=integer(process.env.MOLT_PAGE_CONCURRENCY,4,1,6),baseline=await snapshot(outDir);
+    await progress(`Reconstructing ${remaining.length} remaining pages with up to ${Math.min(concurrency,remaining.length)} parallel workers`);
+    const replies=await mapConcurrent(remaining,concurrency,async(page)=>{
+      signal.throwIfAborted();const pageFile=routeFile(page.route),cssFile=parallelPageCss(pageFile),savedSource=await sourceFor(page.route);
+      const task=initialTask+` The shared shell is frozen during this parallel page pass. Reuse existing shared components but do not edit them. Return only ${pageFile} and, if needed, ${cssFile}. Keep all route-specific implementation inside those files; measured repair rounds may refine shared code after every page exists.`;
+      const request={prompt:reconstructionPrompt(evidence,page,baseline,task,savedSource),images:await referenceImages(page.views)};
+      let error='';
+      for(let attempt=0;attempt<2;attempt++){
+        try{const fullPrompt=request.prompt+(error?`\nPrevious reply was rejected: ${error}. Return corrected complete files only for this route.`:'');const reply=await model.complete({...request,prompt:fullPrompt},signal);assertNoPartialFileRewrite(request.prompt,reply.files);assertParallelGenerationIsolation(reply.files,pageFile);if(!reply.files.some(file=>file.path===pageFile))throw new Error('Requested page file was not produced');return {route:page.route,reply};}
+        catch(e){error=(e as Error).message;if(attempt===1)throw e;}
+      }
+      throw new Error(`Parallel reconstruction failed for ${page.route}`);
+    });
+    for(const item of replies){signal.throwIfAborted();await progress(`Applying parallel reconstruction for ${item.route}`);await apply(outDir,item.reply.files,allowed);}
   }
   const requestedRepairs=options.maxRepairs??integer(process.env.MOLT_MAX_REPAIRS,6,0,20);
   const repairRounds=effectiveRepairRounds(evidence.pages.length,requestedRepairs);
