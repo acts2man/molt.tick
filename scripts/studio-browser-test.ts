@@ -20,7 +20,7 @@ try{
   assert.equal(await page.locator('dialog input').getAttribute('type'),'password');await page.keyboard.press('Escape');await page.locator('dialog[open]').waitFor({state:'hidden'});
   await page.goto(host.origin+'/connections');const blockedSave=page.getByRole('button',{name:'Connect GitHub before saving'});await blockedSave.waitFor();assert.equal(await blockedSave.isDisabled(),false,'A disconnected owner must get an actionable setup button');await blockedSave.click();await page.locator('dialog[open]').waitFor();await page.keyboard.press('Escape');await page.locator('dialog[open]').waitFor({state:'hidden'});await page.goto(host.origin+'/studio');
   const website=page.getByLabel('Website address');await website.waitFor();assert.equal(await website.inputValue(),'','A new reconstruction must never inherit a development target');await website.fill('https://example.com');
-  await page.getByRole('button',{name:'Next: choose pages'}).click();await page.getByRole('button',{name:'Next: review the scope'}).click();
+  await page.getByRole('button',{name:'Next: choose pages'}).click();await page.getByText('Discovery prioritizes header/navigation links',{exact:false}).waitFor();await page.getByText('weakest measured region',{exact:false}).waitFor();await page.getByRole('button',{name:'Next: review the scope'}).click();
   await page.getByText('What to expect:',{exact:false}).waitFor();assert.equal(await page.getByRole('button',{name:'Start development test'}).count(),0,'Anonymous visitors cannot submit jobs');
   await page.goto(host.origin+'/plans');await page.getByLabel('Estimate page count').fill('5');await page.getByLabel('Estimate complexity').selectOption('complex');
   assert.match(await page.locator('.credit-result strong').innerText(),/210/);
