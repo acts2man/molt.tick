@@ -13,7 +13,8 @@ import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, siteWideShellContext, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
-import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
+import { availableAgentMinutes, effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
+import { verifyLiveRoutes } from '../scripts/publish-netlify.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues, motionIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
@@ -57,7 +58,28 @@ test('production budgets scale time and provider ceilings without changing low-c
   const one=productionRunBudget(1,2,'medium');assert.equal(one.repairRounds,2);assert.equal(one.agentMinutes,25);assert.equal(one.requestMs,180000);
   const multi=productionRunBudget(7,4,'medium');assert.equal(multi.repairRounds,7);assert.ok(multi.agentMinutes>=55);assert.equal(multi.maxModelCalls,25);assert.equal(multi.maxTransportAttempts,75);
   const max=productionRunBudget(7,4,'max');assert.equal(max.requestMs,540000);assert.equal(max.maxOutputTokens,40000);assert.equal(max.maxTransportAttempts,max.maxModelCalls*3);
+  assert.equal(max.runnerMinutes,85);assert.equal(max.deliveryReserveMinutes,20);assert.ok(max.agentMinutes<=65);
 });
+test('runtime envelope preserves delivery reserve after slow preflight work',()=>{
+  assert.equal(availableAgentMinutes(65,85,20,0),65);
+  assert.equal(availableAgentMinutes(65,85,20,10*60000),55);
+  assert.equal(availableAgentMinutes(40,85,20,10*60000),40);
+  assert.equal(availableAgentMinutes(65,85,20,64*60000),1);
+  assert.throws(()=>availableAgentMinutes(65,20,20,0),/Invalid runtime envelope/);
+});
+test('live-route verification is bounded and retries transient deployment lag',async()=>{
+  let calls=0;
+  const fetcher=async()=>{calls++;return new Response('',{status:calls<=2?503:200});};
+  await verifyLiveRoutes('https://example.netlify.app',['/about'],fetcher as typeof fetch,async()=>{});
+  assert.ok(calls>=3&&calls<=12,calls);
+});
+test('live-route verification stops after six attempts per route',async()=>{
+  let calls=0;
+  const fetcher=async()=>{calls++;return new Response('',{status:503});};
+  await assert.rejects(verifyLiveRoutes('https://example.netlify.app',['/about'],fetcher as typeof fetch,async()=>{}),/did not become reachable/);
+  assert.ok(calls<=12,`expected at most 6 attempts for each of two unique routes, got ${calls}`);
+});
+
 test('later initial pages cannot rewrite existing shared or earlier-route files',()=>{
   const before:FileChange[]=[{path:'src/site.css',content:'body{margin:0}'},{path:'src/components/Header.tsx',content:'export const Header=()=>null'},{path:'src/pages/home.tsx',content:'export default()=>null'}];
   assert.throws(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/about.tsx',1),/cannot rewrite existing/);
