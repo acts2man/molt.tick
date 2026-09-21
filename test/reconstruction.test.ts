@@ -150,6 +150,12 @@ test('visual diagnostics promote styled div cards into exact surface measurement
   assert.ok(issues.some(i=>/Container div #1/.test(i)&&/delta x 25/.test(i)&&/width -40/.test(i)),issues.join('\n'));
   assert.ok(issues.some(i=>/Container div #1 treatment/.test(i)&&/border-radius source 20px, generated 4px/.test(i)&&/box-shadow source/.test(i)),issues.join('\n'));
 });
+test('plain transparent wrapper divs are not promoted as visual card surfaces',()=>{
+  const transparent={'background':'rgba(0, 0, 0, 0) none repeat scroll 0% 0% / auto padding-box border-box','background-image':'none','background-size':'auto','background-position':'0% 0%','border':'0px none rgb(0, 0, 0)','border-radius':'0px','box-shadow':'none','padding':'0px','gap':'normal','overflow':'visible','filter':'none','backdrop-filter':'none','clip-path':'none'};
+  const source=simpleGeometry([{key:'wrapper',tag:'div',text:'',x:0,y:0,width:1200,height:600,style:transparent}]);
+  const candidate=simpleGeometry([]);
+  assert.equal(visualLayoutIssues(source,candidate).some(i=>/Container div/.test(i)),false);
+});
 test('media presentation diagnostics report image crop and positioning mismatches',()=>{
   const source=simpleGeometry([{key:'1',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'cover','object-position':'50% 30%','border-radius':'18px'},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
   const candidate=simpleGeometry([{key:'2',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'contain','object-position':'50% 50%','border-radius':'0px'},src:'http://generated.test/assets/hero-hash.jpg',attributes:{alt:'Hero'}}]);
