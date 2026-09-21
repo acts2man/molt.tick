@@ -48,8 +48,8 @@ const overlapX=(a:ElementEvidence,b:ElementEvidence)=>{
   return Math.max(0,right-left)/Math.max(1,Math.min(a.width,b.width));
 };
 const STRUCTURAL_SOURCE_TAG=/^(header|nav|main|section|article|footer|form)$/;
-const STRUCTURAL_CANDIDATE_TAG=/^(header|nav|main|section|article|footer|form|div)$/;
-const BOX_STYLE_PROPS=['background','background-image','background-size','background-position','border','border-radius','box-shadow','padding','gap','overflow'] as const;
+const STRUCTURAL_CANDIDATE_TAG=/^(header|nav|main|section|article|footer|form|div|aside|figure)$/;
+const BOX_STYLE_PROPS=['background','background-image','background-size','background-position','border','border-radius','box-shadow','padding','gap','overflow','filter','backdrop-filter','clip-path'] as const;
 const FRAME_STYLE_PROPS=['margin','padding','background','background-image'] as const;
 const PSEUDO_STYLE_PROPS=['content','position','top','left','right','bottom','width','height','background','background-image','border','border-radius','transform','opacity'] as const;
 function styleDifferences(source:Record<string,string>|undefined,candidate:Record<string,string>|undefined,properties:readonly string[]):string[]{
@@ -58,6 +58,16 @@ function styleDifferences(source:Record<string,string>|undefined,candidate:Recor
     const expected=source[property]??'',actual=candidate[property]??'';
     return expected===actual?[]:[`${property} source ${expected||'unset'}, generated ${actual||'unset'}`];
   });
+}
+function significantVisualSurface(e:ElementEvidence):boolean{
+  if(!/^(div|aside|figure)$/.test(e.tag))return false;
+  const s=e.style??{},background=String(s.background??'');
+  const hasBackground=Boolean(s['background-image']&&s['background-image']!=='none')||Boolean(background&&!/^(?:rgba\(0, 0, 0, 0\)|transparent)\b/i.test(background));
+  const hasBorder=Boolean(s.border&&!/^0px\s+none\b/i.test(String(s.border)));
+  const hasRadius=Boolean(s['border-radius']&&!/^0px(?:\s+0px){0,3}$/.test(String(s['border-radius'])));
+  const hasShadow=Boolean(s['box-shadow']&&s['box-shadow']!=='none');
+  const hasEffect=Boolean((s.filter&&s.filter!=='none')||(s['backdrop-filter']&&s['backdrop-filter']!=='none')||(s['clip-path']&&s['clip-path']!=='none'));
+  return hasBackground||hasBorder||hasRadius||hasShadow||hasEffect;
 }
 function pseudoElementIssues(label:string,source:ElementEvidence,candidate:ElementEvidence):string[]{
   const out:string[]=[];
@@ -72,7 +82,7 @@ function pseudoElementIssues(label:string,source:ElementEvidence,candidate:Eleme
   return out;
 }
 function matchedVisualContainers(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence;ordinal:number}>{
-  const expected=source.elements.filter(e=>STRUCTURAL_SOURCE_TAG.test(e.tag)&&e.width>0&&e.height>0).sort((a,b)=>a.y-b.y||a.x-b.x);
+  const expected=source.elements.filter(e=>(STRUCTURAL_SOURCE_TAG.test(e.tag)||significantVisualSurface(e))&&e.width>0&&e.height>0).sort((a,b)=>a.y-b.y||a.x-b.x);
   const available=candidate.elements.filter(e=>STRUCTURAL_CANDIDATE_TAG.test(e.tag)&&e.width>0&&e.height>0),used=new Set<string>();
   const counts=new Map<string,number>(),pairs:Array<{source:ElementEvidence;candidate:ElementEvidence;ordinal:number}>=[];
   for(const item of expected){
@@ -114,7 +124,7 @@ export function mediaPresentationIssues(source:Geometry,candidate:Geometry,evide
   for(const image of source.elements.filter(e=>e.tag==='img'&&e.src)){
     const local=assetByOriginal.get(image.src!);if(!local)continue;
     const match=generatedImages.find(e=>assetPath(e.src)===local);if(!match)continue;
-    const diffs=styleDifferences(image.style,match.style,['object-fit','object-position','border-radius']);
+    const diffs=styleDifferences(image.style,match.style,['object-fit','object-position','border-radius','filter','clip-path']);
     if(diffs.length)issues.push(`Image ${image.attributes?.alt?`"${String(image.attributes.alt).slice(0,70)}"`:local} crop/presentation: ${diffs.join('; ')}`);
   }
   const sourceBackgrounds=source.elements.filter(e=>e.style['background-image']&&e.style['background-image']!=='none');
