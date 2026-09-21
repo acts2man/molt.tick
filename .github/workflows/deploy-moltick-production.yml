@@ -31,6 +31,8 @@ jobs:
           cache: npm
       - name: Install root dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install Studio dependencies
+        run: npm --prefix studio ci --ignore-scripts --no-audit --no-fund
       - name: Build and deploy current main to production
         run: npx -y netlify-cli@latest deploy --build --prod --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "Molt production ${GITHUB_SHA}"
       - name: Record deployed commit
