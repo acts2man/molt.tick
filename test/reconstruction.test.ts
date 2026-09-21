@@ -12,7 +12,7 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, siteWideShellContext, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues, motionIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
@@ -64,6 +64,33 @@ test('later initial pages cannot rewrite existing shared or earlier-route files'
   assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/styles/about.css',content:'.about{}'},{path:'src/pages/about.tsx',content:'export default()=>null'}],'src/pages/about.tsx',1));
   assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/home.tsx',0));
 });
+test('site-wide shared-shell evidence includes route-specific header, navigation and footer differences',()=>{
+  const geom=(label:string,footer:string):Geometry=>({
+    text:`${label} ${footer}`,title:label,height:1200,overflow:false,brokenImages:0,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false,
+    rootStyle:{},bodyStyle:{},
+    elements:[
+      {key:'h',tag:'header',text:'',x:0,y:0,width:1440,height:90,style:{}},
+      {key:'n',parent:'h',tag:'nav',text:'',x:200,y:20,width:800,height:50,style:{}},
+      {key:'a',parent:'n',tag:'a',text:label,x:220,y:30,width:120,height:30,style:{},href:'https://example.com/'},
+      {key:'f',tag:'footer',text:'',x:0,y:1100,width:1440,height:100,style:{}},
+      {key:'p',parent:'f',tag:'p',text:footer,x:40,y:1130,width:600,height:30,style:{}},
+    ],
+  });
+  const view=(name:string,width:number,label:string,footer:string)=>({viewport:{name,width,height:900},screenshot:`/${name}.png`,geometry:geom(label,footer),interactions:[]});
+  const evidence={site:'https://example.com',directory:'',assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[],pages:[
+    {route:'/',title:'Home',url:'https://example.com/',views:[view('desktop',1440,'Home Nav','Home footer')]},
+    {route:'/about',title:'About',url:'https://example.com/about',views:[view('desktop',1440,'About Nav','About-specific footer')]},
+  ]} as unknown as Evidence;
+  const shell=siteWideShellContext(evidence) as any;
+  assert.equal(shell.routes.length,2);
+  assert.equal(shell.routes[0].views[0].navigation.some((e:any)=>e.text==='Home Nav'),true);
+  assert.equal(shell.routes[1].views[0].navigation.some((e:any)=>e.text==='About Nav'),true);
+  assert.equal(shell.routes[1].views[0].footer.some((e:any)=>e.text==='About-specific footer'),true);
+  const prompt=JSON.parse(reconstructionPrompt(evidence,evidence.pages[0],[],'seed',undefined,shell));
+  assert.equal(prompt.siteWideSharedShell.routes[1].route,'/about');
+  assert.equal(prompt.siteWideSharedShell.routes[1].views[0].footer.some((e:any)=>e.text==='About-specific footer'),true);
+});
+
 test('parallel page workers are hard-isolated to their route file and sibling CSS',()=>{
   assert.doesNotThrow(()=>assertParallelGenerationIsolation([
     {path:'src/pages/about.tsx',content:'import "./about.css";export default()=>null'},
