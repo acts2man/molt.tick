@@ -73,6 +73,13 @@ test('multi-page repair scheduling gives unattempted failing routes priority',()
   assert.equal(selectRepairRoute(evaluation,attempts),'/a');attempts.set('/a',1);
   assert.equal(selectRepairRoute(evaluation,attempts),'/b');
 });
+test('visual self-review targets the weakest measured route even when every route already passes',()=>{
+  const evaluation:Evaluation={pass:true,issues:[],views:[
+    {route:'/home',viewport:'desktop',source:'h.png',score:99,worstBand:97,pass:true,issues:[]},
+    {route:'/about',viewport:'desktop',source:'a.png',score:98,worstBand:93,pass:true,issues:[]},
+  ]};
+  assert.equal(selectRepairRoute(evaluation,new Map()),'/about');
+});
 const simpleGeometry=(elements:Geometry['elements']):Geometry=>({text:elements.map(e=>e.text).filter(Boolean).join(' '),title:'Spacing test',height:1000,overflow:false,brokenImages:0,elements,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false});
 test('source geometry fingerprints are stable for identical evidence and change for visible layout changes',()=>{
   const base=simpleGeometry([{key:'1',tag:'h1',text:'Stable title',x:40,y:80,width:600,height:60,style:{}}]);
@@ -398,15 +405,19 @@ test('plain React state and semantic JSX are allowed',()=>assert.doesNotThrow(()
 test('change sets reject duplicates and excessive content',()=>{assert.throws(()=>validateChanges([change('a'),change('b')]));assert.throws(()=>validateChanges([change('a'.repeat(250001))]));assert.throws(()=>validateChanges([]));});
 test('workspace restoration removes rejected files',()=>temporary(async dir=>{await apply(dir,[change('export default()=> <h1>Before</h1>')],new Set(['src/pages/home.tsx']));const before=await snapshot(dir);await apply(dir,[change('export default()=> <h1>After</h1>'),change('export const value=1','src/components/Unexpected.ts')],new Set(['src/pages/home.tsx']));await restore(dir,before);assert.deepEqual(await snapshot(dir),before);}));
 
-async function loopHarness(scores:number[],replies:number[],maxRounds=3,controller=new AbortController()){
+async function loopHarness(scores:number[],replies:number[],maxRounds=3,controller=new AbortController(),minRounds=0){
   let current=0,evals=0;const saved:number[]=[];
-  const result=await repairLoop({snapshot:async()=>current,restore:async s=>{current=s;},digest:s=>String(s),evaluate:async()=>{const n=scores[current];evals++;return score(n,n>=95);},propose:async()=>({summary:'repair',files:[{path:'value',content:String(replies.shift()??current)}]}),apply:async r=>{current=Number(r.files[0].content);},save:async _=>{saved.push(current);}},{maxRounds,signal:controller.signal});
+  const result=await repairLoop({snapshot:async()=>current,restore:async s=>{current=s;},digest:s=>String(s),evaluate:async()=>{const n=scores[current];evals++;return score(n,n>=95);},propose:async()=>({summary:'repair',files:[{path:'value',content:String(replies.shift()??current)}]}),apply:async r=>{current=Number(r.files[0].content);},save:async _=>{saved.push(current);}},{maxRounds,minRounds,signal:controller.signal});
   return {result,current,evals,saved};
 }
 test('repair loop keeps an improved version until measured acceptance',async()=>{const {result,current}=await loopHarness([60,80,99],[1,2]);assert.equal(result.evaluation.pass,true);assert.equal(current,2);assert.equal(result.attempts.length,3);});
 test('repair loop rolls back a regression before the next attempt',async()=>{const {result,current}=await loopHarness([80,50,98],[1,2]);assert.equal(current,2);assert.equal(result.attempts[1].accepted,false);assert.equal(result.attempts[2].accepted,true);});
 test('repeated patches do not trigger another build',async()=>{const {result,evals}=await loopHarness([70],[0,0],2);assert.equal(evals,1);assert.equal(result.evaluation.pass,false);assert.match(result.reason??'',/budget/);});
 test('a passing initial output makes no model repair calls',async()=>{const {evals,result}=await loopHarness([99],[],4);assert.equal(evals,1);assert.equal(result.attempts.length,1);});
+test('a bounded visual self-review may run after measured pass but cannot replace it with a regression',async()=>{
+  const {evals,result,current}=await loopHarness([99,90],[1],1,new AbortController(),1);
+  assert.equal(evals,2);assert.equal(result.attempts.length,2);assert.equal(result.attempts[1].accepted,false);assert.equal(current,0);assert.equal(result.evaluation.pass,true);
+});
 test('failed partial writes are restored',async()=>{let file='good';const before=file;const result=await repairLoop({snapshot:async()=>file,restore:async s=>{file=s;},digest:s=>s,evaluate:async()=>score(60),propose:async()=>({summary:'x',files:[]}),apply:async()=>{file='partial';throw new Error('disk failure');},save:async()=>{}},{maxRounds:1,signal:signal()});assert.equal(file,before);assert.equal(result.attempts[1].accepted,false);});
 test('pre-aborted run starts no effects',async()=>{const c=new AbortController();c.abort();await assert.rejects(loopHarness([60],[1],2,c));});
 
