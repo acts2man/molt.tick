@@ -70,9 +70,13 @@ export async function repairImages(checks:ViewCheck[]):Promise<ImageInput[]>{
   for(const v of views){
     const source=await loadPng(v.source);const y=Math.max(0,(v.worstY??0)-100);
     result.push(input(`${v.viewport} SOURCE complete overview`,overview(source)));
-    result.push(input(`${v.viewport} SOURCE detail y=${y}`,crop(source,y,1100)));
-    if(v.candidate){const target=await loadPng(v.candidate);result.push(input(`${v.viewport} CANDIDATE detail y=${y}`,crop(target,y,1100)));}
-    if(v.diff){const diff=await loadPng(v.diff);result.push(input(`${v.viewport} DIFF heatmap detail y=${y}; bright pixels are mismatches`,crop(diff,y,1100)));}
+    if(v.candidate){
+      const target=await loadPng(v.candidate);
+      result.push(input(`${v.viewport} CANDIDATE complete overview; visually compare this entire page against the source overview`,overview(target)));
+      result.push(input(`${v.viewport} SOURCE detail y=${y}`,crop(source,y,1100)));
+      result.push(input(`${v.viewport} CANDIDATE detail y=${y}`,crop(target,y,1100)));
+    }else result.push(input(`${v.viewport} SOURCE detail y=${y}`,crop(source,y,1100)));
+    if(v.diff){const diff=await loadPng(v.diff);result.push(input(`${v.viewport} DIFF heatmap detail y=${y}; use as supporting evidence, not as a substitute for visual judgment`,crop(diff,y,1100)));}
   }
   // Interaction evidence is valuable, but only attach the worst failed state so repairs stay below provider image limits.
   const interactionView=[...views].filter(v=>(v.interactions??[]).some(i=>!i.pass)).sort((a,b)=>(a.worstBand??101)-(b.worstBand??101))[0];
