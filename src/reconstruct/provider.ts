@@ -89,7 +89,7 @@ export function createModel(options:ProviderOptions):Model{
         if([429,500,502,503,529].includes(response.status)&&attempt<2){const seconds=Math.min(10,Math.max(1,Number(response.headers.get('retry-after'))||2**attempt));await sleep(seconds*1000,undefined,{signal});continue;}
         throw new Error(`${options.provider} request failed (HTTP ${response.status}); ${raw.slice(0,500).split(options.key).join('[redacted]')}`);
       }
-      let data:any;try{data=JSON.parse(raw);}catch(error){record(call,null,`logical-${logicalCall}:invalid-json`);throw error;}
+      let data:any;try{data=JSON.parse(raw);}catch{record(call,null,`logical-${logicalCall}:invalid-json`);throw new Error('Invalid JSON from provider');}
       record(call,data.usage,`logical-${logicalCall}:${String(data.status??data.stop_reason??'response')}`);
       const reported=usage.records![usage.records!.length-1];
       usage.inputTokens+=reported.inputTokens??0;usage.outputTokens+=reported.outputTokens??0;
