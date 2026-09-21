@@ -12,7 +12,7 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
@@ -299,6 +299,23 @@ test('heading evaluator also enforces italic and text alignment',()=>{
   const candidate=simpleGeometry([{key:'a',parent:'root2',tag:'h2',text:'Tree Experts',x:200,y:40,width:600,height:50,style:{...base,'font-style':'normal','text-align':'left'}}]);
   const issues=contentIssues(source,candidate);
   assert.ok(issues.some(i=>/Heading \"Tree Experts\"/.test(i)&&/font-style source italic, generated normal/.test(i)&&/text-align source center, generated left/.test(i)),issues.join('\n'));
+});
+test('repair brief balances typography spacing media and structural diagnostics',()=>{
+  const issues=[
+    'Typography "Hero" (h1): font-size source 58px, generated 42px',
+    'Typography "Menu" (a): font-size source 16px, generated 13px',
+    'Typography "Welcome" (h2): font-size source 38px, generated 30px',
+    'Spacing "Welcome" → "100% SATISFACTION": source 24px, generated 91px (67px too large)',
+    'Container section #2: source x/y 0/600px, 1440×500px; generated 0/600px, 1440×390px',
+    'Wrong image in source slot 100/900px: expected /assets/a.jpg, generated /assets/cat.jpg',
+    'Carousel "Customer reviews" slide count differs: source 13, generated 4',
+    'Visible copy or reading order differs from the source',
+  ];
+  const selected=repairIssueSubset(issues,6);
+  assert.ok(selected.some(i=>i.startsWith('Typography')),selected.join('\n'));
+  assert.ok(selected.some(i=>i.startsWith('Spacing')||i.startsWith('Container')),selected.join('\n'));
+  assert.ok(selected.some(i=>i.startsWith('Wrong image')||i.startsWith('Carousel')),selected.join('\n'));
+  assert.ok(selected.some(i=>i.startsWith('Visible copy')),selected.join('\n'));
 });
 test('zero is measured; null is missing',()=>{assert.equal(improves(score(null),score(0)),true);assert.equal(improves(score(0),score(null)),false);});
 test('measured pixel improvement is accepted even when diagnostic wording changes',()=>{const a=score(85);a.views[0].worstBand=55;a.views[0].issues=['Heading Example: y, font-weight differ'];const b=score(90);b.views[0].worstBand=64;b.views[0].issues=['Heading Example: y differ'];assert.equal(improves(a,b),true);});
