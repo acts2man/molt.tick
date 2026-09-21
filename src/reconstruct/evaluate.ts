@@ -265,25 +265,19 @@ function formControlPresentationIssues(source:Geometry,candidate:Geometry):strin
   return issues.slice(0,6);
 }
 export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
-  const pairs=matchedTextElements(source,candidate),problems:string[]=[];
-  const typography:string[]=[];
-  const horizontal:Array<{amount:number;message:string}>=[];
+  const pairs=matchedTextElements(source,candidate),problems:string[]=[...typographyIssues(source,candidate)];
+  const horizontal:Array<{amount:number;message:string}>=[],vertical:Array<{amount:number;message:string}>=[];
   for(const pair of pairs){
-    if(/^h[1-6]$/.test(pair.source.tag))continue;
-    const diffs=typographyDiffs(pair.source,pair.candidate);
-    if(diffs.length&&typography.length<8)typography.push(`Text "${short(pair.source)}": ${diffs.join('; ')}`);
-    if(!INLINE_TEXT_TAG.test(pair.source.tag)){
-      const leftDelta=pair.candidate.x-pair.source.x;
-      const sourceCenter=pair.source.x+pair.source.width/2,candidateCenter=pair.candidate.x+pair.candidate.width/2;
-      const centerDelta=candidateCenter-sourceCenter;
-      if(Math.abs(leftDelta)>8&&Math.abs(centerDelta)>8){
-        horizontal.push({amount:Math.max(Math.abs(leftDelta),Math.abs(centerDelta)),message:`Horizontal alignment "${short(pair.source)}": source x ${Math.round(pair.source.x)}px, generated x ${Math.round(pair.candidate.x)}px; source center ${Math.round(sourceCenter)}px, generated center ${Math.round(candidateCenter)}px`});
-      }
-    }
+    if(INLINE_TEXT_TAG.test(pair.source.tag))continue;
+    const leftDelta=pair.candidate.x-pair.source.x;
+    const sourceCenter=pair.source.x+pair.source.width/2,candidateCenter=pair.candidate.x+pair.candidate.width/2;
+    const centerDelta=candidateCenter-sourceCenter;
+    if(Math.abs(leftDelta)>8&&Math.abs(centerDelta)>8)horizontal.push({amount:Math.max(Math.abs(leftDelta),Math.abs(centerDelta)),message:`Horizontal alignment "${short(pair.source)}": source x ${Math.round(pair.source.x)}px, generated x ${Math.round(pair.candidate.x)}px; source center ${Math.round(sourceCenter)}px, generated center ${Math.round(candidateCenter)}px`});
+    const yDelta=pair.candidate.y-pair.source.y;
+    if(Math.abs(yDelta)>10)vertical.push({amount:Math.abs(yDelta),message:`Vertical placement "${short(pair.source)}": source y ${Math.round(pair.source.y)}px, generated y ${Math.round(pair.candidate.y)}px (${Math.round(Math.abs(yDelta))}px ${yDelta>0?'too low':'too high'})`});
   }
-  problems.push(...typography);
-  horizontal.sort((a,b)=>b.amount-a.amount);
-  problems.push(...horizontal.slice(0,5).map(item=>item.message));
+  horizontal.sort((a,b)=>b.amount-a.amount);vertical.sort((a,b)=>b.amount-a.amount);
+  problems.push(...horizontal.slice(0,5).map(item=>item.message),...vertical.slice(0,6).map(item=>item.message));
 
   const byParent=new Map<string,typeof pairs>();
   for(const pair of pairs){
