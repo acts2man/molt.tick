@@ -200,12 +200,13 @@ export function repairIssueSubset(issues:string[],limit=12):string[]{
 }
 export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,number>):string|undefined{
   const failing=[...new Set(evaluation.views.filter(v=>!v.pass).map(v=>v.route))];
-  if(!failing.length)return undefined;
-  const minimum=Math.min(...failing.map(route=>attempts.get(route)??0));
-  const eligible=failing.filter(route=>(attempts.get(route)??0)===minimum);
+  const routes=failing.length?failing:[...new Set(evaluation.views.map(v=>v.route))];
+  if(!routes.length)return undefined;
+  const minimum=Math.min(...routes.map(route=>attempts.get(route)??0));
+  const eligible=routes.filter(route=>(attempts.get(route)??0)===minimum);
   const rank=(route:string)=>{
-    const views=evaluation.views.filter(v=>v.route===route&&!v.pass);
-    return Math.min(...views.flatMap(v=>[v.worstBand??101,...(v.interactions??[]).filter(i=>!i.pass).map(i=>i.worstBand??101)]));
+    const views=evaluation.views.filter(v=>v.route===route&&(failing.length?!v.pass:true));
+    return Math.min(...views.flatMap(v=>[v.worstBand??101,...(v.interactions??[]).filter(i=>failing.length?!i.pass:true).map(i=>i.worstBand??101)]));
   };
   return eligible.sort((a,b)=>rank(a)-rank(b))[0];
 }
@@ -337,7 +338,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const latest=attempts.at(-1);
       if(latest&&latest.round>0)await progress(`Repair round ${latest.round} ${latest.accepted?'accepted':'not applied'}: ${latest.summary.slice(0,220)}`);
     },
-  },{maxRounds:repairRounds,signal});
+  },{maxRounds:repairRounds,minRounds:repairRounds>0?1:0,signal});
   // Restore() changes source files. Never leave a rejected candidate in dist.
   await rm(join(outDir,'dist'),{recursive:true,force:true});
   const finalBuild=signal.aborted?{ok:false,log:'Run cancelled before final compilation'}:await build(outDir,AbortSignal.any([signal,AbortSignal.timeout(120000)]));
