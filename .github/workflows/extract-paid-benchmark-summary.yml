@@ -1,0 +1,27 @@
+name: Extract paid benchmark summary
+on:
+  push:
+    branches:
+      - audit/extract-paid-benchmark-summary
+permissions:
+  contents: read
+  actions: read
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download existing benchmark artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${GITHUB_REPOSITORY}/actions/artifacts/10618676651/zip > benchmark.zip
+      - name: Extract and print summary only
+        run: |
+          unzip -p benchmark.zip 'paid-benchmark/summary.json' > summary.json
+          cat summary.json
+      - name: Preserve small summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-benchmark-summary-only
+          path: summary.json
+          retention-days: 14
