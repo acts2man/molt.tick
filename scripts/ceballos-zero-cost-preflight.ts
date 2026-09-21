@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile,access,readdir} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {runReconstruction} from '../src/reconstruct/agent.js';
+import {capture} from '../src/reconstruct/capture.js';
 import {routeFile} from '../src/reconstruct/policy.js';
 import type {Model} from '../src/reconstruct/types.js';
 
@@ -25,6 +26,13 @@ await writeFile(resolve(bundleDir,'fonts/arvo.woff2'),Buffer.from([119,79,70,50,
 await writeFile(resolve(bundleDir,'bundle.json'),JSON.stringify({site:'https://ceballostreeservices.com/',pages:[{route:'/',file:'index.html'}]}));
 await writeFile(resolve(bundleDir,'manifest.json'),JSON.stringify({originalUrl:'https://ceballostreeservices.com/',resources:{'saved.css':'https://fonts.googleapis.com/css?family=Arvo','fonts/arvo.woff2':'https://fonts.gstatic.com/s/arvo/v23/tDbD2oWUg0MKqScQ7Q.woff2'}}));
 const started=Date.now();
+const discovery=await capture({
+  url:'https://ceballostreeservices.com',directory:resolve(workDir,'live-discovery'),maxPages:5,
+  viewports:[{name:'desktop',width:1440,height:900}],adaptiveViewports:false,sourceStability:false,
+  signal:AbortSignal.timeout(300000)
+});
+assert.ok(discovery.pages.length>=2&&discovery.pages.length<=5,`live discovery must retain useful pages without exceeding scope; got ${discovery.pages.length}`);
+assert.ok(discovery.pages.every(page=>page.views.length===1&&page.views[0].geometry.text.trim()),'every retained discovered page must have usable browser evidence');
 const result=await runReconstruction({
   model,url:'https://ceballostreeservices.com',bundleDir,workDir,maxPages:1,maxRepairs:1,
   onProgress:message=>{console.log('[preflight]',message);}
@@ -42,6 +50,7 @@ await access(result.reportPath);
 await access(result.outDir);
 await writeFile(resolve(workDir,'summary.json'),JSON.stringify({
   ok:true,durationMs:Date.now()-started,deterministicModelCalls:usage.calls,status:result.status,
+  discovery:{routes:discovery.pages.map(page=>page.route),warnings:discovery.warnings},
   views:result.evaluation.views.map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand,candidate:Boolean(v.candidate)}))
 },null,2));
 console.log('ZERO_COST_CEBALLOS_PREFLIGHT_OK');
