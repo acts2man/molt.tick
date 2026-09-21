@@ -75,7 +75,15 @@ export function createModel(options:ProviderOptions):Model{
         if(attempt<2){await sleep(Math.min(10,2**attempt)*1000,undefined,{signal});continue;}
         throw error;
       }
-      const raw=await response.text().catch(error=>{record(call,null,`logical-${logicalCall}:response-read-error`);throw error;});if(raw.length>3_000_000){record(call,null,`logical-${logicalCall}:oversized-response`);throw new Error('Provider response exceeds budget');}
+      let raw:string;
+      try{raw=await response.text();}
+      catch(error){
+        record(call,null,`logical-${logicalCall}:response-read-error`);
+        signal.throwIfAborted();
+        if(attempt<2){await sleep(Math.min(10,2**attempt)*1000,undefined,{signal});continue;}
+        throw error;
+      }
+      if(raw.length>3_000_000){record(call,null,`logical-${logicalCall}:oversized-response`);throw new Error('Provider response exceeds budget');}
       if(!response.ok){
         record(call,null,`logical-${logicalCall}:http-${response.status}`);
         if([429,500,502,503,529].includes(response.status)&&attempt<2){const seconds=Math.min(10,Math.max(1,Number(response.headers.get('retry-after'))||2**attempt));await sleep(seconds*1000,undefined,{signal});continue;}
