@@ -410,6 +410,15 @@ test('a passing initial output makes no model repair calls',async()=>{const {eva
 test('failed partial writes are restored',async()=>{let file='good';const before=file;const result=await repairLoop({snapshot:async()=>file,restore:async s=>{file=s;},digest:s=>s,evaluate:async()=>score(60),propose:async()=>({summary:'x',files:[]}),apply:async()=>{file='partial';throw new Error('disk failure');},save:async()=>{}},{maxRounds:1,signal:signal()});assert.equal(file,before);assert.equal(result.attempts[1].accepted,false);});
 test('pre-aborted run starts no effects',async()=>{const c=new AbortController();c.abort();await assert.rejects(loopHarness([60],[1],2,c));});
 
+test('reconstruction prompt makes screenshots primary while retaining hard fidelity rails',()=>{
+  const source=simpleGeometry([]);
+  const evidence:any={site:'https://example.com',pages:[{route:'/',title:'Home',views:[{viewport:{name:'desktop',width:1440,height:900},screenshot:'source.png',geometry:source,interactions:[]}]}],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[]};
+  const prompt=JSON.parse(reconstructionPrompt(evidence,evidence.pages[0],[],'Implement this page.'));
+  assert.match(prompt.visualAuthority,/primary visual authority/i);
+  assert.match(prompt.visualAuthority,/holistically|complete design/i);
+  assert.match(prompt.hardConstraints,/route identity/i);
+  assert.match(prompt.measurementGuidance,/not an exhaustive/i);
+});
 test('initial reconstruction prompt includes explicit source spacing measurements',()=>{
   const style={display:'block','font-family':'Arvo','font-size':'18px','line-height':'27px','letter-spacing':'0px',margin:'0px',padding:'0px'};
   const geometry=simpleGeometry([
@@ -470,6 +479,14 @@ test('repair evidence prioritizes the worst failing adaptive viewport instead of
     {route:'/',viewport:'probe-1024',source:path,candidate:path,diff:path,score:80,worstBand:35,worstY:0,pass:false,issues:['breakpoint']}
   ];
   const images=await repairImages(checks as any);assert.ok(images.some(image=>image.label.startsWith('probe-1024 SOURCE')),images.map(i=>i.label).join('\n'));
+}));
+test('repair evidence gives the model complete source and candidate overviews before local diagnostics',async()=>temporary(async dir=>{
+  const path=join(dir,'visual-critique.png'),png=new PNG({width:640,height:1800});png.data.fill(235);for(let i=3;i<png.data.length;i+=4)png.data[i]=255;await writeFile(path,PNG.sync.write(png));
+  const checks=[{route:'/',viewport:'desktop',source:path,candidate:path,diff:path,score:90,worstBand:70,worstY:600,pass:false,issues:['Typography differs']}];
+  const images=await repairImages(checks as any),labels=images.map(image=>image.label);
+  assert.ok(labels.some(label=>label.includes('SOURCE complete overview')),labels.join('\n'));
+  assert.ok(labels.some(label=>label.includes('CANDIDATE complete overview')),labels.join('\n'));
+  assert.ok(labels.indexOf(labels.find(label=>label.includes('CANDIDATE complete overview'))!)<labels.indexOf(labels.find(label=>label.includes('DIFF heatmap'))!),labels.join('\n'));
 }));
 test('repair evidence stays inside provider image and payload budgets',async()=>temporary(async dir=>{
   const path=join(dir,'large.png'),png=new PNG({width:1200,height:1600});
