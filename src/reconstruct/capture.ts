@@ -51,7 +51,7 @@ export async function readBundle(root: string): Promise<Bundle> {
 }
 /** Script string avoids transpiler-injected helpers in browser evaluation. */
 const GEOMETRY = `(() => {
- const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility','appearance','accent-color'];
+ const props=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','transform-origin','opacity','overflow','visibility','appearance','accent-color','filter','backdrop-filter','clip-path','text-shadow','white-space','word-break','aspect-ratio'];
  const allNodes=Array.from(document.querySelectorAll('body *')); const index=new Map(allNodes.map((n,i)=>[n,String(i)]));
  const read=(s)=>Object.fromEntries(props.map(p=>[p,s.getPropertyValue(p)]).filter(p=>p[1]));
  const attrs=(el)=>{
