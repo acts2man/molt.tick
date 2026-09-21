@@ -91,6 +91,28 @@ test('site-wide shared-shell evidence includes route-specific header, navigation
   assert.equal(prompt.siteWideSharedShell.routes[1].views[0].footer.some((e:any)=>e.text==='About-specific footer'),true);
 });
 
+test('site-wide shared-shell evidence stays bounded for twelve multi-viewport routes',()=>{
+  const makeGeometry=(route:string,view:number):Geometry=>({
+    text:`${route} shell`,title:route,height:1800,overflow:false,brokenImages:0,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false,rootStyle:{'font-family':'Arial','font-size':'16px'},bodyStyle:{margin:'0px',padding:'0px'},
+    elements:[
+      {key:'h',tag:'header',text:'',x:0,y:0,width:1440,height:90,style:{display:'flex',padding:'20px'}},
+      {key:'n',parent:'h',tag:'nav',text:'',x:200,y:20,width:900,height:50,style:{display:'flex',gap:'24px'}},
+      ...Array.from({length:8},(_,i)=>({key:`a${i}`,parent:'n',tag:'a',text:`Route ${route} link ${i}`,x:220+i*100,y:30,width:90,height:24,style:{'font-family':'Arial','font-size':'16px','font-weight':'600'},href:`https://example.com/${i}`})),
+      {key:'f',tag:'footer',text:'',x:0,y:1650,width:1440,height:150,style:{display:'flex',padding:'32px'}},
+      ...Array.from({length:8},(_,i)=>({key:`p${i}`,parent:'f',tag:'p',text:`Footer ${route} item ${i} viewport ${view}`,x:40,y:1680+i*12,width:600,height:20,style:{'font-family':'Arial','font-size':'14px'}})),
+    ] as any,
+  });
+  const pages=Array.from({length:12},(_,page)=>({route:page===0?'/':`/page-${page}`,title:`Page ${page}`,url:`https://example.com/page-${page}`,views:[
+    {viewport:{name:'desktop',width:1440,height:900},screenshot:'/d.png',geometry:makeGeometry(String(page),0),interactions:[]},
+    {viewport:{name:'tablet',width:768,height:1024},screenshot:'/t.png',geometry:makeGeometry(String(page),1),interactions:[]},
+    {viewport:{name:'mobile',width:390,height:844},screenshot:'/m.png',geometry:makeGeometry(String(page),2),interactions:[]},
+  ]}));
+  const evidence={site:'https://example.com',directory:'',assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[],pages} as unknown as Evidence;
+  const shell=siteWideShellContext(evidence);
+  assert.ok(JSON.stringify(shell).length<120000,JSON.stringify(shell).length);
+  assert.equal((shell as any).routes.length,12);
+});
+
 test('parallel page workers are hard-isolated to their route file and sibling CSS',()=>{
   assert.doesNotThrow(()=>assertParallelGenerationIsolation([
     {path:'src/pages/about.tsx',content:'import "./about.css";export default()=>null'},
