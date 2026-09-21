@@ -14,7 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -148,6 +148,30 @@ test('media presentation diagnostics report image crop and positioning mismatche
   const evidence={site:'https://source.example',directory:'',pages:[],assets:[{original:'https://source.example/hero.jpg',file:'/tmp/hero.jpg',publicPath:'/assets/hero-hash.jpg'}],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
   const issues=mediaPresentationIssues(source,candidate,evidence);
   assert.ok(issues.some(i=>/Image "Hero" crop\/presentation/.test(i)&&/object-fit source cover, generated contain/.test(i)&&/object-position source 50% 30%, generated 50% 50%/.test(i)),issues.join('\n'));
+});
+test('form controls preserve visible field structure state and geometry',()=>{
+  const fieldStyle={'font-family':'Arial','font-size':'16px','font-weight':'400','line-height':'24px','letter-spacing':'0px','text-align':'left','color':'rgb(0, 0, 0)','background':'rgb(255, 255, 255)','border':'1px solid rgb(120, 120, 120)','border-radius':'8px','box-shadow':'none','padding':'12px','appearance':'auto','accent-color':'auto'};
+  const source=simpleGeometry([
+    {key:'i',tag:'input',text:'',x:100,y:200,width:320,height:48,style:fieldStyle,attributes:{placeholder:'Email address',disabled:'false',readonly:'false'}},
+    {key:'s',tag:'select',text:'',x:100,y:264,width:320,height:48,style:fieldStyle,attributes:{'selected-text':'Choose a service',disabled:'false'}},
+    {key:'c',tag:'input',text:'',x:100,y:328,width:20,height:20,style:fieldStyle,attributes:{type:'checkbox',checked:'true',disabled:'false',readonly:'false'}},
+  ]);
+  const candidate=simpleGeometry([
+    {key:'i2',tag:'input',text:'',x:100,y:200,width:280,height:48,style:fieldStyle,attributes:{type:'text',placeholder:'Your email',disabled:'false',readonly:'false'}},
+    {key:'s2',tag:'select',text:'',x:100,y:264,width:320,height:48,style:fieldStyle,attributes:{'selected-text':'Select one',disabled:'false'}},
+    {key:'c2',tag:'input',text:'',x:100,y:328,width:20,height:20,style:fieldStyle,attributes:{type:'checkbox',checked:'false',disabled:'false',readonly:'false'}},
+  ]);
+  const issues=formControlIssues(source,candidate);
+  assert.ok(issues.some(i=>/Email address.*placeholder source Email address, generated Your email/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Form input "Email address".*width -40/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Choose a service.*selected-text source Choose a service, generated Select one/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/checkbox control #3.*checked source true, generated false/.test(i)),issues.join('\n'));
+});
+test('default input type and explicit text type are equivalent',()=>{
+  const style={};
+  const source=simpleGeometry([{key:'1',tag:'input',text:'',x:0,y:0,width:200,height:40,style,attributes:{placeholder:'Name',disabled:'false',readonly:'false'}}]);
+  const candidate=simpleGeometry([{key:'2',tag:'input',text:'',x:0,y:0,width:200,height:40,style,attributes:{type:'text',placeholder:'Name',disabled:'false',readonly:'false'}}]);
+  assert.deepEqual(formControlIssues(source,candidate),[]);
 });
 test('spacing evaluator reports exact element-to-element gap deltas',()=>{
   const style={'font-family':'Arvo','font-size':'16px','line-height':'24px','letter-spacing':'0px',margin:'0px',padding:'0px'};
