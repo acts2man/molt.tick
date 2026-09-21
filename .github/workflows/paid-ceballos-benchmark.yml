@@ -10,7 +10,84 @@ concurrency:
   group: paid-ceballos-sol-medium-4
   cancel-in-progress: false
 jobs:
+  release-gate:
+    if: github.repository == 'acts2man/molt.tick'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENAI_API_KEY: ''
+      ANTHROPIC_API_KEY: ''
+      MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
+      MOLT_NO_SANDBOX: '1'
+      MOLT_RUN_BROWSER_TESTS: '1'
+      MOLT_RUN_FULL_AGENT_TESTS: '1'
+      MOLT_AGENT_MINUTES: '12'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install engine, Studio, and trusted render dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix studio ci --no-audit --no-fund
+          npm --prefix render-toolchain install --no-audit --no-fund
+          npx --no-install playwright-core install --with-deps chromium
+      - name: Engine typecheck and deterministic failure-mode suite
+        run: |
+          npm run typecheck
+          npm test
+      - name: Studio build and private API bundle tests
+        run: |
+          npm --prefix studio run build
+          npm --prefix studio test
+      - name: Deterministic real-browser reconstruction suite
+        run: npm test
+      - name: Real-site Ceballos preflight with no provider credentials
+        run: ./node_modules/.bin/tsx scripts/ceballos-zero-cost-preflight.ts
+      - name: Preserve zero-cost gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-benchmark-release-gate
+          path: |
+            zero-cost-preflight/
+            !zero-cost-preflight/**/node_modules/**
+            !zero-cost-preflight/**/*.woff
+            !zero-cost-preflight/**/*.woff2
+            !zero-cost-preflight/**/*.ttf
+            !zero-cost-preflight/**/*.otf
+          retention-days: 14
+          if-no-files-found: warn
+
+  delivery-gate:
+    if: github.repository == 'acts2man/molt.tick'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ''
+      ANTHROPIC_API_KEY: ''
+      MOLT_GITHUB_EXPORT_TOKEN: ${{ secrets.MOLT_GITHUB_EXPORT_TOKEN }}
+      MOLT_NETLIFY_AUTH_TOKEN: ${{ secrets.MOLT_NETLIFY_AUTH_TOKEN }}
+      MOLT_NETLIFY_TEAM_SLUG: ${{ secrets.MOLT_NETLIFY_TEAM_SLUG }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install engine
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prove GitHub and Netlify handoff without model usage
+        run: ./node_modules/.bin/tsx scripts/delivery-zero-cost-preflight.ts
+
   benchmark:
+    needs: [release-gate, delivery-gate]
     if: github.repository == 'acts2man/molt.tick'
     runs-on: ubuntu-latest
     timeout-minutes: 80
