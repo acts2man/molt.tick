@@ -1,3 +1,4 @@
+import { BUNDLE_MAX_FILE_BYTES, BUNDLE_MAX_FILES, BUNDLE_MAX_TOTAL_BYTES } from '../../server/contracts';
 export type ExtractedZipFile={path:string;file:File};
 
 function mime(path:string):string{
@@ -22,13 +23,13 @@ function normalize(path:string):string{
   return parts.join('/');
 }
 export async function unzipSavedPage(file:File):Promise<ExtractedZipFile[]>{
-  if(file.size>50_000_000)throw new Error('Use a ZIP smaller than 50 MB.');
+  if(file.size>120_000_000)throw new Error('Use an individual saved-page ZIP smaller than 120 MB.');
   const bytes=new Uint8Array(await file.arrayBuffer()),view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   let eocd=-1;for(let i=Math.max(0,bytes.length-65_557);i<=bytes.length-22;i++)if(view.getUint32(i,true)===0x06054b50)eocd=i;
   if(eocd<0)throw new Error('This ZIP is missing its directory record or is not a standard ZIP archive.');
   const entries=view.getUint16(eocd+10,true),centralOffset=view.getUint32(eocd+16,true);
   if(entries===0xffff||centralOffset===0xffffffff)throw new Error('ZIP64 archives are not supported yet. Re-save this page as a normal ZIP.');
-  if(entries<1||entries>300)throw new Error('Use a ZIP containing 1 to 300 files.');
+  if(entries<1||entries>400)throw new Error('Use a ZIP containing 1 to 400 files.');
   let cursor=centralOffset,total=0;const records:Array<{path:string;method:number;compressed:number;size:number;offset:number}>=[];
   for(let i=0;i<entries;i++){
     if(cursor+46>bytes.length||view.getUint32(cursor,true)!==0x02014b50)throw new Error('The ZIP central directory is invalid.');
@@ -39,8 +40,8 @@ export async function unzipSavedPage(file:File):Promise<ExtractedZipFile[]>{
     cursor+=46+nameLen+extraLen+commentLen;
     if(rawName.endsWith('/'))continue;
     const path=normalize(rawName);total+=size;
-    if(size>4_000_000)throw new Error(`ZIP file is too large after extraction: ${path}. Keep each file under 4 MB.`);
-    if(total>49_900_000)throw new Error('The extracted ZIP exceeds the 50 MB saved-page limit.');
+    if(size>BUNDLE_MAX_FILE_BYTES)throw new Error(`ZIP file is too large after extraction: ${path}. Keep each file under ${Math.round(BUNDLE_MAX_FILE_BYTES/1_000_000)} MB.`);
+    if(total>BUNDLE_MAX_TOTAL_BYTES)throw new Error(`The extracted ZIP exceeds the ${Math.round(BUNDLE_MAX_TOTAL_BYTES/1_000_000)} MB saved-page limit.`);
     if(method!==0&&method!==8)throw new Error(`Unsupported ZIP compression method for ${path}. Re-save the archive using standard Deflate compression.`);
     records.push({path,method,compressed,size,offset});
   }
@@ -102,12 +103,12 @@ export async function unzipSavedPages(archives:File[]):Promise<{files:ExtractedZ
         }catch{}
       }
       const path=prefix+item.path;total+=item.file.size;
-      if(total>49_900_000)throw new Error('The combined extracted ZIPs exceed the 50 MB saved-page limit.');
+      if(total>BUNDLE_MAX_TOTAL_BYTES-100_000)throw new Error(`The combined extracted ZIPs exceed the ${Math.round(BUNDLE_MAX_TOTAL_BYTES/1_000_000)} MB saved-page limit.`);
       combined.push({path,file:new File([item.file],item.file.name,{type:item.file.type,lastModified:item.file.lastModified})});
     }
     pages.push({file:prefix+pageItem.path,route});
   }
-  if(combined.length>1200)throw new Error('The combined saved pages contain more than 1,200 files. Reduce the saved assets or split the reconstruction.');
+  if(combined.length>BUNDLE_MAX_FILES-1)throw new Error(`The combined saved pages contain more than ${(BUNDLE_MAX_FILES-1).toLocaleString()} files before the manifest. Reduce the saved assets or split the reconstruction.`);
   const manifest=new File([JSON.stringify({...(originalUrl?{originalUrl}:{}),resources})],'manifest.json',{type:'application/json'});
   combined.push({path:'manifest.json',file:manifest});
   return {files:combined,pages};
