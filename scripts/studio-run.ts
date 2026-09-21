@@ -130,7 +130,8 @@ try{
   process.env.MOLT_MODEL_TIMEOUT_MS=String(budget.requestMs);
   process.env.MOLT_AI_MAX_TOKENS=String(budget.maxOutputTokens);
   process.env.MOLT_MAX_MODEL_CALLS=String(budget.maxModelCalls);
-  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning. Scope guard: up to ${budget.agentMinutes} minutes, ${budget.repairRounds} measured repair calls, and ${budget.maxModelCalls} provider request attempts.`);
+  process.env.MOLT_MAX_TRANSPORT_ATTEMPTS=String(budget.maxTransportAttempts);
+  await progress(`Runner connected. Using ${job.model||process.env.MOLT_AI_MODEL} with ${job.reasoningEffort||process.env.MOLT_REASONING_EFFORT||'default'} reasoning. Scope guard: up to ${budget.agentMinutes} minutes, ${budget.repairRounds} measured repair calls, ${budget.maxModelCalls} logical model calls, and ${budget.maxTransportAttempts} bounded provider transport attempts.`);
   if(!process.env.MOLT_AI_MODEL||!(process.env.MOLT_MODEL_PROVIDER==='anthropic'?process.env.ANTHROPIC_API_KEY:process.env.OPENAI_API_KEY))throw new Error('Model configuration is missing. Open Connections in Molt Studio.');
   // Everything below this preflight is still zero-cost. Prove runner rotation, Blob writes and GitHub export access before the first model request.
   runnerIdentityCache=undefined;
@@ -148,7 +149,7 @@ try{
   if(!netlifyProbe.ok)throw new Error(`Netlify reserved-site deploy preflight returned HTTP ${netlifyProbe.status} before model usage.`);
   await writeFile(join(artifacts,'handoff.json'),JSON.stringify({outputRepoUrl:plannedRepo.url,reservedNetlifySite:plannedSite},null,2));
   await progress(`Zero-cost delivery preflight passed. Reserved ${plannedRepo.repository}, proved GitHub workflow/secret access, and deployed a placeholder to Netlify site ${plannedSite.name}; no model usage has occurred yet.`,{outputRepoUrl:plannedRepo.url,reservedOutputRepository:plannedRepo.repository,reservedNetlifySiteId:plannedSite.id});
-  await progress(`Paid-model guard armed: at most ${budget.maxModelCalls} provider request attempts; unused headroom is not billed.`);
+  await progress(`Paid-model guard armed: at most ${budget.maxModelCalls} logical model calls. Transient network/rate-limit retries use a separate bounded transport budget of ${budget.maxTransportAttempts} attempts and no longer consume reconstruction-call capacity.`);
   let bundleDir:string|undefined;
   if(job.bundleId){
     await progress('Retrieving the saved-page bundle.');bundleDir=resolve('studio-work/bundle');await mkdir(bundleDir,{recursive:true});

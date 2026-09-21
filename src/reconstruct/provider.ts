@@ -26,18 +26,23 @@ export function parseReply(text:string):ModelReply{
 }
 export interface ProviderOptions {
   provider:'anthropic'|'openai'; model:string; key:string;
-  maxCalls?:number; maxOutputTokens?:number; requestMs?:number;
+  maxCalls?:number; maxTransportAttempts?:number; maxOutputTokens?:number; requestMs?:number;
   reasoningEffort?:'low'|'medium'|'high'|'xhigh'|'max'; fetcher?:typeof fetch;
 }
 export function createModel(options:ProviderOptions):Model{
   if(!options.key.trim()||!options.model.trim())throw new Error('Provider API key and explicit model ID are required');
-  const maxCalls=options.maxCalls??40,maxTokens=options.maxOutputTokens??16000,requestMs=options.requestMs??180000;
-  if(!['openai','anthropic'].includes(options.provider)||!Number.isInteger(maxCalls)||maxCalls<1||maxCalls>200||!Number.isInteger(maxTokens)||maxTokens<1000||maxTokens>64000||!Number.isInteger(requestMs)||requestMs<1000||requestMs>600000)throw new Error('Invalid provider limits');
-  const usage:Model['usage']={calls:0,inputTokens:0,outputTokens:0,records:[]};
+  const maxCalls=options.maxCalls??40,maxTransportAttempts=options.maxTransportAttempts??Math.min(600,maxCalls*3),maxTokens=options.maxOutputTokens??16000,requestMs=options.requestMs??180000;
+  if(!['openai','anthropic'].includes(options.provider)||!Number.isInteger(maxCalls)||maxCalls<1||maxCalls>200||!Number.isInteger(maxTransportAttempts)||maxTransportAttempts<maxCalls||maxTransportAttempts>600||!Number.isInteger(maxTokens)||maxTokens<1000||maxTokens>64000||!Number.isInteger(requestMs)||requestMs<1000||requestMs>600000)throw new Error('Invalid provider limits');
+  const usage:Model['usage']={calls:0,transportAttempts:0,inputTokens:0,outputTokens:0,records:[]};
   const record=(call:number,data:unknown,outcome:string)=>{const entry=usageRecord(call,options.provider,options.model,data,outcome);usage.records!.push(entry);usage.costEstimate=usageSummary(usage.records!);};
   const fetcher=options.fetcher??fetch;
   return {usage,async complete(request:ModelRequest,signal:AbortSignal):Promise<ModelReply>{
     if(request.images.length>18||request.prompt.length>400000)throw new Error('Model context budget exceeded');
+    signal.throwIfAborted();
+    if(usage.calls>=maxCalls)throw new Error('Logical model call budget exhausted');
+    if((usage.transportAttempts??0)>=maxTransportAttempts)throw new Error('Provider transport retry budget exhausted');
+    usage.calls++;
+    const logicalCall=usage.calls;
     const model=options.model;
     const text={type:'text',text:request.prompt};
     const content:unknown[]=[];
@@ -54,20 +59,38 @@ export function createModel(options:ProviderOptions):Model{
         text:{format:{type:'json_schema',name:'reconstruction_files',strict:true,schema:SCHEMA}}};
     const encoded=JSON.stringify(body);if(Buffer.byteLength(encoded)>24_000_000)throw new Error('Request exceeds payload budget');
     for(let attempt=0;attempt<3;attempt++){
-      signal.throwIfAborted();if(usage.calls>=maxCalls)throw new Error('Model call budget exhausted');usage.calls++;
-      const call=usage.calls;
-      const response=await fetcher(options.provider==='anthropic'?'https://api.anthropic.com/v1/messages':'https://api.openai.com/v1/responses',{
-        method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(requestMs)]),
-        headers:options.provider==='anthropic'?{'content-type':'application/json','x-api-key':options.key,'anthropic-version':'2023-06-01'}:{'content-type':'application/json',authorization:`Bearer ${options.key}`},body:encoded,
-      }).catch(error=>{record(call,null,'transport-error');throw error;});
-      const raw=await response.text().catch(error=>{record(call,null,'response-read-error');throw error;});if(raw.length>3_000_000){record(call,null,'oversized-response');throw new Error('Provider response exceeds budget');}
+      signal.throwIfAborted();
+      if((usage.transportAttempts??0)>=maxTransportAttempts)throw new Error('Provider transport retry budget exhausted');
+      usage.transportAttempts=(usage.transportAttempts??0)+1;
+      const call=usage.transportAttempts;
+      let response:Response;
+      try{
+        response=await fetcher(options.provider==='anthropic'?'https://api.anthropic.com/v1/messages':'https://api.openai.com/v1/responses',{
+          method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(requestMs)]),
+          headers:options.provider==='anthropic'?{'content-type':'application/json','x-api-key':options.key,'anthropic-version':'2023-06-01'}:{'content-type':'application/json',authorization:`Bearer ${options.key}`},body:encoded,
+        });
+      }catch(error){
+        record(call,null,`logical-${logicalCall}:transport-error`);
+        signal.throwIfAborted();
+        if(attempt<2){await sleep(Math.min(10,2**attempt)*1000,undefined,{signal});continue;}
+        throw error;
+      }
+      let raw:string;
+      try{raw=await response.text();}
+      catch(error){
+        record(call,null,`logical-${logicalCall}:response-read-error`);
+        signal.throwIfAborted();
+        if(attempt<2){await sleep(Math.min(10,2**attempt)*1000,undefined,{signal});continue;}
+        throw error;
+      }
+      if(raw.length>3_000_000){record(call,null,`logical-${logicalCall}:oversized-response`);throw new Error('Provider response exceeds budget');}
       if(!response.ok){
-        record(call,null,`http-${response.status}`);
+        record(call,null,`logical-${logicalCall}:http-${response.status}`);
         if([429,500,502,503,529].includes(response.status)&&attempt<2){const seconds=Math.min(10,Math.max(1,Number(response.headers.get('retry-after'))||2**attempt));await sleep(seconds*1000,undefined,{signal});continue;}
         throw new Error(`${options.provider} request failed (HTTP ${response.status}); ${raw.slice(0,500).split(options.key).join('[redacted]')}`);
       }
-      let data:any;try{data=JSON.parse(raw);}catch(error){record(call,null,'invalid-json');throw error;}
-      record(call,data.usage,String(data.status??data.stop_reason??'response'));
+      let data:any;try{data=JSON.parse(raw);}catch(error){record(call,null,`logical-${logicalCall}:invalid-json`);throw error;}
+      record(call,data.usage,`logical-${logicalCall}:${String(data.status??data.stop_reason??'response')}`);
       const reported=usage.records![usage.records!.length-1];
       usage.inputTokens+=reported.inputTokens??0;usage.outputTokens+=reported.outputTokens??0;
       if(options.provider==='anthropic'){
@@ -89,5 +112,6 @@ export function modelFromEnv():Model{
   const key=process.env[provider==='anthropic'?'ANTHROPIC_API_KEY':'OPENAI_API_KEY']??'';
   const effort=process.env.MOLT_REASONING_EFFORT;
   if(effort&&!['low','medium','high','xhigh','max'].includes(effort))throw new Error('Unsupported reasoning effort');
-  return createModel({provider,model,key,maxCalls:integer(process.env.MOLT_MAX_MODEL_CALLS,40,1,200),maxOutputTokens:integer(process.env.MOLT_AI_MAX_TOKENS,16000,1000,64000),requestMs:integer(process.env.MOLT_MODEL_TIMEOUT_MS,180000,1000,600000),reasoningEffort:effort as ProviderOptions['reasoningEffort']});
+  const maxCalls=integer(process.env.MOLT_MAX_MODEL_CALLS,40,1,200);
+  return createModel({provider,model,key,maxCalls,maxTransportAttempts:integer(process.env.MOLT_MAX_TRANSPORT_ATTEMPTS,Math.min(600,maxCalls*3),maxCalls,600),maxOutputTokens:integer(process.env.MOLT_AI_MAX_TOKENS,16000,1000,64000),requestMs:integer(process.env.MOLT_MODEL_TIMEOUT_MS,180000,1000,600000),reasoningEffort:effort as ProviderOptions['reasoningEffort']});
 }
