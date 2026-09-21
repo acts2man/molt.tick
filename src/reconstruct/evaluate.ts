@@ -23,6 +23,19 @@ function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):strin
   }
   return diffs;
 }
+function cssNumber(value:string|undefined):number|null{const n=Number.parseFloat(value??'');return Number.isFinite(n)?n:null;}
+export function typographyIssues(source:Geometry,candidate:Geometry):string[]{
+  const ranked:Array<{score:number;message:string}>=[];
+  for(const pair of matchedTextElements(source,candidate)){
+    const diffs=typographyDiffs(pair.source,pair.candidate);if(!diffs.length)continue;
+    const sourceSize=cssNumber(pair.source.style['font-size']),candidateSize=cssNumber(pair.candidate.style['font-size']);
+    const sizeDelta=sourceSize!==null&&candidateSize!==null?Math.abs(candidateSize-sourceSize):0;
+    const priority=/^h[1-6]$/.test(pair.source.tag)?140:(pair.source.tag==='a'||pair.source.tag==='button'?90:30);
+    const position=Math.abs(pair.candidate.y-pair.source.y)+Math.abs(pair.candidate.x-pair.source.x)*0.25;
+    ranked.push({score:priority+sizeDelta*8+Math.min(80,position),message:'Typography "'+short(pair.source)+'" ('+pair.source.tag+'): '+diffs.join('; ')});
+  }
+  return ranked.sort((a,b)=>b.score-a.score).slice(0,14).map(item=>item.message);
+}
 function matchedTextElements(source:Geometry,candidate:Geometry):Array<{source:ElementEvidence;candidate:ElementEvidence}>{
   const visibleCandidate=candidate.elements.filter(e=>normalize(e.text)&&TEXT_TAG.test(e.tag));
   const key=(e:ElementEvidence,text:string)=>(INLINE_TEXT_TAG.test(e.tag)?'inline':e.tag)+'\0'+text;
