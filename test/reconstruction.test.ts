@@ -12,7 +12,7 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, siteWideShellContext, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues, motionIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
@@ -64,6 +64,55 @@ test('later initial pages cannot rewrite existing shared or earlier-route files'
   assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/styles/about.css',content:'.about{}'},{path:'src/pages/about.tsx',content:'export default()=>null'}],'src/pages/about.tsx',1));
   assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/home.tsx',0));
 });
+test('site-wide shared-shell evidence includes route-specific header, navigation and footer differences',()=>{
+  const geom=(label:string,footer:string):Geometry=>({
+    text:`${label} ${footer}`,title:label,height:1200,overflow:false,brokenImages:0,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false,
+    rootStyle:{},bodyStyle:{},
+    elements:[
+      {key:'h',tag:'header',text:'',x:0,y:0,width:1440,height:90,style:{}},
+      {key:'n',parent:'h',tag:'nav',text:'',x:200,y:20,width:800,height:50,style:{}},
+      {key:'a',parent:'n',tag:'a',text:label,x:220,y:30,width:120,height:30,style:{},href:'https://example.com/'},
+      {key:'f',tag:'footer',text:'',x:0,y:1100,width:1440,height:100,style:{}},
+      {key:'p',parent:'f',tag:'p',text:footer,x:40,y:1130,width:600,height:30,style:{}},
+    ],
+  });
+  const view=(name:string,width:number,label:string,footer:string)=>({viewport:{name,width,height:900},screenshot:`/${name}.png`,geometry:geom(label,footer),interactions:[]});
+  const evidence={site:'https://example.com',directory:'',assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[],pages:[
+    {route:'/',title:'Home',url:'https://example.com/',views:[view('desktop',1440,'Home Nav','Home footer')]},
+    {route:'/about',title:'About',url:'https://example.com/about',views:[view('desktop',1440,'About Nav','About-specific footer')]},
+  ]} as unknown as Evidence;
+  const shell=siteWideShellContext(evidence) as any;
+  assert.equal(shell.routes.length,2);
+  assert.equal(shell.routes[0].views[0].navigation.some((e:any)=>e.text==='Home Nav'),true);
+  assert.equal(shell.routes[1].views[0].navigation.some((e:any)=>e.text==='About Nav'),true);
+  assert.equal(shell.routes[1].views[0].footer.some((e:any)=>e.text==='About-specific footer'),true);
+  const prompt=JSON.parse(reconstructionPrompt(evidence,evidence.pages[0],[],'seed',undefined,shell));
+  assert.equal(prompt.siteWideSharedShell.routes[1].route,'/about');
+  assert.equal(prompt.siteWideSharedShell.routes[1].views[0].footer.some((e:any)=>e.text==='About-specific footer'),true);
+});
+
+test('site-wide shared-shell evidence stays bounded for twelve multi-viewport routes',()=>{
+  const makeGeometry=(route:string,view:number):Geometry=>({
+    text:`${route} shell`,title:route,height:1800,overflow:false,brokenImages:0,links:[],embeds:[],forms:0,fontFaces:[],mediaQueries:[],truncated:false,rootStyle:{'font-family':'Arial','font-size':'16px'},bodyStyle:{margin:'0px',padding:'0px'},
+    elements:[
+      {key:'h',tag:'header',text:'',x:0,y:0,width:1440,height:90,style:{display:'flex',padding:'20px'}},
+      {key:'n',parent:'h',tag:'nav',text:'',x:200,y:20,width:900,height:50,style:{display:'flex',gap:'24px'}},
+      ...Array.from({length:8},(_,i)=>({key:`a${i}`,parent:'n',tag:'a',text:`Route ${route} link ${i}`,x:220+i*100,y:30,width:90,height:24,style:{'font-family':'Arial','font-size':'16px','font-weight':'600'},href:`https://example.com/${i}`})),
+      {key:'f',tag:'footer',text:'',x:0,y:1650,width:1440,height:150,style:{display:'flex',padding:'32px'}},
+      ...Array.from({length:8},(_,i)=>({key:`p${i}`,parent:'f',tag:'p',text:`Footer ${route} item ${i} viewport ${view}`,x:40,y:1680+i*12,width:600,height:20,style:{'font-family':'Arial','font-size':'14px'}})),
+    ] as any,
+  });
+  const pages=Array.from({length:12},(_,page)=>({route:page===0?'/':`/page-${page}`,title:`Page ${page}`,url:`https://example.com/page-${page}`,views:[
+    {viewport:{name:'desktop',width:1440,height:900},screenshot:'/d.png',geometry:makeGeometry(String(page),0),interactions:[]},
+    {viewport:{name:'tablet',width:768,height:1024},screenshot:'/t.png',geometry:makeGeometry(String(page),1),interactions:[]},
+    {viewport:{name:'mobile',width:390,height:844},screenshot:'/m.png',geometry:makeGeometry(String(page),2),interactions:[]},
+  ]}));
+  const evidence={site:'https://example.com',directory:'',assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[],pages} as unknown as Evidence;
+  const shell=siteWideShellContext(evidence);
+  assert.ok(JSON.stringify(shell).length<120000,JSON.stringify(shell).length);
+  assert.equal((shell as any).routes.length,12);
+});
+
 test('parallel page workers are hard-isolated to their route file and sibling CSS',()=>{
   assert.doesNotThrow(()=>assertParallelGenerationIsolation([
     {path:'src/pages/about.tsx',content:'import "./about.css";export default()=>null'},
