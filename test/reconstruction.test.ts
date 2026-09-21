@@ -60,6 +60,14 @@ test('production budgets scale time and provider ceilings without changing low-c
   const max=productionRunBudget(7,4,'max');assert.equal(max.requestMs,540000);assert.equal(max.maxOutputTokens,40000);assert.equal(max.maxTransportAttempts,max.maxModelCalls*3);
   assert.equal(max.runnerMinutes,85);assert.equal(max.deliveryReserveMinutes,20);assert.ok(max.agentMinutes<=65);
 });
+test('release-gate budgets cover one, five and twelve-page scopes without violating the runtime envelope',()=>{
+  for(const pages of [1,5,12]){
+    const budget=productionRunBudget(pages,4,'medium');
+    assert.ok(budget.agentMinutes<=budget.runnerMinutes-budget.deliveryReserveMinutes,`scope ${pages}`);
+    assert.ok(budget.maxTransportAttempts>=budget.maxModelCalls,`scope ${pages}`);
+    assert.ok(budget.maxModelCalls>=pages+4,`scope ${pages}`);
+  }
+});
 test('runtime envelope preserves delivery reserve after slow preflight work',()=>{
   assert.equal(availableAgentMinutes(65,85,20,0),65);
   assert.equal(availableAgentMinutes(65,85,20,10*60000),55);
@@ -642,6 +650,11 @@ test('global transport ceiling remains bounded independently of logical calls',a
   assert.equal(model.usage.calls,1);assert.equal(model.usage.transportAttempts,2);
   await assert.rejects(model.complete({prompt:'x',images:[]},signal()),/transport retry budget exhausted/);
   assert.equal(model.usage.calls,1);assert.equal(attempts,2);
+});
+test('malformed provider JSON is rejected instead of becoming reconstruction output',async()=>{
+  const model=createModel({provider:'openai',model:'test',key:'test',maxCalls:1,maxTransportAttempts:1,fetcher:async()=>new Response('{not-json',{status:200})});
+  await assert.rejects(model.complete({prompt:'x',images:[]},signal()),/Invalid JSON from provider/);
+  assert.equal(model.usage.calls,1);assert.equal(model.usage.transportAttempts,1);
 });
 test('provider credentials are redacted from errors',async()=>{const model=createModel({provider:'openai',model:'test',key:'secret-key',fetcher:async()=>new Response('bad secret-key',{status:401})});await assert.rejects(model.complete({prompt:'x',images:[]},signal()),e=>!String(e).includes('secret-key'));});
 
