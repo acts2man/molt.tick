@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { handle, type Services, type Store } from '../server/app.ts';
-import { HttpError, sourceUrl, sourcePages, safePath, newJob } from '../server/contracts.ts';
+import { BUNDLE_CHUNK_BYTES, BUNDLE_MAX_FILE_BYTES, BUNDLE_MAX_FILES, BUNDLE_MAX_TOTAL_BYTES, HttpError, sourceUrl, sourcePages, safePath, newJob } from '../server/contracts.ts';
 import { seal, unseal, cookie, assertMutation, sealSecret } from '../server/security.ts';
 import { createMediaSession, mediaCookie } from '../server/media-session.ts';
 const SECRET='a-secure-test-only-value-012345678901234567890123456789';
@@ -22,6 +22,30 @@ function setup(){
 test('public URLs normalize and reject credentials, scripts and private literals',()=>{assert.equal(sourceUrl('ceballostreeservices.com'),'https://ceballostreeservices.com/');for(const u of ['javascript:alert(1)','http://127.0.0.1','https://user:pass@example.com','https://a.local','https://example.com?a=1'])assert.throws(()=>sourceUrl(u));});
 test('explicit pages are same-origin and deduplicated',()=>{assert.deepEqual(sourcePages('https://example.com','/\n/about\n/about#team'),['https://example.com/','https://example.com/about']);assert.throws(()=>sourcePages('https://example.com','https://evil.com'));});
 test('unsafe bundle paths and executable project manifests are rejected',()=>{for(const p of ['../a.html','/a.html','.env','assets/../secret.txt','package.json','a.sh'])assert.throws(()=>safePath(p));assert.equal(safePath('images/tree.webp'),'images/tree.webp');});
+test('saved-page bundle limits support twelve-page scale without exceeding function payloads',()=>{
+ assert.equal(BUNDLE_MAX_FILES,1600);assert.equal(BUNDLE_MAX_TOTAL_BYTES,180_000_000);assert.equal(BUNDLE_MAX_FILE_BYTES,16_000_000);assert.equal(BUNDLE_CHUNK_BYTES,3_500_000);assert.ok(BUNDLE_CHUNK_BYTES<4_500_000);
+});
+test('large bundle files upload and download through bounded chunks',async()=>{
+ const s=setup(),largeSize=BUNDLE_CHUNK_BYTES+12345,large=new Uint8Array(largeSize);for(let i=0;i<large.length;i++)large[i]=i%251;
+ const bundle=JSON.stringify({site:'https://example.com',pages:[{file:'page.html',route:'/'}]}),bundleBytes=new TextEncoder().encode(bundle);
+ const created=await handle(s.req('bundles','POST',{files:[{path:'page.html',size:largeSize},{path:'bundle.json',size:bundleBytes.length}]}),s.services);
+ assert.equal(created.status,201);const {id}=await created.json();
+ const put=async(path:string,data:Uint8Array,part?:number)=>handle(new Request(ORIGIN+`/api/molt/bundles/${id}?file=${encodeURIComponent(path)}${part===undefined?'':`&part=${part}`}`,{method:'PUT',headers:{origin:ORIGIN,'x-molt-request':'1',authorization:'Bearer supabase-test-session','content-type':'application/octet-stream'},body:data}),s.services);
+ assert.equal((await put('page.html',large.slice(0,BUNDLE_CHUNK_BYTES),0)).status,200);
+ assert.equal((await put('page.html',large.slice(BUNDLE_CHUNK_BYTES),1)).status,200);
+ assert.equal((await put('bundle.json',bundleBytes)).status,200);
+ assert.equal((await handle(s.req(`bundles/${id}/complete`,'POST',{}),s.services)).status,200);
+ s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com',bundleId:id},'acts2man'));
+ const first=await handle(new Request(ORIGIN+`/api/molt/runner/${ID}/bundle?file=page.html&part=0`),s.services),second=await handle(new Request(ORIGIN+`/api/molt/runner/${ID}/bundle?file=page.html&part=1`),s.services);
+ assert.equal(first.status,200);assert.equal(second.status,200);assert.equal((await first.arrayBuffer()).byteLength,BUNDLE_CHUNK_BYTES);assert.equal((await second.arrayBuffer()).byteLength,12345);
+ const unchunked=await handle(new Request(ORIGIN+`/api/molt/runner/${ID}/bundle?file=page.html`),s.services);assert.equal(unchunked.status,400);
+});
+test('bundle manifest rejects oversized files and totals before binary upload',async()=>{
+ const s=setup();
+ let r=await handle(s.req('bundles','POST',{files:[{path:'page.html',size:BUNDLE_MAX_FILE_BYTES+1},{path:'bundle.json',size:2}]}),s.services);assert.equal(r.status,400);
+ r=await handle(s.req('bundles','POST',{files:[{path:'page.html',size:BUNDLE_MAX_TOTAL_BYTES},{path:'bundle.json',size:2}]}),s.services);assert.equal(r.status,400);
+});
+
 test('sessions are encrypted, authenticated, owner-scoped and expiring',()=>{const original={token:'never-leak-this-token',login:'acts2man',expires:Date.now()+100000};const encoded=seal(original,SECRET);assert.ok(!encoded.includes(original.token));assert.deepEqual(unseal(encoded,SECRET),original);assert.equal(unseal(encoded.slice(1),SECRET),null);assert.equal(unseal(encoded,SECRET+'wrong'),null);assert.equal(unseal(seal({...original,expires:1},SECRET),SECRET),null);assert.equal(unseal(seal({...original,login:'other'},SECRET),SECRET),null);});
 test('cookie has security attributes',()=>{for(const flag of ['HttpOnly','Secure','SameSite=Strict','Path=/'])assert.ok(cookie('opaque').includes(flag));});
 test('cross-origin writes are denied',()=>{assert.throws(()=>assertMutation(new Request(ORIGIN,{method:'POST',headers:{origin:'https://evil.test','x-molt-request':'1'}})));});

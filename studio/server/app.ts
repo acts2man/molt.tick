@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { ACTIVE, BRANCH, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
+import { ACTIVE, BRANCH, BUNDLE_CHUNK_BYTES, BUNDLE_MAX_FILE_BYTES, BUNDLE_MAX_FILES, BUNDLE_MAX_TOTAL_BYTES, HttpError, Job, OWNER, OPENAI_JOB_MODELS, REPOSITORY, Settings, WORKFLOW, newJob, safePath, uuid } from './contracts.ts';
 import { assertMutation, runnerIdentity, sealSecret, unsealSecret } from './security.ts';
 import { authenticateAccount, type AccountUser } from './account-auth.ts';
 import { checkGithubDelivery, checkProvider, github, saveSecrets } from './github.ts';
@@ -35,7 +35,9 @@ const dataKey = (owner: string, id: string) => `jobs/${owner}/${uuid(id)}`;
 const bundleKey = (owner: string, id: string) => `bundles/${owner}/${uuid(id)}`;
 const previewKey = (owner:string,id:string,path:string) => `previews/${owner}/${uuid(id)}/${safePath(path)}`;
 const previewType=(path:string)=>({html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',json:'application/json; charset=utf-8',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml',avif:'image/avif',ico:'image/x-icon',woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'}[path.split('.').pop()?.toLowerCase()??'']??'application/octet-stream');
-const fileKey = (base: string, path: string) => `${base}/files/${createHash('sha256').update(safePath(path)).digest('hex')}`;
+const fileHash=(path:string)=>createHash('sha256').update(safePath(path)).digest('hex');
+const fileKey = (base: string, path: string) => `${base}/files/${fileHash(path)}`;
+const fileChunkKey=(base:string,path:string,part:number)=>`${base}/chunks/${fileHash(path)}/${part}`;
 const OWNER_BINDING_KEY='auth/owner-binding-v1';
 const OWNER_ACCOUNT_HASH='abc25c3918e8fbd2c645255d22971d80d137aac320029169dcf8b6cb4982026a';
 const isConfiguredOwner=(account:AccountUser,env:Environment)=>env.ownerUserId===account.id||createHash('sha256').update(account.id).digest('hex')===OWNER_ACCOUNT_HASH;
@@ -125,8 +127,16 @@ export async function handle(req: Request, services: Services): Promise<Response
         const base=bundleKey(OWNER,job.bundleId), manifest=await store.get(`${base}/manifest`,{type:'json'});
         if(!manifest?.ready)throw new HttpError(409,'Bundle upload is incomplete.');
         const name=url.searchParams.get('file'); if(!name)return json(manifest);
-        safePath(name);if(!manifest.files.some((f:any)=>f.path===name))throw new HttpError(404,'Bundle file not found.');
+        safePath(name);const entry=manifest.files.find((f:any)=>f.path===name);if(!entry)throw new HttpError(404,'Bundle file not found.');
         const buffer=await store.get(fileKey(base,name),{type:'arrayBuffer'});if(!buffer)throw new HttpError(404,'Bundle file not found.');
+        const partRaw=url.searchParams.get('part');
+        if(partRaw!==null){
+          const part=Number(partRaw),parts=Math.max(1,Math.ceil(entry.size/BUNDLE_CHUNK_BYTES));
+          if(!Number.isInteger(part)||part<0||part>=parts)throw new HttpError(400,'Invalid bundle chunk request.');
+          const start=part*BUNDLE_CHUNK_BYTES,end=Math.min(entry.size,start+BUNDLE_CHUNK_BYTES);
+          return new Response(buffer.slice(start,end),{headers:{'content-type':'application/octet-stream','cache-control':'no-store','x-molt-part':String(part),'x-molt-parts':String(parts)}});
+        }
+        if(entry.size>BUNDLE_CHUNK_BYTES)throw new HttpError(400,'Large bundle files must be retrieved in chunks.');
         return new Response(buffer,{headers:{'content-type':'application/octet-stream','cache-control':'no-store'}});
       }
       if(method==='PUT' && path[2]==='preview') {
@@ -361,19 +371,38 @@ export async function handle(req: Request, services: Services): Promise<Response
     }
     if(path[0]==='bundles') {
       if(method==='POST' && path.length===1) {
-        const input=await body(req,262144);if(!Array.isArray(input.files)||!input.files.length||input.files.length>1200)throw new HttpError(400,'Upload 1–1,200 saved-page files.');
+        const input=await body(req,524288);if(!Array.isArray(input.files)||!input.files.length||input.files.length>BUNDLE_MAX_FILES)throw new HttpError(400,`Upload 1–${BUNDLE_MAX_FILES.toLocaleString()} saved-page files.`);
         const names=new Set<string>();let total=0;
-        const files=input.files.map((f:any)=>{const path=safePath(f.path),size=Number(f.size);if(names.has(path)||!Number.isInteger(size)||size<0||size>4_000_000)throw new HttpError(400,'Duplicate file or file larger than 4 MB.');names.add(path);total+=size;return{path,size};});
-        if(!names.has('bundle.json')||total>50_000_000)throw new HttpError(400,'The bundle needs a manifest and must be under 50 MB.');
+        const files=input.files.map((f:any)=>{const path=safePath(f.path),size=Number(f.size);if(names.has(path)||!Number.isInteger(size)||size<0||size>BUNDLE_MAX_FILE_BYTES)throw new HttpError(400,`Duplicate file or file larger than ${Math.round(BUNDLE_MAX_FILE_BYTES/1_000_000)} MB.`);names.add(path);total+=size;return{path,size,parts:Math.max(1,Math.ceil(size/BUNDLE_CHUNK_BYTES))};});
+        if(!names.has('bundle.json')||total>BUNDLE_MAX_TOTAL_BYTES)throw new HttpError(400,`The bundle needs a manifest and must be under ${Math.round(BUNDLE_MAX_TOTAL_BYTES/1_000_000)} MB.`);
         const id=randomUUID();await store.setJSON(`${bundleKey(owner,id)}/manifest`,{id,owner,files,ready:false,createdAt:new Date().toISOString()});return json({id},201);
       }
       const id=uuid(path[1]??''),base=bundleKey(owner,id),m=await store.get(`${base}/manifest`,{type:'json'});if(!m)throw new HttpError(404,'Bundle not found.');
       if(method==='PUT') {
         if(m.ready)throw new HttpError(409,'This upload is already finalized.');const name=safePath(url.searchParams.get('file')??'');const entry=m.files.find((f:any)=>f.path===name);if(!entry)throw new HttpError(400,'File is not in the upload manifest.');
-        const content=await bytes(req,4_000_000);if(content.length!==entry.size)throw new HttpError(400,'The uploaded size does not match.');await store.set(fileKey(base,name),content.buffer as ArrayBuffer);return json({saved:true});
+        const partRaw=url.searchParams.get('part');
+        if(entry.size<=BUNDLE_CHUNK_BYTES&&partRaw===null){
+          const content=await bytes(req,BUNDLE_CHUNK_BYTES);if(content.length!==entry.size)throw new HttpError(400,'The uploaded size does not match.');await store.set(fileKey(base,name),content.buffer as ArrayBuffer);return json({saved:true});
+        }
+        const part=Number(partRaw),parts=Math.max(1,Math.ceil(entry.size/BUNDLE_CHUNK_BYTES));
+        if(!Number.isInteger(part)||part<0||part>=parts)throw new HttpError(400,'Invalid upload chunk.');
+        const expected=part===parts-1?entry.size-part*BUNDLE_CHUNK_BYTES:BUNDLE_CHUNK_BYTES;
+        const content=await bytes(req,BUNDLE_CHUNK_BYTES);if(content.length!==expected)throw new HttpError(400,'The uploaded chunk size does not match.');
+        await store.set(fileChunkKey(base,name,part),content.buffer as ArrayBuffer);return json({saved:true,part,parts});
       }
       if(method==='POST' && path[2]==='complete') {
-        for(const f of m.files){const data=await store.get(fileKey(base,f.path),{type:'arrayBuffer'});if(!data||data.byteLength!==f.size)throw new HttpError(409,`Upload incomplete: ${f.path}`);}
+        for(const f of m.files){
+          let data=await store.get(fileKey(base,f.path),{type:'arrayBuffer'});
+          if(!data&&f.size>BUNDLE_CHUNK_BYTES){
+            const parts=Math.max(1,Math.ceil(f.size/BUNDLE_CHUNK_BYTES)),chunks:ArrayBuffer[]=[];let size=0;
+            for(let part=0;part<parts;part++){const chunk=await store.get(fileChunkKey(base,f.path,part),{type:'arrayBuffer'});if(!chunk)throw new HttpError(409,`Upload incomplete: ${f.path} (missing chunk ${part+1}/${parts})`);chunks.push(chunk);size+=chunk.byteLength;}
+            if(size!==f.size)throw new HttpError(409,`Upload incomplete: ${f.path}`);
+            const joined=new Uint8Array(size);let offset=0;for(const chunk of chunks){joined.set(new Uint8Array(chunk),offset);offset+=chunk.byteLength;}
+            await store.set(fileKey(base,f.path),joined.buffer);data=joined.buffer;
+            for(let part=0;part<parts;part++)await store.delete(fileChunkKey(base,f.path,part));
+          }
+          if(!data||data.byteLength!==f.size)throw new HttpError(409,`Upload incomplete: ${f.path}`);
+        }
         const manifest=JSON.parse(new TextDecoder().decode(await store.get(fileKey(base,'bundle.json'),{type:'arrayBuffer'})));
         if(!Array.isArray(manifest.pages)||!manifest.pages.length||manifest.pages.length>12)throw new HttpError(400,'Your page manifest must contain 1–12 pages.');
         for(const p of manifest.pages){safePath(p.file);if(!m.files.some((f:any)=>f.path===p.file)||!/^\/(?!\/)/.test(p.route)||/[?#\\]|(?:^|\/)\.\.?\//.test(p.route))throw new HttpError(400,'Invalid page mapping in bundle.');}

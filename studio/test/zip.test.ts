@@ -36,6 +36,14 @@ test('saved-page ZIP extraction keeps html, css, fonts and images together',asyn
   assert.equal(out[3].file.type,'image/webp');
 });
 
+test('saved-page ZIP extraction accepts files above the former 4 MB ceiling',async()=>{
+  const data=new Uint8Array(4_200_000);data.fill(7);
+  const bytes=zip([{name:'index.html',data,method:0}]);
+  const file=new File([bytes],'large-page.zip',{type:'application/zip'});
+  const out=await unzipSavedPage(file);
+  assert.equal(out.length,1);assert.equal(out[0].file.size,4_200_000);
+});
+
 test('saved-page ZIP extraction rejects path traversal',async()=>{
   const enc=new TextEncoder(),bytes=zip([{name:'../evil.html',data:enc.encode('bad'),method:0}]);
   const file=new File([bytes],'bad.zip',{type:'application/zip'});
