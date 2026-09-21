@@ -361,7 +361,7 @@ export async function handle(req: Request, services: Services): Promise<Response
     }
     if(path[0]==='bundles') {
       if(method==='POST' && path.length===1) {
-        const input=await body(req);if(!Array.isArray(input.files)||!input.files.length||input.files.length>300)throw new HttpError(400,'Upload 1–300 saved-page files.');
+        const input=await body(req,262144);if(!Array.isArray(input.files)||!input.files.length||input.files.length>1200)throw new HttpError(400,'Upload 1–1,200 saved-page files.');
         const names=new Set<string>();let total=0;
         const files=input.files.map((f:any)=>{const path=safePath(f.path),size=Number(f.size);if(names.has(path)||!Number.isInteger(size)||size<0||size>4_000_000)throw new HttpError(400,'Duplicate file or file larger than 4 MB.');names.add(path);total+=size;return{path,size};});
         if(!names.has('bundle.json')||total>50_000_000)throw new HttpError(400,'The bundle needs a manifest and must be under 50 MB.');
