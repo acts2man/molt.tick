@@ -19,7 +19,7 @@ export interface AgentOptions {
   maxPages?:number; maxRepairs?:number; model?:Model; signal?:AbortSignal;
   onProgress?:(message:string)=>void|Promise<void>;
 }
-const ESSENTIAL_STYLE_KEYS=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','opacity','overflow'] as const;
+const ESSENTIAL_STYLE_KEYS=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','opacity','overflow','appearance','accent-color'] as const;
 function clipped(value:string|undefined,limit:number){if(!value)return value;return value.length>limit?value.slice(0,limit)+'…':value;}
 type SavedSourceEvidence={html:string;styles:Array<{path:string;original?:string;content:string}>;note:string};
 function windowed(value:string,limit:number):string{
@@ -90,8 +90,8 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
   const mediaQueries=[...new Set(page.views.flatMap(v=>v.geometry.mediaQueries))].slice(0,120);
   const select=(elements:any[],limit:number)=>{
-    const candidates=elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|h[1-6])$/.test(e.tag)||e.style?.['background-image']!=='none').sort((a,b)=>a.y-b.y||a.x-b.x);
-    const priority=candidates.filter(e=>/^(header|nav|footer|section|h[1-6]|img|button)$/.test(e.tag));
+    const candidates=elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|input|select|textarea|h[1-6])$/.test(e.tag)||e.style?.['background-image']!=='none').sort((a,b)=>a.y-b.y||a.x-b.x);
+    const priority=candidates.filter(e=>/^(header|nav|footer|section|h[1-6]|img|button|input|select|textarea)$/.test(e.tag));
     const chosen=[...evenly(priority,Math.min(priority.length,Math.max(1,Math.floor(limit/2)))),...evenly(candidates,limit)];
     const unique=[] as any[],seen=new Set<string>();
     for(const e of chosen){const key=String(e.key??'')+'|'+e.tag+'|'+Math.round(e.x)+'|'+Math.round(e.y);if(seen.has(key))continue;seen.add(key);unique.push(e);if(unique.length>=limit)break;}
@@ -165,7 +165,7 @@ export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,numb
 }
 function visionFirstContext(evidence:Evidence,page:EvidencePage){
   const remap=(value:string|undefined)=>{let out=value??'';for(const asset of evidence.assets)if(out.includes(asset.original))out=out.split(asset.original).join(asset.publicPath);return clipped(out,260);};
-  const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a)$/.test(e.tag))
+  const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a|input|select|textarea)$/.test(e.tag))
     .slice(0,36).map(e=>({tag:e.tag,text:clipped(e.text,180),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),...(e.src?{src:remap(e.src)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{})}));
   return {
     route:page.route,title:page.title,file:routeFile(page.route),

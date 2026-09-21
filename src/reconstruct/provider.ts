@@ -13,7 +13,7 @@ Only React/react-dom and relative source imports are available. No package insta
 WordPress runtime, eval, network calls, redirects, arbitrary scripts, or embedded iframes.
 Use the provided localized /assets paths. Never use a screenshot as the rendered page.
 Preserve real links. Map supplied same-site routes into the local route list. Do not invent routes.
-Recreate visual form shells without pretending submissions, authentication, payments or bookings work.
+Recreate visual form shells without pretending submissions, authentication, payments or bookings work. Preserve every observed visible field's control type, placeholder or selected text, checkbox/radio state, dimensions, spacing, padding, borders and radius.
 Do not invent missing interaction evidence. Keep unresolved integrations explicit.
 For a repair, address measured differences with targeted edits. Do not improve one viewport at another's expense.
 Return ONLY JSON: {"summary":"brief implementation summary", "files":[{"path":"...","content":"complete replacement file contents"}]}.

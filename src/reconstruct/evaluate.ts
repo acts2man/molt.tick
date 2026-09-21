@@ -9,6 +9,9 @@ import type { Evidence, Evaluation, ViewCheck, Geometry, ElementEvidence } from 
 const normalize=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim();
 const TEXT_TAG=/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/;
 const INLINE_TEXT_TAG=/^(strong|b|em|i|span|a|small)$/;
+const FORM_CONTROL_TAG=/^(input|select|textarea)$/;
+const FORM_STATE_ATTRS=['placeholder','aria-label','checked','selected-text','disabled','readonly'] as const;
+const FORM_STYLE_PROPS=['font-family','font-size','font-weight','line-height','letter-spacing','text-align','color','background','border','border-radius','box-shadow','padding','appearance','accent-color'] as const;
 const TYPOGRAPHY_PROPS=['font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color'] as const;
 const short=(e:ElementEvidence)=>{const value=normalize(e.text);return value.length>54?value.slice(0,51)+'…':value||e.tag;};
 function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):string[]{
@@ -102,6 +105,7 @@ export function visualLayoutIssues(source:Geometry,candidate:Geometry):string[]{
     if(width>8||height>6)issues.push({amount:Math.max(width,height),message:geometryMessage(`Text box "${short(pair.source)}"`,pair.source,pair.candidate)});
     for(const message of pseudoElementIssues(`Text "${short(pair.source)}"`,pair.source,pair.candidate))issues.push({amount:Math.max(20,width,height),message});
   }
+  for(const message of formControlPresentationIssues(source,candidate))issues.push({amount:20,message});
   return issues.sort((a,b)=>b.amount-a.amount).slice(0,12).map(i=>i.message);
 }
 export function mediaPresentationIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
@@ -203,6 +207,40 @@ export function controlGeometryIssues(source:Geometry,candidate:Geometry):string
   }
   return issues.sort((a,b)=>b.amount-a.amount).slice(0,6).map(i=>i.message);
 }
+function visibleFormControls(value:Geometry):ElementEvidence[]{return value.elements.filter(e=>FORM_CONTROL_TAG.test(e.tag));}
+function formControlLabel(control:ElementEvidence,index:number):string{
+  const attr=control.attributes??{},name=attr['aria-label']||attr.placeholder||attr['selected-text'];
+  if(name)return `${control.tag} "${String(name).slice(0,70)}"`;
+  const type=control.tag==='input'?(attr.type||'text'):control.tag;
+  return `${type} control #${index+1}`;
+}
+export function formControlIssues(source:Geometry,candidate:Geometry):string[]{
+  const expected=visibleFormControls(source),actual=visibleFormControls(candidate),issues:string[]=[];
+  if(expected.length!==actual.length)issues.push(`Visible form control count differs: source ${expected.length}, generated ${actual.length}`);
+  const count=Math.min(expected.length,actual.length);
+  for(let i=0;i<count;i++){
+    const before=expected[i],after=actual[i],label=formControlLabel(before,i);
+    if(before.tag!==after.tag)issues.push(`${label}: source element ${before.tag}, generated ${after.tag}`);
+    if(before.tag==='input'&&after.tag==='input'){
+      const a=String(before.attributes?.type||'text').toLowerCase(),b=String(after.attributes?.type||'text').toLowerCase();
+      if(a!==b)issues.push(`${label}: type source ${a}, generated ${b}`);
+    }
+    for(const key of FORM_STATE_ATTRS){
+      const a=String(before.attributes?.[key]??''),b=String(after.attributes?.[key]??'');
+      if(normalize(a)!==normalize(b))issues.push(`${label}: ${key} source ${a||'unset'}, generated ${b||'unset'}`);
+    }
+    const delta=geometryDelta(before,after);if(geometryMismatch(delta,4))issues.push(geometryMessage(`Form ${label}`,before,after));
+  }
+  return issues.slice(0,12);
+}
+function formControlPresentationIssues(source:Geometry,candidate:Geometry):string[]{
+  const expected=visibleFormControls(source),actual=visibleFormControls(candidate),issues:string[]=[];
+  for(let i=0;i<Math.min(expected.length,actual.length);i++){
+    const diffs=styleDifferences(expected[i].style,actual[i].style,FORM_STYLE_PROPS);
+    if(diffs.length)issues.push(`Form ${formControlLabel(expected[i],i)} styling: ${diffs.slice(0,7).join('; ')}`);
+  }
+  return issues.slice(0,6);
+}
 export function spacingIssues(source:Geometry,candidate:Geometry):string[]{
   const pairs=matchedTextElements(source,candidate),problems:string[]=[];
   const typography:string[]=[];
@@ -276,7 +314,7 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     for(const property of TYPOGRAPHY_PROPS)if(original.style[property]!==actual.style[property])mismatches.push(property);
     if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
   }
-  problems.push(...spacingIssues(source,candidate),...controlGeometryIssues(source,candidate));
+  problems.push(...spacingIssues(source,candidate),...controlGeometryIssues(source,candidate),...formControlIssues(source,candidate));
   if(Math.abs(source.height-candidate.height)>Math.max(3,source.height*0.005))problems.push(`Page height differs: source ${source.height}px, generated ${candidate.height}px`);
   return problems;
 }
