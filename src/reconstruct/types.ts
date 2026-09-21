@@ -17,7 +17,7 @@ export interface Geometry {
   elements: ElementEvidence[]; links: string[]; embeds: string[]; forms: number;
   fontFaces: string[]; mediaQueries: string[]; platformHints?: string[]; rootStyle?: Record<string,string>; bodyStyle?: Record<string,string>; truncated: boolean;
 }
-export type InteractionKind = 'button' | 'tab' | 'details';
+export type InteractionKind = 'button' | 'tab' | 'details' | 'hover';
 export interface InteractionTrigger {
   kind: InteractionKind;
   name: string;
