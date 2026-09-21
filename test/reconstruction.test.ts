@@ -142,6 +142,14 @@ test('visible source assets may be reused through a different rendering primitiv
   const evidence={site:'https://source.example',directory:'',pages:[],assets:[{original:'https://source.example/photo.jpg',file:'/tmp/photo.jpg',publicPath:'/assets/photo-hash.jpg'}],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
   assert.deepEqual(mediaAssetPresenceIssues(source,candidate,evidence),[]);
 });
+test('visual diagnostics promote styled div cards into exact surface measurements',()=>{
+  const sourceStyle={'background':'rgb(255, 255, 255) none repeat scroll 0% 0% / auto padding-box border-box','background-image':'none','background-size':'auto','background-position':'0% 0%','border':'1px solid rgb(220, 220, 220)','border-radius':'20px','box-shadow':'rgba(0, 0, 0, 0.12) 0px 12px 28px 0px','padding':'28px','gap':'16px','overflow':'visible','filter':'none','backdrop-filter':'none','clip-path':'none'};
+  const source=simpleGeometry([{key:'card',tag:'div',text:'',x:120,y:200,width:420,height:260,style:sourceStyle}]);
+  const candidate=simpleGeometry([{key:'card2',tag:'div',text:'',x:145,y:200,width:380,height:260,style:{...sourceStyle,'border-radius':'4px','box-shadow':'none'}}]);
+  const issues=visualLayoutIssues(source,candidate);
+  assert.ok(issues.some(i=>/Container div #1/.test(i)&&/delta x 25/.test(i)&&/width -40/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/Container div #1 treatment/.test(i)&&/border-radius source 20px, generated 4px/.test(i)&&/box-shadow source/.test(i)),issues.join('\n'));
+});
 test('media presentation diagnostics report image crop and positioning mismatches',()=>{
   const source=simpleGeometry([{key:'1',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'cover','object-position':'50% 30%','border-radius':'18px'},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
   const candidate=simpleGeometry([{key:'2',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'contain','object-position':'50% 50%','border-radius':'0px'},src:'http://generated.test/assets/hero-hash.jpg',attributes:{alt:'Hero'}}]);
