@@ -376,7 +376,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
           if(stateIndex>0){
             const reset=await page.goto(host.origin+pageRef.route,{waitUntil:'load',timeout:30000});
             if(!reset?.ok()){check.issues.push(`Interaction reset failed before "${state.trigger.name}"`);break;}
-            await settle(page,signal);
+            await page.mouse.move(0,0);await settle(page,signal);
           }
           const stateCheck={id:state.id,trigger:state.trigger,score:null,worstBand:null,pass:false,issues:[],source:state.screenshot} as NonNullable<ViewCheck['interactions']>[number];
           if(!await activateInteraction(page,state.trigger)){
