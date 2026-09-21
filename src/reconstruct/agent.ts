@@ -202,9 +202,9 @@ function visionFirstContext(evidence:Evidence,page:EvidencePage){
   return {
     route:page.route,title:page.title,file:routeFile(page.route),
     fullVisibleText:clipped(page.views[0]?.geometry.text??'',14000),
-    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,outline:outline(v.geometry.elements),
+    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,outline:outline(v.geometry.elements),criticalTypography:criticalTypography(v.geometry.elements,24),mediaSlots:exactMediaSlots(v.geometry.elements,value=>remap(value)??'',45),carousels:carouselInventory(v.geometry,value=>remap(value)??''),
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,5000)}:{}),
-      interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500)}))}))
+      interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500),carousels:carouselInventory(i.geometry,value=>remap(value)??'')}))}))
   };
 }
 export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:FileChange[],task:string,savedSource?:SavedSourceEvidence):string{
