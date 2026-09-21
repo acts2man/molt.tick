@@ -319,13 +319,13 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
     const ext = EXT[mime.split(';')[0]] ?? (/\.(woff2?|ttf|otf)(?:[?#]|$)/i.exec(url)?.[1]?.toLowerCase());
     if(!ext)return;
     if(body.length>16_000_000||assetMap.size>=1000)throw new Error('Asset budget exceeded');
-    const digest=createHash('sha256').update(body).digest('hex'),existing=assetFiles.get(digest);
+    const digest=createHash('sha256').update(body).digest('hex'),assetKey=`${digest}.${ext}`,existing=assetFiles.get(assetKey);
     if(existing){assetMap.set(url,{original:url,...existing});return;}
     if(totalBytes+body.length>160_000_000)throw new Error('Asset budget exceeded');
     totalBytes+=body.length;
     const publicPath=`/assets/${digest.slice(0,24)}.${ext}`;
     const file=join(options.directory,publicPath);
-    const stored={file,publicPath};assetFiles.set(digest,stored);assetMap.set(url,{original:url,...stored});
+    const stored={file,publicPath};assetFiles.set(assetKey,stored);assetMap.set(url,{original:url,...stored});
     await writeFile(file,body);
   };
   const importSavedResources=async(root:string)=>{
