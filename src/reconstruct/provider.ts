@@ -40,6 +40,7 @@ export function createModel(options:ProviderOptions):Model{
     if(request.images.length>18||request.prompt.length>400000)throw new Error('Model context budget exceeded');
     signal.throwIfAborted();
     if(usage.calls>=maxCalls)throw new Error('Logical model call budget exhausted');
+    if((usage.transportAttempts??0)>=maxTransportAttempts)throw new Error('Provider transport retry budget exhausted');
     usage.calls++;
     const logicalCall=usage.calls;
     const model=options.model;
@@ -62,17 +63,25 @@ export function createModel(options:ProviderOptions):Model{
       if((usage.transportAttempts??0)>=maxTransportAttempts)throw new Error('Provider transport retry budget exhausted');
       usage.transportAttempts=(usage.transportAttempts??0)+1;
       const call=usage.transportAttempts;
-      const response=await fetcher(options.provider==='anthropic'?'https://api.anthropic.com/v1/messages':'https://api.openai.com/v1/responses',{
-        method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(requestMs)]),
-        headers:options.provider==='anthropic'?{'content-type':'application/json','x-api-key':options.key,'anthropic-version':'2023-06-01'}:{'content-type':'application/json',authorization:`Bearer ${options.key}`},body:encoded,
-      }).catch(error=>{record(call,null,`logical-${logicalCall}:transport-error`);throw error;});
+      let response:Response;
+      try{
+        response=await fetcher(options.provider==='anthropic'?'https://api.anthropic.com/v1/messages':'https://api.openai.com/v1/responses',{
+          method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(requestMs)]),
+          headers:options.provider==='anthropic'?{'content-type':'application/json','x-api-key':options.key,'anthropic-version':'2023-06-01'}:{'content-type':'application/json',authorization:`Bearer ${options.key}`},body:encoded,
+        });
+      }catch(error){
+        record(call,null,`logical-${logicalCall}:transport-error`);
+        signal.throwIfAborted();
+        if(attempt<2){await sleep(Math.min(10,2**attempt)*1000,undefined,{signal});continue;}
+        throw error;
+      }
       const raw=await response.text().catch(error=>{record(call,null,`logical-${logicalCall}:response-read-error`);throw error;});if(raw.length>3_000_000){record(call,null,`logical-${logicalCall}:oversized-response`);throw new Error('Provider response exceeds budget');}
       if(!response.ok){
         record(call,null,`logical-${logicalCall}:http-${response.status}`);
         if([429,500,502,503,529].includes(response.status)&&attempt<2){const seconds=Math.min(10,Math.max(1,Number(response.headers.get('retry-after'))||2**attempt));await sleep(seconds*1000,undefined,{signal});continue;}
         throw new Error(`${options.provider} request failed (HTTP ${response.status}); ${raw.slice(0,500).split(options.key).join('[redacted]')}`);
       }
-      let data:any;try{data=JSON.parse(raw);}catch(error){record(call,null,'invalid-json');throw error;}
+      let data:any;try{data=JSON.parse(raw);}catch(error){record(call,null,`logical-${logicalCall}:invalid-json`);throw error;}
       record(call,data.usage,`logical-${logicalCall}:${String(data.status??data.stop_reason??'response')}`);
       const reported=usage.records![usage.records!.length-1];
       usage.inputTokens+=reported.inputTokens??0;usage.outputTokens+=reported.outputTokens??0;
