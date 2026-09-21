@@ -95,6 +95,25 @@ function spacingGuide(elements:any[],limit=60){
   }
   return {textRhythm:rhythm,between:evenly(allBetween.sort((a,b)=>a.toY-b.toY),limit)};
 }
+function criticalTypography(elements:any[],limit=48){
+  const rank=(e:any)=>/^h1$/.test(e.tag)?120:/^h[2-3]$/.test(e.tag)?100:(e.tag==='a'||e.tag==='button'?80:/^(p|li)$/.test(e.tag)?30:10);
+  return elements.filter(e=>/^(h[1-6]|p|li|button|a|label|blockquote)$/.test(e.tag)&&String(e.text||'').trim()).map(e=>({e,score:rank(e)+(e.y<1000?30:0)})).sort((a,b)=>b.score-a.score||a.e.y-b.e.y).slice(0,limit).map(({e})=>({
+    tag:e.tag,text:clipped(String(e.text).replace(/\s+/g,' ').trim(),120),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
+    fontFamily:e.style?.['font-family'],fontSize:e.style?.['font-size'],fontWeight:e.style?.['font-weight'],fontStyle:e.style?.['font-style'],lineHeight:e.style?.['line-height'],letterSpacing:e.style?.['letter-spacing'],textAlign:e.style?.['text-align'],textTransform:e.style?.['text-transform']
+  }));
+}
+function exactMediaSlots(elements:any[],remap:(value:string)=>string,limit=90){
+  const slots:any[]=[];
+  for(const e of elements){
+    if(e.tag==='img'&&e.src&&e.width*e.height>=256)slots.push({kind:'img',asset:remap(e.src),alt:e.attributes?.alt??'',x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),objectFit:e.style?.['object-fit'],objectPosition:e.style?.['object-position'],borderRadius:e.style?.['border-radius']});
+    const bg=String(e.style?.['background-image']??'');if(bg&&bg!=='none'&&/url\(/.test(bg)&&e.width*e.height>=1024)slots.push({kind:'background',asset:remap(bg),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),backgroundSize:e.style?.['background-size'],backgroundPosition:e.style?.['background-position'],borderRadius:e.style?.['border-radius']});
+    if(slots.length>=limit)break;
+  }
+  return slots;
+}
+function carouselInventory(geometry:any,remap:(value:string)=>string){
+  return (geometry.carousels??[]).slice(0,6).map((carousel:any)=>({label:carousel.label,slideCount:carousel.slides.length,slides:carousel.slides.slice(0,24).map((slide:any)=>({text:clipped(String(slide.text||'').replace(/\s+/g,' ').trim(),700),images:(slide.images??[]).map((image:string)=>remap(image))}))}));
+}
 function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
