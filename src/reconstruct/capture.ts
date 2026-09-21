@@ -197,6 +197,16 @@ export async function activateInteraction(page: Page, trigger: InteractionTrigge
   })()`;
   return await page.evaluate(script) as boolean;
 }
+async function primeCarouselAssets(page:Page,signal:AbortSignal):Promise<number>{
+  const triggers=await discoverInteractions(page),next=triggers.find(trigger=>trigger.kind==='button'&&/^next(?:\s+(?:slide|testimonial|review|item|image|photo|project))?\b/i.test(trigger.name));
+  if(!next)return 0;
+  const seen=new Set<string>();
+  for(let step=0;step<16;step++){
+    signal.throwIfAborted();const fingerprint=geometryFingerprint(await geometry(page));if(seen.has(fingerprint))break;seen.add(fingerprint);
+    if(!await activateInteraction(page,next))break;await page.waitForTimeout(140);
+  }
+  return seen.size;
+}
 /** Do not erase transforms, reveal hidden menus, or resize the viewport to page height. */
 export async function settle(page: Page, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
