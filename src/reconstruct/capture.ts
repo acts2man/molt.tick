@@ -399,6 +399,8 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           if(g.brokenImages)evidence.blockers.push(`${target.route} ${viewport.name}: ${g.brokenImages} source images did not load.`);
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
+          const primedCarouselStates=await primeCarouselAssets(page,options.signal);
+          if(primedCarouselStates>1){const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});if(reset?.ok())await settle(page,options.signal);else evidence.warnings.push(`${target.route} ${viewport.name}: carousel asset priming could not restore the initial page state.`);}
           const interactions:NonNullable<Evidence['pages'][number]['views'][number]['interactions']>=[];
           const triggers=await discoverInteractions(page);
           for(let index=0;index<triggers.length;index++){
