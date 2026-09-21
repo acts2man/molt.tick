@@ -10,7 +10,7 @@ const normalize=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim();
 const TEXT_TAG=/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/;
 const INLINE_TEXT_TAG=/^(strong|b|em|i|span|a|small)$/;
 const FORM_CONTROL_TAG=/^(input|select|textarea)$/;
-const FORM_STATE_ATTRS=['type','placeholder','aria-label','checked','selected-text','disabled','readonly'] as const;
+const FORM_STATE_ATTRS=['placeholder','aria-label','checked','selected-text','disabled','readonly'] as const;
 const FORM_STYLE_PROPS=['font-family','font-size','font-weight','line-height','letter-spacing','text-align','color','background','border','border-radius','box-shadow','padding','appearance','accent-color'] as const;
 const TYPOGRAPHY_PROPS=['font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color'] as const;
 const short=(e:ElementEvidence)=>{const value=normalize(e.text);return value.length>54?value.slice(0,51)+'…':value||e.tag;};
@@ -221,6 +221,10 @@ export function formControlIssues(source:Geometry,candidate:Geometry):string[]{
   for(let i=0;i<count;i++){
     const before=expected[i],after=actual[i],label=formControlLabel(before,i);
     if(before.tag!==after.tag)issues.push(`${label}: source element ${before.tag}, generated ${after.tag}`);
+    if(before.tag==='input'&&after.tag==='input'){
+      const a=String(before.attributes?.type||'text').toLowerCase(),b=String(after.attributes?.type||'text').toLowerCase();
+      if(a!==b)issues.push(`${label}: type source ${a}, generated ${b}`);
+    }
     for(const key of FORM_STATE_ATTRS){
       const a=String(before.attributes?.[key]??''),b=String(after.attributes?.[key]??'');
       if(normalize(a)!==normalize(b))issues.push(`${label}: ${key} source ${a||'unset'}, generated ${b||'unset'}`);
