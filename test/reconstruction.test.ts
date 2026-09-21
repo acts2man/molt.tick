@@ -14,7 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues, motionIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -253,6 +253,17 @@ test('default input type and explicit text type are equivalent',()=>{
   const source=simpleGeometry([{key:'1',tag:'input',text:'',x:0,y:0,width:200,height:40,style,attributes:{placeholder:'Name',disabled:'false',readonly:'false'}}]);
   const candidate=simpleGeometry([{key:'2',tag:'input',text:'',x:0,y:0,width:200,height:40,style,attributes:{type:'text',placeholder:'Name',disabled:'false',readonly:'false'}}]);
   assert.deepEqual(formControlIssues(source,candidate),[]);
+});
+test('motion diagnostics require observed source motion categories without requiring the original plugin',()=>{
+  const base={libraries:['Slider Revolution'],frames:[],animations:[{target:'Hero title',duration:800,delay:0,iterations:1,properties:['opacity','transform']}],changedElements:4,hasScrollLinkedMotion:true,hasEntranceMotion:true,hasStickyOrFixedMotion:true};
+  const missing={libraries:[],frames:[],animations:[],changedElements:0,hasScrollLinkedMotion:false,hasEntranceMotion:false,hasStickyOrFixedMotion:false};
+  const issues=motionIssues(base as any,missing as any);
+  assert.ok(issues.some(i=>/entrance animation/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/scroll-linked/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/sticky\/fixed/.test(i)),issues.join('\n'));
+  assert.ok(issues.some(i=>/active animation timeline/.test(i)),issues.join('\n'));
+  const equivalent={...base,libraries:['CSS only']};
+  assert.deepEqual(motionIssues(base as any,equivalent as any),[]);
 });
 test('priority typography diagnostics give exact source and generated heading sizes',()=>{
   const source=simpleGeometry([{key:'s',tag:'h1',text:'Sacramento Tree Services',x:100,y:100,width:900,height:72,style:{'font-family':'Arvo','font-size':'58px','font-weight':'700','font-style':'normal','line-height':'72px','letter-spacing':'0px','text-align':'center','text-transform':'uppercase','color':'rgb(255, 255, 255)'}}]);
