@@ -114,6 +114,18 @@ function exactMediaSlots(elements:any[],remap:(value:string)=>string,limit=90){
 function carouselInventory(geometry:any,remap:(value:string)=>string){
   return (geometry.carousels??[]).slice(0,6).map((carousel:any)=>({label:carousel.label,slideCount:carousel.slides.length,slides:carousel.slides.slice(0,24).map((slide:any)=>({text:clipped(String(slide.text||'').replace(/\s+/g,' ').trim(),700),images:(slide.images??[]).map((image:string)=>remap(image))}))}));
 }
+function motionSummary(motion:import('./types.js').MotionEvidence|undefined,frameLimit=5){
+  if(!motion)return undefined;
+  return {
+    libraries:motion.libraries,
+    changedElements:motion.changedElements,
+    hasScrollLinkedMotion:motion.hasScrollLinkedMotion,
+    hasEntranceMotion:motion.hasEntranceMotion,
+    hasStickyOrFixedMotion:motion.hasStickyOrFixedMotion,
+    animations:motion.animations.slice(0,24),
+    frames:motion.frames.slice(0,frameLimit).map(frame=>({atMs:frame.atMs,scrollY:frame.scrollY,elements:frame.elements.slice(0,60)})),
+  };
+}
 function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textLimit=50000):unknown{
   const remap=(s:string)=>{for(const asset of evidence.assets)if(s.includes(asset.original))s=s.split(asset.original).join(asset.publicPath);return s;};
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
@@ -128,7 +140,7 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
   };
   return {route:page.route,title:page.title,file:routeFile(page.route),fullVisibleText:desktopText,mediaQueries,
     views:page.views.map((v,index)=>({
-      viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,rootStyle:v.geometry.rootStyle,bodyStyle:v.geometry.bodyStyle,
+      viewport:v.viewport,pageHeight:v.geometry.height,truncatedGeometry:v.geometry.truncated,rootStyle:v.geometry.rootStyle,bodyStyle:v.geometry.bodyStyle,motion:motionSummary(v.motion),
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,textLimit)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(state=>({id:state.id,trigger:state.trigger,visibleText:clipped(state.geometry.text,12000),pageHeight:state.geometry.height,
         geometry:select(state.geometry.elements,Math.min(70,geometryLimit)),carousels:carouselInventory(state.geometry,remap)})),
@@ -229,7 +241,7 @@ function visionFirstContext(evidence:Evidence,page:EvidencePage){
   return {
     route:page.route,title:page.title,file:routeFile(page.route),
     fullVisibleText:clipped(page.views[0]?.geometry.text??'',14000),
-    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,outline:outline(v.geometry.elements),criticalTypography:criticalTypography(v.geometry.elements,24),mediaSlots:exactMediaSlots(v.geometry.elements,value=>remap(value)??'',45),carousels:carouselInventory(v.geometry,value=>remap(value)??''),
+    views:page.views.map((v,index)=>({viewport:v.viewport,pageHeight:v.geometry.height,motion:motionSummary(v.motion,3),outline:outline(v.geometry.elements),criticalTypography:criticalTypography(v.geometry.elements,24),mediaSlots:exactMediaSlots(v.geometry.elements,value=>remap(value)??'',45),carousels:carouselInventory(v.geometry,value=>remap(value)??''),
       ...(index>0&&v.geometry.text!==page.views[0]?.geometry.text?{visibleTextOverride:clipped(v.geometry.text,5000)}:{}),
       interactions:(v.interactions??[]).slice(0,3).map(i=>({id:i.id,trigger:i.trigger,visibleText:clipped(i.geometry.text,2500),carousels:carouselInventory(i.geometry,value=>remap(value)??'')}))}))
   };
@@ -238,7 +250,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   const assets=relevantAssets(evidence,page);
   const build=(geometryLimit:number,textLimit:number,fileLimit:number,htmlLimit:number,styleCount:number,styleLimit:number)=>{
     const saved=htmlLimit>0?packSavedSource(savedSource,htmlLimit,styleCount,styleLimit):undefined;
-    return JSON.stringify({task,visualAuthority:'The attached source screenshots are the primary visual authority. Reconstruct the page as a skilled front-end engineer would: reason holistically about composition, hierarchy, proportions, rhythm, responsive behavior and interaction feel. Structured evidence is supporting ground truth and helps recover exact facts; it is not an exhaustive list of what you are allowed to notice.',hardConstraints:'Preserve route identity, visible copy, exact source assets for their observed slots, full carousel/slider inventories, and observed interaction states. Never substitute, shuffle or duplicate a different image merely because it looks plausible. Never collapse a multi-slide component into one static image. Do not break previously correct routes or viewports.',measurementGuidance:'Typography, spacing and geometry measurements are precise anchors when supplied, but they are not an exhaustive checklist. Use visual judgment across the complete screenshot to identify additional discrepancies that diagnostics did not name.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
+    return JSON.stringify({task,visualAuthority:'The attached source screenshots are the primary visual authority. Reconstruct the page as a skilled front-end engineer would: reason holistically about composition, hierarchy, proportions, rhythm, responsive behavior and interaction feel. Structured evidence is supporting ground truth and helps recover exact facts; it is not an exhaustive list of what you are allowed to notice.',hardConstraints:'Preserve route identity, visible copy, exact source assets for their observed slots, full carousel/slider inventories, observed interaction states, and observed motion behavior when motion evidence is supplied. Never substitute, shuffle or duplicate a different image merely because it looks plausible. Never collapse a multi-slide component into one static image. Do not break previously correct routes or viewports.',measurementGuidance:'Typography, spacing and geometry measurements are precise anchors when supplied, but they are not an exhaustive checklist. Use visual judgment across the complete screenshot to identify additional discrepancies that diagnostics did not name.',sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
       editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
       fonts:evidence.fontFaces.slice(0,40).map(f=>clipped(f,1800)),assets:assets.slice(0,160).map(a=>({original:clipped(a.original,320),path:a.path})),
       reference:pageContext(evidence,page,geometryLimit,textLimit),...(saved?{savedSource:saved}:{}),currentFiles:boundedFiles(files,page,fileLimit),warnings:evidence.warnings.slice(0,40),unresolvedIntegrations:evidence.blockers.slice(0,40),integrationInventory:evidence.integrations.filter(i=>i.route===page.route).slice(0,40)});
@@ -257,7 +269,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   }
   const visionFirst=JSON.stringify({
     task:task+' The attached desktop, tablet and mobile screenshots are the primary visual authority. Implement from the screenshots plus this compact structural outline.',
-    visualAuthority:'The screenshots are the primary visual authority. Reason about the page as a complete design, not as a checklist of measured properties.',hardConstraints:'Keep visible copy, route identity, source asset-to-slot identity, and complete carousel/slider content. Do not shuffle assets, duplicate a different image, collapse a slideshow, or invent a shorter carousel.',measurementGuidance:'Use compact measurements as factual anchors while still correcting visual discrepancies you can see even when no diagnostic names them.',
+    visualAuthority:'The screenshots are the primary visual authority. Reason about the page as a complete design, not as a checklist of measured properties.',hardConstraints:'Keep visible copy, route identity, source asset-to-slot identity, complete carousel/slider content, and observed motion behavior when supplied. Do not shuffle assets, duplicate a different image, collapse a slideshow, or invent a shorter carousel.',measurementGuidance:'Use compact measurements as factual anchors while still correcting visual discrepancies you can see even when no diagnostic names them.',
     sourceSite:evidence.site,routeMap:evidence.pages.map(p=>({route:p.route,file:routeFile(p.route)})),
     editable:['src/pages/<listed-route-file>.tsx','src/components/<name>.tsx','src/styles/<name>.css','src/site.css'],fileContract:'Return complete replacement contents only for currentFiles marked complete:true. Never replace a complete:false file; split large work into smaller route-specific files.',
     reference:visionFirstContext(evidence,page),
@@ -270,7 +282,7 @@ export function reconstructionPrompt(evidence:Evidence,page:EvidencePage,files:F
   if(visionFirst.length<=300000)return visionFirst;
   return JSON.stringify({
     task:task+' Use the attached screenshots as the primary visual authority. This source required an ultra-compact evidence fallback; prioritize visual fidelity, visible copy, responsive layout and local assets.',
-    visualAuthority:'Use the attached screenshots as the primary visual authority and reconstruct the complete visual experience holistically.',hardConstraints:'Keep visible copy, route identity, source asset-to-slot identity and full carousel/slider content; never substitute or shuffle images.',
+    visualAuthority:'Use the attached screenshots as the primary visual authority and reconstruct the complete visual experience holistically.',hardConstraints:'Keep visible copy, route identity, source asset-to-slot identity, full carousel/slider content and observed motion behavior; never substitute or shuffle images.',
     sourceSite:evidence.site,route:page.route,file:routeFile(page.route),title:page.title,
     visibleText:clipped(page.views[0]?.geometry.text??'',9000),
     viewports:page.views.map(v=>({viewport:v.viewport,pageHeight:v.geometry.height})),
@@ -314,7 +326,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   const allowed=new Set(evidence.pages.map(p=>routeFile(p.route)));
   const savedSourceCache=new Map<string,SavedSourceEvidence|undefined>();
   const sourceFor=async(route:string)=>{if(savedSourceCache.has(route))return savedSourceCache.get(route);const source=await savedSourceEvidence(options.bundleDir,route);savedSourceCache.set(route,source);return source;};
-  const initialTask='Implement this page as a visually faithful reconstruction, using the attached screenshots as your primary visual authority. Think like a senior front-end engineer comparing the intended design to your implementation: infer hierarchy, proportions, whitespace rhythm, typography scale, responsive composition and component behavior from the whole page. Use DOM/CSS measurements as precise factual anchors where helpful, but do not limit yourself to supplied diagnostics if the screenshots reveal additional visual relationships. Reproduce observed menu, disclosure, accordion, carousel, slider and tab behavior with accessible React behavior when interaction evidence is supplied. Preserve visible emphasis, alignment and copy.';
+  const initialTask='Implement this page as a visually faithful reconstruction, using the attached screenshots as your primary visual authority. Think like a senior front-end engineer comparing the intended design to your implementation: infer hierarchy, proportions, whitespace rhythm, typography scale, responsive composition and component behavior from the whole page. Use DOM/CSS measurements as precise factual anchors where helpful, but do not limit yourself to supplied diagnostics if the screenshots reveal additional visual relationships. Reproduce observed menu, disclosure, accordion, carousel, slider and tab behavior with accessible React behavior when interaction evidence is supplied. When motion evidence is supplied, reproduce the observed entrance timing, transforms, opacity changes, scroll-linked movement, sticky/fixed behavior and slider-layer motion using the simplest maintainable React/CSS implementation that matches the source; do not preserve the WordPress/plugin dependency itself. Preserve visible emphasis, alignment and copy.';
   const seed=evidence.pages[0];
   if(seed){
     signal.throwIfAborted();await progress(`Reconstructing ${seed.route} as the shared site shell`);
