@@ -19,7 +19,7 @@ export interface AgentOptions {
   maxPages?:number; maxRepairs?:number; model?:Model; signal?:AbortSignal;
   onProgress?:(message:string)=>void|Promise<void>;
 }
-const ESSENTIAL_STYLE_KEYS=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','opacity','overflow','appearance','accent-color'] as const;
+const ESSENTIAL_STYLE_KEYS=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','opacity','overflow','appearance','accent-color','filter','backdrop-filter','clip-path','text-shadow','white-space','word-break','aspect-ratio'] as const;
 function clipped(value:string|undefined,limit:number){if(!value)return value;return value.length>limit?value.slice(0,limit)+'…':value;}
 type SavedSourceEvidence={html:string;styles:Array<{path:string;original?:string;content:string}>;note:string};
 function windowed(value:string,limit:number):string{
@@ -63,6 +63,16 @@ function evenly<T>(items:T[],limit:number):T[]{
   if(limit<=1)return items.slice(0,1);
   const out:T[]=[];for(let i=0;i<limit;i++)out.push(items[Math.round(i*(items.length-1)/(limit-1))]);return out;
 }
+function visualSurface(e:any):boolean{
+  if(!/^(div|aside|figure)$/.test(String(e.tag||'')))return false;
+  const s=e.style??{},background=String(s.background??'');
+  const hasBackground=Boolean(s['background-image']&&s['background-image']!=='none')||Boolean(background&&!/^(?:rgba\(0, 0, 0, 0\)|transparent)(?:\s|$)/i.test(background));
+  const hasBorder=Boolean(s.border&&!/^0px\s+none\b/i.test(String(s.border)));
+  const hasRadius=Boolean(s['border-radius']&&!/^0px(?:\s+0px){0,3}$/.test(String(s['border-radius'])));
+  const hasShadow=Boolean(s['box-shadow']&&s['box-shadow']!=='none');
+  const hasEffect=Boolean((s.filter&&s.filter!=='none')||(s['backdrop-filter']&&s['backdrop-filter']!=='none')||(s['clip-path']&&s['clip-path']!=='none'));
+  return hasBackground||hasBorder||hasRadius||hasShadow||hasEffect;
+}
 function spacingGuide(elements:any[],limit=60){
   const allText=elements.filter(e=>/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/.test(e.tag)&&String(e.text||'').trim()).sort((a,b)=>a.y-b.y||a.x-b.x);
   const blockText=allText.filter(e=>/^(h[1-6]|p|li|button|label|blockquote)$/.test(e.tag));
@@ -90,8 +100,8 @@ function pageContext(evidence:Evidence,page:EvidencePage,geometryLimit=240,textL
   const desktopText=clipped(page.views[0]?.geometry.text??'',textLimit)??'';
   const mediaQueries=[...new Set(page.views.flatMap(v=>v.geometry.mediaQueries))].slice(0,120);
   const select=(elements:any[],limit:number)=>{
-    const candidates=elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|input|select|textarea|h[1-6])$/.test(e.tag)||e.style?.['background-image']!=='none').sort((a,b)=>a.y-b.y||a.x-b.x);
-    const priority=candidates.filter(e=>/^(header|nav|footer|section|h[1-6]|img|button|input|select|textarea)$/.test(e.tag));
+    const candidates=elements.filter(e=>e.text||e.src||e.svg||/^(section|header|footer|main|nav|form|button|a|img|input|select|textarea|h[1-6])$/.test(e.tag)||visualSurface(e)||e.style?.['background-image']!=='none').sort((a,b)=>a.y-b.y||a.x-b.x);
+    const priority=candidates.filter(e=>/^(header|nav|footer|section|h[1-6]|img|button|input|select|textarea)$/.test(e.tag)||visualSurface(e));
     const chosen=[...evenly(priority,Math.min(priority.length,Math.max(1,Math.floor(limit/2)))),...evenly(candidates,limit)];
     const unique=[] as any[],seen=new Set<string>();
     for(const e of chosen){const key=String(e.key??'')+'|'+e.tag+'|'+Math.round(e.x)+'|'+Math.round(e.y);if(seen.has(key))continue;seen.add(key);unique.push(e);if(unique.length>=limit)break;}
@@ -165,7 +175,7 @@ export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,numb
 }
 function visionFirstContext(evidence:Evidence,page:EvidencePage){
   const remap=(value:string|undefined)=>{let out=value??'';for(const asset of evidence.assets)if(out.includes(asset.original))out=out.split(asset.original).join(asset.publicPath);return clipped(out,260);};
-  const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a|input|select|textarea)$/.test(e.tag))
+  const outline=(elements:any[])=>elements.filter(e=>/^(header|nav|main|section|footer|form|h[1-6]|img|button|a|input|select|textarea)$/.test(e.tag)||visualSurface(e))
     .slice(0,36).map(e=>({tag:e.tag,text:clipped(e.text,180),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),...(e.src?{src:remap(e.src)}:{}),...(e.attributes&&Object.keys(e.attributes).length?{attributes:e.attributes}:{})}));
   return {
     route:page.route,title:page.title,file:routeFile(page.route),
