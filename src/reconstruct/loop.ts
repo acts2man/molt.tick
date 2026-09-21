@@ -11,15 +11,16 @@ export interface LoopPorts<Snapshot> {
   apply(reply:ModelReply):Promise<void>;
   save(best:Evaluation,history:Attempt[]):Promise<void>;
 }
-export async function repairLoop<S>(ports:LoopPorts<S>,options:{maxRounds:number;signal:AbortSignal}):Promise<{evaluation:Evaluation;attempts:Attempt[];reason?:string}>{
+export async function repairLoop<S>(ports:LoopPorts<S>,options:{maxRounds:number;minRounds?:number;signal:AbortSignal}):Promise<{evaluation:Evaluation;attempts:Attempt[];reason?:string}>{
   if(!Number.isInteger(options.maxRounds)||options.maxRounds<0||options.maxRounds>20)throw new Error('Repair limit must be 0..20');
+  const minRounds=options.minRounds??0;if(!Number.isInteger(minRounds)||minRounds<0||minRounds>options.maxRounds)throw new Error('Minimum repair rounds must be within 0..maxRounds');
   options.signal.throwIfAborted();
   let bestSnapshot=await ports.snapshot();let best=await ports.evaluate(0);
   if(!validEvaluation(best))throw new Error('Evaluator returned an invalid initial result');
   const attempts:Attempt[]=[{round:0,accepted:true,summary:'Initial reconstruction',evaluation:best,digest:ports.digest(bestSnapshot)}];
   const seen=new Set([ports.digest(bestSnapshot)]);await ports.save(best,attempts);
   let reason:string|undefined;
-  for(let round=1;!best.pass&&round<=options.maxRounds;round++){
+  for(let round=1;round<=options.maxRounds&&(!best.pass||round<=minRounds);round++){
     if(options.signal.aborted){reason='Reconstruction cancelled or time budget exhausted';break;}
     let summary='',accepted=false,evaluation=best,candidateDigest=ports.digest(bestSnapshot);
     try{
