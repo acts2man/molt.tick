@@ -184,6 +184,20 @@ export function assertInitialGenerationIsolation(before:FileChange[],changes:Fil
     if(previous!==undefined&&previous!==change.content)throw new Error(`Later page generation cannot rewrite existing shared or earlier-route file ${change.path}. Add a route-specific style/component instead; measured repair rounds may adjust shared files after every page exists.`);
   }
 }
+export function repairIssueSubset(issues:string[],limit=12):string[]{
+  const groups=[
+    issues.filter(i=>/^Typography\b|^Heading\b/i.test(i)),
+    issues.filter(i=>/^Spacing\b|^Horizontal alignment\b|^Page height differs|^Text box\b|^Container\b|^Page frame\b/i.test(i)),
+    issues.filter(i=>/^Wrong image\b|^Wrong background\b|^Image usage count\b|^Carousel\b|^Visible source .*asset|^Image .*crop\/presentation|^Background .*presentation/i.test(i)),
+    issues.filter(i=>!/^Typography\b|^Heading\b|^Spacing\b|^Horizontal alignment\b|^Page height differs|^Text box\b|^Container\b|^Page frame\b|^Wrong image\b|^Wrong background\b|^Image usage count\b|^Carousel\b|^Visible source .*asset|^Image .*crop\/presentation|^Background .*presentation/i.test(i)),
+  ];
+  const out:string[]=[];let index=0;
+  while(out.length<limit&&groups.some(group=>index<group.length)){
+    for(const group of groups){const issue=group[index];if(issue&&!out.includes(issue))out.push(issue);if(out.length>=limit)break;}
+    index++;
+  }
+  return out;
+}
 export function selectRepairRoute(evaluation:Evaluation,attempts:Map<string,number>):string|undefined{
   const failing=[...new Set(evaluation.views.filter(v=>!v.pass).map(v=>v.route))];
   if(!failing.length)return undefined;
@@ -310,7 +324,7 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
       const page=evidence.pages.find(p=>p.route===route)??evidence.pages[0];
       await progress(`Repairing ${page.route}; keeping passing pages and viewports intact`);
       const checks=best.views.filter(v=>v.route===page.route);
-      const targets=checks.map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand,worstY:v.worstY,issues:v.issues.slice(0,12),interactions:(v.interactions??[]).filter(i=>!i.pass).map(i=>({name:i.trigger.name,score:i.score,worstBand:i.worstBand,worstY:i.worstY,issues:i.issues.slice(0,6)}))}));
+      const targets=checks.map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand,worstY:v.worstY,issues:repairIssueSubset(v.issues,12),interactions:(v.interactions??[]).filter(i=>!i.pass).map(i=>({name:i.trigger.name,score:i.score,worstBand:i.worstBand,worstY:i.worstY,issues:repairIssueSubset(i.issues,6)}))}));
       const historySummary=history.slice(-4).map(a=>({round:a.round,accepted:a.accepted,summary:a.summary,views:a.evaluation.views.filter(v=>v.route===page.route).map(v=>({viewport:v.viewport,score:v.score,worstBand:v.worstBand}))}));
       const autopsy=rejectedRepairAutopsy(best,history,page.route);
       const rejectionGuidance=autopsy?` Most recent rejected repair autopsy: ${JSON.stringify(autopsy)}. Treat this as causal feedback: preserve the positive deltas, explicitly avoid the negative deltas and added issues, and make a narrower repair rather than repeating the rejected strategy.`:'';
