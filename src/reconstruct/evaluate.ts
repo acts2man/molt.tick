@@ -138,6 +138,41 @@ function assetPath(value:string|undefined):string{
   if(!value)return '';
   try{return new URL(value,'https://molt.invalid').pathname;}catch{return value;}
 }
+function localizedAssetUrls(value:string|undefined,assetByOriginal:Map<string,string>):string[]{
+  if(!value||value==='none')return [];
+  const urls=[...value.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(match=>match[1]);
+  return urls.flatMap(url=>{const local=assetByOriginal.get(url);return local?[local]:[];});
+}
+function generatedAssetPaths(candidate:Geometry):Set<string>{
+  const found=new Set<string>();
+  for(const element of candidate.elements){
+    if(element.src){const path=assetPath(element.src);if(path.startsWith('/assets/'))found.add(path);}
+    for(const value of [element.style['background-image'],element.before?.['background-image'],element.after?.['background-image']]){
+      if(!value)continue;
+      for(const match of value.matchAll(/url\(["']?([^"')]+)["']?\)/g)){
+        const path=assetPath(match[1]);if(path.startsWith('/assets/'))found.add(path);
+      }
+    }
+  }
+  return found;
+}
+export function mediaAssetPresenceIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
+  // A truncated candidate geometry is an intentionally sampled inventory. Never infer absence from incomplete evidence.
+  if(candidate.truncated)return [];
+  const assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath])),used=generatedAssetPaths(candidate);
+  const expected=new Map<string,string>();
+  for(const element of source.elements){
+    if(element.width*element.height<256)continue;
+    if(element.tag==='img'&&element.src){
+      const local=assetByOriginal.get(element.src);
+      if(local)expected.set(local,element.attributes?.alt?`image "${String(element.attributes.alt).slice(0,70)}"`:'image');
+    }
+    for(const [kind,value] of [['background',element.style['background-image']],['::before background',element.before?.['background-image']],['::after background',element.after?.['background-image']]] as const){
+      for(const local of localizedAssetUrls(value,assetByOriginal))if(!expected.has(local))expected.set(local,kind);
+    }
+  }
+  return [...expected].filter(([local])=>!used.has(local)).map(([local,label])=>`Visible source ${label} asset is missing from generated output: ${local}`).slice(0,8);
+}
 export function mediaGeometryIssues(source:Geometry,candidate:Geometry,evidence:Evidence):string[]{
   const issues:Array<{amount:number;message:string}>=[],assetByOriginal=new Map(evidence.assets.map(asset=>[asset.original,asset.publicPath]));
   const generatedImages=candidate.elements.filter(e=>e.tag==='img'&&e.src);
@@ -280,7 +315,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         check.candidate=join(directory,`${stem}.png`);check.diff=join(directory,`${stem}.diff.png`);
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
         const generated=await geometry(page);
-        check.issues.push(...contentIssues(reference.geometry,generated),...mediaGeometryIssues(reference.geometry,generated,evidence),...errors);
+        check.issues.push(...contentIssues(reference.geometry,generated),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
         // Literal DOM links are checked after rendering, including shared components. Same-site links
         // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
@@ -305,7 +340,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
             stateCheck.diff=join(directory,`${stem}-${state.id}.diff.png`);
             await page.screenshot({path:stateCheck.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
             const stateGenerated=await geometry(page);
-            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaGeometryIssues(state.geometry,stateGenerated,evidence));
+            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
             const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
             if(stateMetrics.score<threshold||stateMetrics.worstBand<bandThreshold)stateCheck.issues.push(...visualLayoutIssues(state.geometry,stateGenerated),...mediaPresentationIssues(state.geometry,stateGenerated,evidence));
             stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;

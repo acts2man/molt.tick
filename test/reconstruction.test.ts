@@ -14,7 +14,7 @@ import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
 import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
-import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues } from '../src/reconstruct/evaluate.js';
+import { spacingIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
@@ -122,6 +122,25 @@ test('visual diagnostics expose missing and mismatched pseudo elements',()=>{
   const changed=structuredClone(candidate);changed.elements[0].before={...before,width:'40px',background:'rgb(0, 0, 0)'};
   const mismatch=visualLayoutIssues(source,changed);
   assert.ok(mismatch.some(i=>/::before/.test(i)&&/width source 80px, generated 40px/.test(i)&&/background source rgb\(200, 150, 80\), generated rgb\(0, 0, 0\)/.test(i)),mismatch.join('\n'));
+});
+test('meaningful visible source assets cannot disappear from an otherwise high-scoring render',()=>{
+  const source=simpleGeometry([
+    {key:'1',tag:'img',text:'',x:20,y:20,width:240,height:120,style:{},src:'https://source.example/photo.jpg',attributes:{alt:'Crew photo'}},
+    {key:'2',tag:'img',text:'',x:0,y:0,width:1,height:1,style:{},src:'https://source.example/tracker.gif',attributes:{alt:''}},
+  ]);
+  const candidate=simpleGeometry([]);
+  const evidence={site:'https://source.example',directory:'',pages:[],assets:[
+    {original:'https://source.example/photo.jpg',file:'/tmp/photo.jpg',publicPath:'/assets/photo-hash.jpg'},
+    {original:'https://source.example/tracker.gif',file:'/tmp/tracker.gif',publicPath:'/assets/tracker-hash.gif'},
+  ],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
+  const issues=mediaAssetPresenceIssues(source,candidate,evidence);
+  assert.deepEqual(issues,['Visible source image "Crew photo" asset is missing from generated output: /assets/photo-hash.jpg']);
+});
+test('visible source assets may be reused through a different rendering primitive',()=>{
+  const source=simpleGeometry([{key:'1',tag:'img',text:'',x:20,y:20,width:240,height:120,style:{},src:'https://source.example/photo.jpg',attributes:{alt:'Crew photo'}}]);
+  const candidate=simpleGeometry([{key:'2',tag:'section',text:'',x:20,y:20,width:240,height:120,style:{'background-image':'url("/assets/photo-hash.jpg")'}}]);
+  const evidence={site:'https://source.example',directory:'',pages:[],assets:[{original:'https://source.example/photo.jpg',file:'/tmp/photo.jpg',publicPath:'/assets/photo-hash.jpg'}],fontFaces:[],warnings:[],blockers:[],integrations:[]} as Evidence;
+  assert.deepEqual(mediaAssetPresenceIssues(source,candidate,evidence),[]);
 });
 test('media presentation diagnostics report image crop and positioning mismatches',()=>{
   const source=simpleGeometry([{key:'1',tag:'img',text:'',x:0,y:0,width:600,height:400,style:{'object-fit':'cover','object-position':'50% 30%','border-radius':'18px'},src:'https://source.example/hero.jpg',attributes:{alt:'Hero'}}]);
