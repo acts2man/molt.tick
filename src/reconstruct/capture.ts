@@ -312,17 +312,20 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50) throw new Error('maxPages must be 1..50');
   await mkdir(join(options.directory,'assets'),{recursive:true});
   const evidence: Evidence = { site:'',directory:options.directory,pages:[],assets:[],fontFaces:[],warnings:[],blockers:[],integrations:[] };
-  const assetMap = new Map<string,Evidence['assets'][number]>(), faces = new Set<string>();
+  const assetMap = new Map<string,Evidence['assets'][number]>(),assetFiles=new Map<string,{file:string;publicPath:string}>(),faces = new Set<string>();
   let totalBytes=0;
   const save = async (url:string,body:Buffer,mime:string) => {
     if(assetMap.has(url))return;
     const ext = EXT[mime.split(';')[0]] ?? (/\.(woff2?|ttf|otf)(?:[?#]|$)/i.exec(url)?.[1]?.toLowerCase());
     if(!ext)return;
-    if(body.length>12_000_000||totalBytes+body.length>100_000_000||assetMap.size>=600)throw new Error('Asset budget exceeded');
+    if(body.length>16_000_000||assetMap.size>=1000)throw new Error('Asset budget exceeded');
+    const digest=createHash('sha256').update(body).digest('hex'),existing=assetFiles.get(digest);
+    if(existing){assetMap.set(url,{original:url,...existing});return;}
+    if(totalBytes+body.length>160_000_000)throw new Error('Asset budget exceeded');
     totalBytes+=body.length;
-    const publicPath=`/assets/${createHash('sha256').update(body).digest('hex').slice(0,24)}.${ext}`;
+    const publicPath=`/assets/${digest.slice(0,24)}.${ext}`;
     const file=join(options.directory,publicPath);
-    const item={original:url,file,publicPath}; assetMap.set(url,item);
+    const stored={file,publicPath};assetFiles.set(digest,stored);assetMap.set(url,{original:url,...stored});
     await writeFile(file,body);
   };
   const importSavedResources=async(root:string)=>{
