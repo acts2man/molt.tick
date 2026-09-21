@@ -129,7 +129,8 @@ test('full agent builds real React, detects a deliberate mismatch, repairs it an
     generation++;
     const asset=ctx.assets.find((a:{original:string})=>a.original.endsWith('logo.svg')).path;
     const file=ctx.routeMap.find((p:{route:string})=>p.route===route).file;
-    return {summary:'Build fixture page with a deliberately incorrect desktop heading',files:[{path:file,content:`export default function Page(){return <><header><img src="${asset}" alt="Studio mark"/><a href="/">Studio</a><a href="/about">About</a></header><main><h1>${title(route)}</h1><p>${text(route)}</p><a className="accent" href="/about">Explore our work</a><details><summary>Project notes</summary><p>Hidden until opened.</p></details></main><footer>Studio, thoughtfully made.</footer></>}`},{path:'src/site.css',content:CSS.replace('font-size:48px','font-size:24px')}]};
+    const page={path:file,content:`export default function Page(){return <><header><img src="${asset}" alt="Studio mark"/><a href="/">Studio</a><a href="/about">About</a></header><main><h1>${title(route)}</h1><p>${text(route)}</p><a className="accent" href="/about">Explore our work</a><details><summary>Project notes</summary><p>Hidden until opened.</p></details></main><footer>Studio, thoughtfully made.</footer></>}`};
+    return {summary:'Build fixture page with a deliberately incorrect desktop heading',files:route==='/'?[page,{path:'src/site.css',content:CSS.replace('font-size:48px','font-size:24px')}]:[page]};
   }};
   const result=await runReconstruction({bundleDir:join(dir,'bundle'),workDir:join(dir,'runs'),model,maxRepairs:2,signal:AbortSignal.timeout(120000)});
   assert.equal(generation,2);assert.equal(repair,1);assert.equal(result.status,'review',JSON.stringify(result.evaluation));

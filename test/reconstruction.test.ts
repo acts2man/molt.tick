@@ -12,7 +12,7 @@ import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
 import type { Evaluation, FileChange, ModelReply, Evidence, Geometry } from '../src/reconstruct/types.js';
-import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
+import { reconstructionPrompt, rejectedRepairAutopsy, protectedPromptPaths, assertNoPartialFileRewrite, assertInitialGenerationIsolation, assertParallelGenerationIsolation, selectRepairRoute, repairIssueSubset } from '../src/reconstruct/agent.js';
 import { effectiveRepairRounds, productionRunBudget } from '../src/reconstruct/budgets.js';
 import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, mediaGeometryIssues, mediaIdentityIssues, carouselIssues, controlGeometryIssues, visualLayoutIssues, mediaPresentationIssues, mediaAssetPresenceIssues, formControlIssues } from '../src/reconstruct/evaluate.js';
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
@@ -63,6 +63,14 @@ test('later initial pages cannot rewrite existing shared or earlier-route files'
   assert.throws(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/about.tsx',1),/cannot rewrite existing/);
   assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/styles/about.css',content:'.about{}'},{path:'src/pages/about.tsx',content:'export default()=>null'}],'src/pages/about.tsx',1));
   assert.doesNotThrow(()=>assertInitialGenerationIsolation(before,[{path:'src/site.css',content:'body{margin:10px}'}],'src/pages/home.tsx',0));
+});
+test('parallel page workers are hard-isolated to their route file and sibling CSS',()=>{
+  assert.doesNotThrow(()=>assertParallelGenerationIsolation([
+    {path:'src/pages/about.tsx',content:'import "./about.css";export default()=>null'},
+    {path:'src/pages/about.css',content:'.about{}'},
+  ],'src/pages/about.tsx'));
+  assert.throws(()=>assertParallelGenerationIsolation([{path:'src/components/Header.tsx',content:'changed'}],'src/pages/about.tsx'),/Shared components are frozen/);
+  assert.throws(()=>assertParallelGenerationIsolation([{path:'src/pages/contact.tsx',content:'wrong route'}],'src/pages/about.tsx'),/Parallel page worker may only write/);
 });
 test('multi-page repair scheduling gives unattempted failing routes priority',()=>{
   const evaluation:Evaluation={pass:false,issues:[],views:[
