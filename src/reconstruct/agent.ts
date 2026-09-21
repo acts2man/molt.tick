@@ -157,7 +157,7 @@ function relevantFiles(files:FileChange[],page:EvidencePage):FileChange[]{
   return [...wanted].map(path=>byPath.get(path)!).filter(Boolean);
 }
 function relevantAssets(evidence:Evidence,page:EvidencePage){
-  const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),interactions:(v.interactions??[]).map(i=>i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})))})));
+  const haystack=JSON.stringify(page.views.map(v=>({elements:v.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),carousels:v.geometry.carousels,interactions:(v.interactions??[]).map(i=>({elements:i.geometry.elements.map(e=>({src:e.src,bg:e.style['background-image']})),carousels:i.geometry.carousels}))})));
   return evidence.assets.filter(a=>haystack.includes(a.original)).map(a=>({original:a.original.startsWith('data:')?'embedded asset':a.original,path:a.publicPath}));
 }
 function boundedFiles(files:FileChange[],page:EvidencePage,perFile=60000){
