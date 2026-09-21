@@ -148,7 +148,8 @@ export async function observeMotion(page:Page,signal:AbortSignal):Promise<import
   };
   await sample(0);await page.waitForTimeout(220);await sample(220);await page.waitForTimeout(480);await sample(700);
   const height=await page.evaluate('document.documentElement.scrollHeight') as number;
-  const positions=[Math.max(0,Math.round((height-innerHeight)*0.35)),Math.max(0,Math.round((height-innerHeight)*0.7))];
+  const viewportHeight=await page.evaluate('innerHeight') as number;
+  const positions=[Math.max(0,Math.round((height-viewportHeight)*0.35)),Math.max(0,Math.round((height-viewportHeight)*0.7))];
   let at=700;
   for(const y of positions){if(y<=0)continue;await page.evaluate(`scrollTo(0,${y})`);await page.waitForTimeout(180);at+=180;await sample(at);}
   await page.evaluate('scrollTo(0,0)');await page.waitForTimeout(80);
