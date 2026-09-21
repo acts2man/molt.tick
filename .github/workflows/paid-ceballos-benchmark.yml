@@ -1,0 +1,63 @@
+name: Paid Ceballos benchmark
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'benchmark/paid-ceballos-sol-medium-4.trigger'
+permissions:
+  contents: read
+concurrency:
+  group: paid-ceballos-sol-medium-4
+  cancel-in-progress: false
+jobs:
+  benchmark:
+    if: github.repository == 'acts2man/molt.tick'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    env:
+      MOLT_MODEL_PROVIDER: openai
+      MOLT_AI_MODEL: gpt-5.6-sol
+      MOLT_REASONING_EFFORT: medium
+      MOLT_AGENT_MINUTES: '45'
+      MOLT_MAX_MODEL_CALLS: '29'
+      MOLT_AI_MAX_TOKENS: '16000'
+      MOLT_MODEL_TIMEOUT_MS: '180000'
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      MOLT_GITHUB_EXPORT_TOKEN: ${{ secrets.MOLT_GITHUB_EXPORT_TOKEN }}
+      MOLT_NETLIFY_AUTH_TOKEN: ${{ secrets.MOLT_NETLIFY_AUTH_TOKEN }}
+      MOLT_NETLIFY_TEAM_SLUG: ${{ secrets.MOLT_NETLIFY_TEAM_SLUG }}
+      MOLT_RENDER_DEPS: ${{ github.workspace }}/render-toolchain/node_modules
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install engine and trusted React toolchain
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix render-toolchain install --no-audit --no-fund
+          npx --no-install playwright-core install --with-deps chromium
+      - name: Enable Chromium sandbox in disposable runner
+        run: |
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Run controlled paid benchmark
+        run: ./node_modules/.bin/tsx scripts/paid-ceballos-benchmark.ts
+      - name: Preserve benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-ceballos-sol-medium-4
+          path: |
+            paid-benchmark/
+            !paid-benchmark/**/node_modules/**
+            !paid-benchmark/**/*.woff
+            !paid-benchmark/**/*.woff2
+            !paid-benchmark/**/*.ttf
+            !paid-benchmark/**/*.otf
+          retention-days: 14
+          if-no-files-found: warn
