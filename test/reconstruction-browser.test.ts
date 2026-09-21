@@ -38,6 +38,16 @@ test('capture preserves real reading order across inline emphasis',{skip:process
   const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'text-order'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
   assert.equal(evidence.pages[0].views[0].geometry.text,'Call today for a free estimate.');
 }));
+test('capture records hover-only desktop navigation and ignores hidden controls',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const page='<!doctype html><html><head><style>nav ul{list-style:none;margin:0;padding:0}.submenu{display:none}.menu-item-has-children:hover>.submenu{display:block}</style></head><body><button style="display:none" aria-expanded="false">Hidden menu</button><nav><ul><li class="menu-item-has-children"><a href="/services">Services</a><ul class="submenu"><li>Tree Removal</li><li>Stump Grinding</li></ul></li></ul></nav><main><h1>Home</h1></main></body></html>';
+  await writeFile(join(dir,'bundle/home.html'),page);
+  await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'hover-menu'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const states=evidence.pages[0].views[0].interactions??[],hover=states.find(state=>state.trigger.kind==='hover'&&state.trigger.name==='Services');
+  assert.ok(hover,states.map(state=>`${state.trigger.kind}:${state.trigger.name}`).join(', '));
+  assert.match(hover.geometry.text,/Tree Removal/);assert.match(hover.geometry.text,/Stump Grinding/);
+  assert.equal(states.some(state=>state.trigger.name==='Hidden menu'),false);
+}));
 test('capture observes icon-only aria menu toggles even without aria-expanded',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const page='<!doctype html><html><body><h1>Menu fixture</h1><button aria-haspopup="menu" aria-controls="mobile-menu"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 2h10M0 5h10M0 8h10"/></svg></button><nav id="mobile-menu" hidden><p>Menu panel opened</p></nav><script>document.querySelector("button").addEventListener("click",()=>document.getElementById("mobile-menu").hidden=false)</script></body></html>';
   await writeFile(join(dir,'bundle/home.html'),page);
