@@ -8,7 +8,7 @@ function validRepo(name:string):string{
   if(!/^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/.test(value)||value.includes('..'))throw new Error('Invalid output repository name');
   return value;
 }
-async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=120000):Promise<string>{
+async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=45000):Promise<string>{
   return await new Promise((resolve,reject)=>{
     const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});
     let out='',err='',settled=false;
