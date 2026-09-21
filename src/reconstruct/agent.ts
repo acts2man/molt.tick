@@ -96,8 +96,8 @@ function spacingGuide(elements:any[],limit=60){
   return {textRhythm:rhythm,between:evenly(allBetween.sort((a,b)=>a.toY-b.toY),limit)};
 }
 function criticalTypography(elements:any[],limit=48){
-  const rank=(e:any)=>/^h1$/.test(e.tag)?120:/^h[2-3]$/.test(e.tag)?100:(e.tag==='a'||e.tag==='button'?80:/^(p|li)$/.test(e.tag)?30:10);
-  return elements.filter(e=>/^(h[1-6]|p|li|button|a|label|blockquote)$/.test(e.tag)&&String(e.text||'').trim()).map(e=>({e,score:rank(e)+(e.y<1000?30:0)})).sort((a,b)=>b.score-a.score||a.e.y-b.e.y).slice(0,limit).map(({e})=>({
+  const rank=(e:any)=>/^h1$/.test(e.tag)?120:/^h[2-3]$/.test(e.tag)?100:(e.tag==='a'||e.tag==='button'?80:/^(strong|b)$/.test(e.tag)?70:/^(p|li)$/.test(e.tag)?30:10);
+  return elements.filter(e=>/^(h[1-6]|p|li|button|a|label|blockquote|strong|b)$/.test(e.tag)&&String(e.text||'').trim()).map(e=>({e,score:rank(e)+(e.y<1000?30:0)})).sort((a,b)=>b.score-a.score||a.e.y-b.e.y).slice(0,limit).map(({e})=>({
     tag:e.tag,text:clipped(String(e.text).replace(/\s+/g,' ').trim(),120),x:Math.round(e.x),y:Math.round(e.y),width:Math.round(e.width),height:Math.round(e.height),
     fontFamily:e.style?.['font-family'],fontSize:e.style?.['font-size'],fontWeight:e.style?.['font-weight'],fontStyle:e.style?.['font-style'],lineHeight:e.style?.['line-height'],letterSpacing:e.style?.['letter-spacing'],textAlign:e.style?.['text-align'],textTransform:e.style?.['text-transform']
   }));
