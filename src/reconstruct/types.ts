@@ -77,7 +77,7 @@ export interface ImageInput { label: string; base64: string }
 export interface ModelRequest { prompt: string; images: ImageInput[] }
 export interface Model {
   complete(request: ModelRequest, signal: AbortSignal): Promise<ModelReply>;
-  usage: { calls: number; transportAttempts: number; inputTokens: number; outputTokens: number; records?: import('./usage.js').UsageRecord[]; costEstimate?: ReturnType<typeof import('./usage.js').usageSummary> };
+  usage: { calls: number; transportAttempts?: number; inputTokens: number; outputTokens: number; records?: import('./usage.js').UsageRecord[]; costEstimate?: ReturnType<typeof import('./usage.js').usageSummary> };
 }
 export interface InteractionCheck {
   id: string;
