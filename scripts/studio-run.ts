@@ -82,11 +82,14 @@ function pathIn(root:string,file:string):string{
   if(file.startsWith('/')||file.includes('\\')||file.split('/').some(p=>!p||p.startsWith('.')))throw new Error('Unsafe saved-page path');
   const full=resolve(root,file),r=relative(root,full);if(r.startsWith('..'))throw new Error('Saved file escaped the bundle');return full;
 }
-async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={}):Promise<void>{
+async function run(command:string,args:string[],cwd:string,env:Record<string,string|undefined>={},timeoutMs=120000):Promise<void>{
   await new Promise<void>((resolveRun,reject)=>{
-    const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let err='';
+    const child=spawn(command,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let err='',settled=false;
+    const timer=setTimeout(()=>{if(settled)return;child.kill('SIGTERM');setTimeout(()=>child.kill('SIGKILL'),2000).unref();settled=true;reject(new Error(`${command} timed out after ${Math.round(timeoutMs/1000)}s`));},timeoutMs);
+    timer.unref();
+    const finish=(fn:()=>void)=>{if(settled)return;settled=true;clearTimeout(timer);fn();};
     child.stderr.on('data',b=>{if(err.length<8000)err+=String(b);});
-    child.on('error',reject);child.on('close',code=>code===0?resolveRun():reject(new Error(`${command} failed (exit ${code}): ${err.slice(0,1200)}`)));
+    child.on('error',error=>finish(()=>reject(error)));child.on('close',code=>finish(()=>code===0?resolveRun():reject(new Error(`${command} failed (exit ${code}): ${err.slice(0,1200)}`))));
   });
 }
 async function previewFiles(root:string):Promise<Array<{path:string;file:string;size:number}>>{
@@ -168,20 +171,9 @@ try{
   await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
   await writeFile(join(artifacts,'report.json'),JSON.stringify(result,null,2));
   await writeFile(join(artifacts,'READ-ME.txt'),'This is actual Molt output. Review report.json before using it. Passing pixel metrics do not migrate form backends, identity, payment services or other integrations. The downloadable artifact excludes font binaries; obtain any required fonts from their original authorized source. The runner retained the best measured React source, not a claimed universally exact result.\n');
-  await progress('Core React reconstruction checkpointed; preparing review assets.',{},false);
+  await progress('Core React reconstruction checkpointed; beginning reserved delivery phase.',{},false);
   const report=JSON.parse(JSON.stringify(result));
-  for(let i=0;i<report.evaluation.views.length;i++){
-    const view=report.evaluation.views[i];view.sourceImage=view.source?await preview(view.source,`view-${i}-source.png`):null;view.candidateImage=view.candidate?await preview(view.candidate,`view-${i}-react.png`):null;view.diffImage=view.diff?await preview(view.diff,`view-${i}-diff.png`):null;
-    for(let stateIndex=0;stateIndex<(view.interactions??[]).length;stateIndex++){
-      const state=view.interactions[stateIndex],prefix=`view-${i}-state-${stateIndex}`;
-      state.sourceImage=state.source?await preview(state.source,`${prefix}-source.png`):null;
-      state.candidateImage=state.candidate?await preview(state.candidate,`${prefix}-react.png`):null;
-      state.diffImage=state.diff?await preview(state.diff,`${prefix}-diff.png`):null;
-    }
-  }
-  await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
   const finalExtras:{previewReady?:boolean;outputRepoUrl?:string;outputRepoError?:string;liveSiteUrl?:string;liveSiteAdminUrl?:string;deploymentError?:string}={outputRepoUrl:plannedRepo.url};
-  try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));}catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
   try{
     await progress(`Publishing retained React source to ${plannedRepo.repository}`,{},false);
     const published=await publishReservedOutputRepository(result.outDir,plannedRepo.repository,process.env.MOLT_GITHUB_EXPORT_TOKEN??'');
@@ -199,6 +191,23 @@ try{
     await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
     await progress(outputRepoError,{outputRepoError},false);
   }
+  const runnerRemainingMinutes=()=>Math.max(0,budget.runnerMinutes-(Date.now()-runnerStartedAt)/60000);
+  if(runnerRemainingMinutes()>=5){
+    await progress('Critical source/deployment handoff complete; preparing optional review assets with remaining reserve.',{},false);
+    for(let i=0;i<report.evaluation.views.length&&runnerRemainingMinutes()>=3;i++){
+      const view=report.evaluation.views[i];view.sourceImage=view.source?await preview(view.source,`view-${i}-source.png`):null;view.candidateImage=view.candidate?await preview(view.candidate,`view-${i}-react.png`):null;view.diffImage=view.diff?await preview(view.diff,`view-${i}-diff.png`):null;
+      for(let stateIndex=0;stateIndex<(view.interactions??[]).length&&runnerRemainingMinutes()>=3;stateIndex++){
+        const state=view.interactions[stateIndex],prefix=`view-${i}-state-${stateIndex}`;
+        state.sourceImage=state.source?await preview(state.source,`${prefix}-source.png`):null;
+        state.candidateImage=state.candidate?await preview(state.candidate,`${prefix}-react.png`):null;
+        state.diffImage=state.diff?await preview(state.diff,`${prefix}-diff.png`):null;
+      }
+    }
+    if(runnerRemainingMinutes()>=3){
+      try{await uploadInteractivePreview(result.outDir);finalExtras.previewReady=true;await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));}
+      catch(previewError){await progress('Interactive preview could not be prepared: '+redacted(previewError instanceof Error?previewError.message:String(previewError)),{},false);}
+    }else await progress('Skipped interactive preview to preserve finalization headroom.',{},false);
+  }else await progress('Skipped optional review assets to preserve finalization headroom.',{},false);
   await writeFile(join(artifacts,'report.json'),JSON.stringify(report,null,2));
   await writeFile(join(artifacts,'handoff.json'),JSON.stringify(finalExtras,null,2));
   const {message:finalMessage,...finalPayload}=finalStudioEvent(report,finalExtras);
