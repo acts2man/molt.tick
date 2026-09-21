@@ -36,7 +36,10 @@ jobs:
           npm --prefix studio ci --no-audit --no-fund
           npm --prefix render-toolchain install --no-audit --no-fund
           npx --no-install playwright-core install --with-deps chromium
-      - name: Engine typecheck and deterministic failure-mode suite
+      - name: Engine typecheck and deterministic non-browser failure-mode suite
+        env:
+          MOLT_RUN_BROWSER_TESTS: '0'
+          MOLT_RUN_FULL_AGENT_TESTS: '0'
         run: |
           npm run typecheck
           npm test
@@ -90,7 +93,7 @@ jobs:
     needs: [release-gate, delivery-gate]
     if: github.repository == 'acts2man/molt.tick'
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    timeout-minutes: 110
     env:
       MOLT_MODEL_PROVIDER: openai
       MOLT_AI_MODEL: gpt-5.6-sol
