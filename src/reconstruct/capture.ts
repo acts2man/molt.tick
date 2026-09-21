@@ -98,6 +98,76 @@ export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
 }
 
+const MOTION_FRAME = `(() => {
+  const nodes=Array.from(document.querySelectorAll('body *')),index=new Map(nodes.map((node,i)=>[node,String(i)]));
+  const useful=(el,s)=>{
+    const tag=el.tagName.toLowerCase(),b=el.getBoundingClientRect();
+    if(!b.width||!b.height||b.bottom<0||b.top>innerHeight||s.display==='none'||s.visibility==='hidden')return false;
+    const animated=s.transform!=='none'||Number(s.opacity)!==1||s.position==='sticky'||s.position==='fixed'||s.animationName!=='none'||s.transitionDuration!=='0s';
+    return animated||/^(header|nav|main|section|article|h[1-6]|p|img|button|a)$/.test(tag);
+  };
+  const selected=[];
+  for(const el of nodes){
+    const s=getComputedStyle(el);if(!useful(el,s))continue;const b=el.getBoundingClientRect();
+    selected.push({key:index.get(el)||'',tag:el.tagName.toLowerCase(),text:String(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').replace(/\\s+/g,' ').trim().slice(0,140),x:Math.round(b.x+scrollX),y:Math.round(b.y+scrollY),width:Math.round(b.width),height:Math.round(b.height),transform:s.transform,opacity:s.opacity,position:s.position});
+    if(selected.length>=140)break;
+  }
+  return {scrollY:Math.round(scrollY),elements:selected};
+})()`;
+const MOTION_META = `(() => {
+  const signature=[document.documentElement.className,document.body.className,...Array.from(document.querySelectorAll('script[src],link[href]')).map(el=>el.getAttribute('src')||el.getAttribute('href')||'')].join(' ');
+  const libraries=[];
+  const add=(name,yes)=>{if(yes&&!libraries.includes(name))libraries.push(name);};
+  add('Slider Revolution',/revslider|revolution|rs6|rev_slider/i.test(signature)||!!document.querySelector('rs-module,.rev_slider,[class*="rev_slider"]'));
+  add('GSAP',!!window.gsap||!!window.ScrollTrigger||/gsap|scrolltrigger/i.test(signature));
+  add('Swiper',!!window.Swiper||/swiper/i.test(signature)||!!document.querySelector('.swiper,.swiper-container'));
+  add('Slick',!!window.jQuery?.fn?.slick||/slick/i.test(signature)||!!document.querySelector('.slick-slider'));
+  add('Elementor Motion',/elementor/i.test(signature)&&!!document.querySelector('.elementor-invisible,[data-settings*="animation"],[class*="elementor-motion"]'));
+  add('AOS',!!window.AOS||/aos/i.test(signature)||!!document.querySelector('[data-aos]'));
+  const animations=[];
+  for(const animation of document.getAnimations().slice(0,80)){
+    try{
+      const effect=animation.effect, timing=effect?.getTiming?.()||{},target=effect?.target;
+      const frames=effect?.getKeyframes?.()||[],props=new Set();
+      for(const frame of frames)for(const key of Object.keys(frame))if(!['offset','easing','composite','computedOffset'].includes(key))props.add(key);
+      const label=String(target?.getAttribute?.('aria-label')||target?.getAttribute?.('alt')||target?.textContent||target?.id||target?.className||target?.tagName||'animation').replace(/\\s+/g,' ').trim().slice(0,140);
+      animations.push({target:label,duration:Number.isFinite(Number(timing.duration))?Number(timing.duration):null,delay:Number.isFinite(Number(timing.delay))?Number(timing.delay):null,iterations:Number.isFinite(Number(timing.iterations))?Number(timing.iterations):null,direction:String(timing.direction||''),easing:String(timing.easing||''),fill:String(timing.fill||''),playState:String(animation.playState||''),properties:Array.from(props).slice(0,12)});
+    }catch{}
+  }
+  return {libraries,animations};
+})()`;
+export async function observeMotion(page:Page,signal:AbortSignal):Promise<import('./types.js').MotionEvidence>{
+  signal.throwIfAborted();
+  await page.evaluate(`Promise.race([document.fonts.ready,new Promise(r=>setTimeout(r,1200))])`);
+  const meta=await page.evaluate(MOTION_META) as {libraries:string[];animations:import('./types.js').MotionAnimationEvidence[]};
+  const frames:import('./types.js').MotionFrame[]=[];
+  const sample=async(atMs:number)=>{
+    signal.throwIfAborted();
+    const raw=await page.evaluate(MOTION_FRAME) as {scrollY:number;elements:import('./types.js').MotionElementSample[]};
+    frames.push({atMs,scrollY:raw.scrollY,elements:raw.elements});
+  };
+  await sample(0);await page.waitForTimeout(220);await sample(220);await page.waitForTimeout(480);await sample(700);
+  const height=await page.evaluate('document.documentElement.scrollHeight') as number;
+  const positions=[Math.max(0,Math.round((height-innerHeight)*0.35)),Math.max(0,Math.round((height-innerHeight)*0.7))];
+  let at=700;
+  for(const y of positions){if(y<=0)continue;await page.evaluate(`scrollTo(0,${y})`);await page.waitForTimeout(180);at+=180;await sample(at);}
+  await page.evaluate('scrollTo(0,0)');await page.waitForTimeout(80);
+  const byKey=new Map<string,import('./types.js').MotionElementSample[]>();
+  for(const frame of frames)for(const element of frame.elements){const list=byKey.get(element.key)??[];list.push(element);byKey.set(element.key,list);}
+  let changedElements=0,hasScrollLinkedMotion=false,hasEntranceMotion=false,hasStickyOrFixedMotion=false;
+  for(const list of byKey.values()){
+    if(list.length<2)continue;
+    const first=list[0],changed=list.some(item=>item.transform!==first.transform||item.opacity!==first.opacity||Math.abs(item.x-first.x)>2||Math.abs(item.y-first.y)>2);
+    if(changed)changedElements++;
+    if(list.some(item=>item.position==='sticky'||item.position==='fixed'))hasStickyOrFixedMotion=true;
+    const startup=list.filter((_item,index)=>frames[index]?.scrollY===0);
+    if(startup.length>=2&&startup.some(item=>item.transform!==startup[0].transform||item.opacity!==startup[0].opacity))hasEntranceMotion=true;
+    const scrolled=list.filter((_item,index)=>frames[index]?.scrollY>0);
+    if(scrolled.length&&scrolled.some(item=>item.transform!==first.transform||item.opacity!==first.opacity||Math.abs(item.y-first.y)>2))hasScrollLinkedMotion=true;
+  }
+  return {libraries:meta.libraries,frames,animations:meta.animations,changedElements,hasScrollLinkedMotion,hasEntranceMotion,hasStickyOrFixedMotion};
+}
+
 const normalizedFingerprintText=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
 export function geometryFingerprint(value:Geometry):string{
   const candidates=value.elements.filter(e=>/^(header|nav|main|section|article|footer|h[1-6]|p|img|button|a|form)$/.test(e.tag)||Boolean(e.text)||Boolean(e.src));
@@ -376,6 +446,10 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           });
           const response=await page.goto(target.url,{waitUntil:'load',timeout:30000});
           if(!response?.ok())throw new Error(`${target.route}: HTTP ${response?.status()}`);
+          let motion:import('./types.js').MotionEvidence|undefined;
+          if(viewport.name==='desktop'||viewport.name==='mobile'){
+            try{motion=await observeMotion(page,options.signal);}catch(error){evidence.warnings.push(`${target.route} ${viewport.name}: motion observation could not complete (${(error as Error).message}). Stable visual capture will continue.`);}
+          }
           await settle(page,options.signal);
           const screenshot=join(options.directory,slug,`${viewport.name}.png`);
           await page.screenshot({path:screenshot,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
@@ -420,8 +494,8 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
               await page.mouse.move(0,0);await settle(page,options.signal);
             }
           }
-          item.title=g.title;item.views.push({viewport,screenshot,geometry:g,interactions});
-          await writeFile(join(options.directory,slug,`${viewport.name}.json`),JSON.stringify({...g,interactions:interactions.map(i=>({id:i.id,trigger:i.trigger,screenshot:i.screenshot}))},null,2));
+          item.title=g.title;item.views.push({viewport,screenshot,geometry:g,interactions,motion});
+          await writeFile(join(options.directory,slug,`${viewport.name}.json`),JSON.stringify({...g,motion,interactions:interactions.map(i=>({id:i.id,trigger:i.trigger,screenshot:i.screenshot}))},null,2));
           await Promise.all(pending);
           if(assetErrors.length)evidence.blockers.push(`${target.route}: asset capture errors: ${assetErrors.slice(0,3).join('; ')}`);
         }finally{await ctx.close();}
