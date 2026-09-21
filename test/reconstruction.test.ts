@@ -55,8 +55,8 @@ test('high-fidelity repair scope expands only enough to cover multi-page jobs',(
 });
 test('production budgets scale time and provider ceilings without changing low-cost defaults',()=>{
   const one=productionRunBudget(1,2,'medium');assert.equal(one.repairRounds,2);assert.equal(one.agentMinutes,25);assert.equal(one.requestMs,180000);
-  const multi=productionRunBudget(7,4,'medium');assert.equal(multi.repairRounds,7);assert.ok(multi.agentMinutes>=55);assert.ok(multi.maxModelCalls>=35);
-  const max=productionRunBudget(7,4,'max');assert.equal(max.requestMs,540000);assert.equal(max.maxOutputTokens,40000);
+  const multi=productionRunBudget(7,4,'medium');assert.equal(multi.repairRounds,7);assert.ok(multi.agentMinutes>=55);assert.equal(multi.maxModelCalls,25);assert.equal(multi.maxTransportAttempts,75);
+  const max=productionRunBudget(7,4,'max');assert.equal(max.requestMs,540000);assert.equal(max.maxOutputTokens,40000);assert.equal(max.maxTransportAttempts,max.maxModelCalls*3);
 });
 test('later initial pages cannot rewrite existing shared or earlier-route files',()=>{
   const before:FileChange[]=[{path:'src/site.css',content:'body{margin:0}'},{path:'src/components/Header.tsx',content:'export const Header=()=>null'},{path:'src/pages/home.tsx',content:'export default()=>null'}];
@@ -583,6 +583,44 @@ test('OpenAI adapter uses Responses images, schema and explicit model',async()=>
 test('OpenAI adapter forwards max reasoning for Astra-class benchmarks',async()=>{let body:any;const model=createModel({provider:'openai',model:'gpt-6-astra',key:'test-only',reasoningEffort:'max',fetcher:async(_url,init)=>{body=JSON.parse(String(init?.body));return new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(reply)}]}],usage:{input_tokens:1,output_tokens:1}}));}});await model.complete({prompt:'geometry',images:[]},signal());assert.equal(body.reasoning.effort,'max');});
 test('truncated output never becomes a successful page',async()=>{const model=createModel({provider:'anthropic',model:'test',key:'test',fetcher:async()=>new Response(JSON.stringify({stop_reason:'max_tokens',content:[{type:'text',text:JSON.stringify(reply)}]}))});await assert.rejects(model.complete({prompt:'x',images:[]},signal()),/incomplete/);});
 test('exhausted call budget blocks extra provider calls',async()=>{let calls=0;const model=createModel({provider:'openai',model:'test',key:'test',maxCalls:1,fetcher:async()=>{calls++;return new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(reply)}]}]}));}});await model.complete({prompt:'x',images:[]},signal());await assert.rejects(model.complete({prompt:'x',images:[]},signal()),/budget/);assert.equal(calls,1);});
+test('transient HTTP retries do not consume logical reconstruction-call capacity',async()=>{
+  let attempts=0;
+  const model=createModel({provider:'openai',model:'test',key:'test',maxCalls:1,maxTransportAttempts:3,fetcher:async()=>{
+    attempts++;
+    if(attempts===1)return new Response('busy',{status:429,headers:{'retry-after':'0'}});
+    return new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(reply)}]}],usage:{input_tokens:2,output_tokens:3}}));
+  }});
+  assert.deepEqual(await model.complete({prompt:'x',images:[]},signal()),reply);
+  assert.equal(model.usage.calls,1);
+  assert.equal(model.usage.transportAttempts,2);
+  assert.equal(attempts,2);
+  await assert.rejects(model.complete({prompt:'x',images:[]},signal()),/Logical model call budget exhausted/);
+  assert.equal(attempts,2);
+});
+test('transient transport errors are retried inside one logical call',async()=>{
+  let attempts=0;
+  const model=createModel({provider:'openai',model:'test',key:'test',maxCalls:1,maxTransportAttempts:3,fetcher:async()=>{
+    attempts++;
+    if(attempts===1)throw new TypeError('temporary network failure');
+    return new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(reply)}]}],usage:{input_tokens:1,output_tokens:1}}));
+  }});
+  assert.deepEqual(await model.complete({prompt:'x',images:[]},signal()),reply);
+  assert.equal(model.usage.calls,1);
+  assert.equal(model.usage.transportAttempts,2);
+  assert.equal(model.usage.records?.[0].outcome,'logical-1:transport-error');
+});
+test('global transport ceiling remains bounded independently of logical calls',async()=>{
+  let attempts=0;
+  const model=createModel({provider:'openai',model:'test',key:'test',maxCalls:2,maxTransportAttempts:2,fetcher:async()=>{
+    attempts++;
+    if(attempts===1)return new Response('busy',{status:500,headers:{'retry-after':'0'}});
+    return new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(reply)}]}]}));
+  }});
+  await model.complete({prompt:'x',images:[]},signal());
+  assert.equal(model.usage.calls,1);assert.equal(model.usage.transportAttempts,2);
+  await assert.rejects(model.complete({prompt:'x',images:[]},signal()),/transport retry budget exhausted/);
+  assert.equal(model.usage.calls,1);assert.equal(attempts,2);
+});
 test('provider credentials are redacted from errors',async()=>{const model=createModel({provider:'openai',model:'test',key:'secret-key',fetcher:async()=>new Response('bad secret-key',{status:401})});await assert.rejects(model.complete({prompt:'x',images:[]},signal()),e=>!String(e).includes('secret-key'));});
 
 test('review report embeds source text safely and never substitutes source for missing output',()=>temporary(async dir=>{
