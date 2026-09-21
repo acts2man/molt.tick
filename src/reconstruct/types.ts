@@ -34,12 +34,36 @@ export interface InteractionReference {
   screenshot: string;
   geometry: Geometry;
 }
+export interface MotionElementSample {
+  key:string; tag:string; text:string;
+  x:number; y:number; width:number; height:number;
+  transform:string; opacity:string; position:string;
+}
+export interface MotionFrame {
+  atMs:number; scrollY:number; elements:MotionElementSample[];
+}
+export interface MotionAnimationEvidence {
+  target:string; duration:number|null; delay:number|null; iterations:number|null;
+  direction?:string; easing?:string; fill?:string; playState?:string;
+  properties:string[];
+}
+export interface MotionEvidence {
+  libraries:string[];
+  frames:MotionFrame[];
+  animations:MotionAnimationEvidence[];
+  changedElements:number;
+  hasScrollLinkedMotion:boolean;
+  hasEntranceMotion:boolean;
+  hasStickyOrFixedMotion:boolean;
+}
 export interface ReferenceView {
   viewport: Viewport;
   screenshot: string;
   geometry: Geometry;
   /** Bounded, safely observed open/selected states such as menus, accordions, details and tabs. */
   interactions?: InteractionReference[];
+  /** Bounded runtime observations before animations are frozen for deterministic screenshots. */
+  motion?: MotionEvidence;
 }
 export interface EvidencePage { route: string; url: string; title: string; views: ReferenceView[] }
 export interface Evidence {

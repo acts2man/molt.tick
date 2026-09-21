@@ -1,10 +1,10 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { browser, build, restrictNetwork, serve } from './runtime.js';
-import { activateInteraction, geometry, settle } from './capture.js';
+import { activateInteraction, geometry, observeMotion, settle } from './capture.js';
 import { compare } from './images.js';
 import { routeFile } from './policy.js';
-import type { Evidence, Evaluation, ViewCheck, Geometry, ElementEvidence } from './types.js';
+import type { Evidence, Evaluation, ViewCheck, Geometry, ElementEvidence, MotionEvidence } from './types.js';
 
 const normalize=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim();
 const TEXT_TAG=/^(h[1-6]|p|li|button|label|blockquote|strong|b|em|i|span|a|small)$/;
@@ -14,6 +14,19 @@ const FORM_STATE_ATTRS=['placeholder','aria-label','checked','selected-text','di
 const FORM_STYLE_PROPS=['font-family','font-size','font-weight','line-height','letter-spacing','text-align','color','background','border','border-radius','box-shadow','padding','appearance','accent-color'] as const;
 const TYPOGRAPHY_PROPS=['font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color'] as const;
 const short=(e:ElementEvidence)=>{const value=normalize(e.text);return value.length>54?value.slice(0,51)+'…':value||e.tag;};
+export function motionIssues(source:MotionEvidence|undefined,candidate:MotionEvidence|undefined):string[]{
+  if(!source)return [];
+  const meaningful=source.hasEntranceMotion||source.hasScrollLinkedMotion||source.hasStickyOrFixedMotion||source.animations.length>0||source.changedElements>=2;
+  if(!meaningful)return [];
+  if(!candidate)return ['Generated page could not be observed for source motion behavior'];
+  const issues:string[]=[];
+  if(source.hasEntranceMotion&&!candidate.hasEntranceMotion)issues.push('Motion mismatch: source has entrance animation but generated page does not');
+  if(source.hasScrollLinkedMotion&&!candidate.hasScrollLinkedMotion)issues.push('Motion mismatch: source has scroll-linked movement/parallax but generated page does not');
+  if(source.hasStickyOrFixedMotion&&!candidate.hasStickyOrFixedMotion)issues.push('Motion mismatch: source uses sticky/fixed motion behavior but generated page does not');
+  if(source.animations.length>0&&candidate.animations.length===0)issues.push(`Motion mismatch: source exposes ${source.animations.length} active animation timeline(s) but generated page exposes none`);
+  if(source.changedElements>=4&&candidate.changedElements<Math.max(1,Math.floor(source.changedElements*0.25)))issues.push(`Motion mismatch: source changes ${source.changedElements} observed elements while generated page changes only ${candidate.changedElements}`);
+  return issues;
+}
 function typographyDiffs(source:ElementEvidence,candidate:ElementEvidence):string[]{
   const diffs:string[]=[];
   for(const property of TYPOGRAPHY_PROPS){
@@ -426,6 +439,10 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         page.on('requestfailed',r=>{if(['image','font','stylesheet','script'].includes(r.resourceType())&&!r.url().endsWith('favicon.ico'))errors.push(`Failed resource: ${r.url().replace(host.origin,'')}`);});
         const response=await page.goto(host.origin+pageRef.route,{waitUntil:'load',timeout:30000});
         if(!response?.ok())throw new Error(`Generated route HTTP ${response?.status()}`);
+        let generatedMotion:MotionEvidence|undefined;
+        const sourceMotion=reference.motion;
+        const meaningfulMotion=Boolean(sourceMotion&&(sourceMotion.hasEntranceMotion||sourceMotion.hasScrollLinkedMotion||sourceMotion.hasStickyOrFixedMotion||sourceMotion.animations.length>0||sourceMotion.changedElements>=2));
+        if(meaningfulMotion){try{generatedMotion=await observeMotion(page,signal);check.issues.push(...motionIssues(sourceMotion,generatedMotion));}catch(error){check.issues.push(`Motion verification failed: ${(error as Error).message}`);}}
         await settle(page,signal);
         check.candidate=join(directory,`${stem}.png`);check.diff=join(directory,`${stem}.diff.png`);
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
@@ -465,7 +482,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
           check.interactions.push(stateCheck);
         }
         check.pass=check.issues.length===0&&metrics.score>=threshold&&metrics.worstBand>=bandThreshold&&check.interactions.every(i=>i.pass);
-        await writeFile(join(directory,`${stem}.json`),JSON.stringify({source:reference.geometry,generated,check},null,2));
+        await writeFile(join(directory,`${stem}.json`),JSON.stringify({source:reference.geometry,sourceMotion:reference.motion,generated,generatedMotion,check},null,2));
       }catch(error){check.issues.push((error as Error).message);check.pass=false;}
       finally{await ctx.close().catch(()=>{});}
       result.views.push(check);

@@ -32,6 +32,19 @@ test('real browser captures two imported pages at all three viewports and locali
   assert.ok(view.geometry.elements.find(e=>e.tag==='h1'&&e.width>0));
   assert.equal(view.interactions?.length,1);assert.equal(view.interactions?.[0].trigger.kind,'details');assert.equal(view.interactions?.[0].trigger.name,'Project notes');
 }));
+test('capture observes entrance, sticky and library motion before freezing the page',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const page='<!doctype html><html><head><style>body{margin:0;height:2600px}.hero{height:900px}.rise{animation:rise 1.2s linear both}.sticky{position:sticky;top:0;height:60px;background:#222;color:white}@keyframes rise{from{opacity:0;transform:translateY(80px)}to{opacity:1;transform:translateY(0)}}</style></head><body><div class="rev_slider"><section class="hero"><h1 class="rise">Animated heading</h1></section></div><div class="sticky">Sticky bar</div><main style="height:1600px">Long content</main></body></html>';
+  await writeFile(join(dir,'bundle/home.html'),page);
+  await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'motion-evidence'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const motion=evidence.pages[0].views[0].motion;
+  assert.ok(motion);
+  assert.ok(motion!.libraries.includes('Slider Revolution'),motion!.libraries.join(', '));
+  assert.ok(motion!.animations.some(animation=>animation.properties.includes('opacity')||animation.properties.includes('transform')),JSON.stringify(motion!.animations));
+  assert.equal(motion!.hasEntranceMotion,true,JSON.stringify(motion));
+  assert.equal(motion!.hasStickyOrFixedMotion,true,JSON.stringify(motion));
+  assert.ok(motion!.frames.length>=3);
+}));
 test('capture preserves real reading order across inline emphasis',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const page='<!doctype html><html><body><p>Call <strong>today</strong> for a <em>free estimate</em>.</p></body></html>';
   await writeFile(join(dir,'bundle/home.html'),page);await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
