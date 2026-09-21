@@ -48,6 +48,21 @@ test('capture observes icon-only aria menu toggles even without aria-expanded',{
   assert.ok(menu,states.map(state=>state.trigger.name).join(', '));
   assert.match(menu.geometry.text,/Menu panel opened/);
 }));
+test('capture records visible form field text state and geometry',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
+  const page='<!doctype html><html><body><h1>Contact us</h1><form><input placeholder="Email address"><select><option>Choose a service</option><option selected>Tree removal</option></select><input type="checkbox" checked><textarea placeholder="Tell us about the project"></textarea></form></body></html>';
+  await writeFile(join(dir,'bundle/home.html'),page);
+  await writeFile(join(dir,'bundle/bundle.json'),JSON.stringify({site:'https://fixture.example',pages:[{route:'/',file:'home.html'}]}));
+  const evidence=await capture({bundleDir:join(dir,'bundle'),directory:join(dir,'form-evidence'),viewports:[{name:'desktop',width:1440,height:900}],signal:AbortSignal.timeout(60000)});
+  const elements=evidence.pages[0].views[0].geometry.elements;
+  const email=elements.find(e=>e.tag==='input'&&e.attributes?.placeholder==='Email address');
+  const select=elements.find(e=>e.tag==='select');
+  const checkbox=elements.find(e=>e.tag==='input'&&e.attributes?.type==='checkbox');
+  const textarea=elements.find(e=>e.tag==='textarea');
+  assert.ok(email&&email.width>0&&email.height>0);assert.equal(email.attributes?.disabled,'false');assert.equal(email.attributes?.readonly,'false');
+  assert.equal(select?.attributes?.['selected-text'],'Tree removal');assert.equal(select?.attributes?.disabled,'false');
+  assert.equal(checkbox?.attributes?.checked,'true');
+  assert.equal(textarea?.attributes?.placeholder,'Tell us about the project');assert.equal(textarea?.attributes?.readonly,'false');
+}));
 test('carousel evidence keeps reserved slots even when many disclosures appear first',{skip:process.env.MOLT_RUN_BROWSER_TESTS!=='1'},()=>fixture(async dir=>{
   const details=Array.from({length:7},(_,i)=>`<details><summary>Question ${i}</summary><p>Answer</p></details>`).join('');
   const page=`<!doctype html><html><body>${details}<button class="swiper-button-next"></button></body></html>`;
