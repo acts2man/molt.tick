@@ -384,9 +384,12 @@ export function contentIssues(source:Geometry,candidate:Geometry):string[]{
     const index=headings.findIndex(e=>e.tag===original.tag&&normalize(e.text)===normalize(original.text));
     if(index<0){problems.push(`Missing heading: ${original.text}`);continue;}
     const actual=headings.splice(index,1)[0];
-    const mismatches=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
-    for(const property of TYPOGRAPHY_PROPS)if(original.style[property]!==actual.style[property])mismatches.push(property);
-    if(mismatches.length)problems.push(`Heading ${original.text}: ${mismatches.join(', ')} differ`);
+    const geometryKeys=['x','y','width','height'].filter(k=>Math.abs(original[k as 'x'|'y'|'width'|'height']-actual[k as 'x'|'y'|'width'|'height'])>2);
+    const typeDiffs=typographyDiffs(original,actual);
+    if(geometryKeys.length||typeDiffs.length){
+      const geometryPart=geometryKeys.length?geometryMessage(`Heading "${short(original)}"`,original,actual):'';
+      problems.push([`Heading "${short(original)}"`,...typeDiffs,geometryPart].filter(Boolean).join('; '));
+    }
   }
   problems.push(...spacingIssues(source,candidate),...controlGeometryIssues(source,candidate),...formControlIssues(source,candidate));
   if(Math.abs(source.height-candidate.height)>Math.max(3,source.height*0.005))problems.push(`Page height differs: source ${source.height}px, generated ${candidate.height}px`);
@@ -427,7 +430,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
         check.candidate=join(directory,`${stem}.png`);check.diff=join(directory,`${stem}.diff.png`);
         await page.screenshot({path:check.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
         const generated=await geometry(page);
-        check.issues.push(...contentIssues(reference.geometry,generated),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
+        check.issues.push(...contentIssues(reference.geometry,generated),...mediaIdentityIssues(reference.geometry,generated,evidence),...carouselIssues(reference.geometry,generated,evidence),...mediaGeometryIssues(reference.geometry,generated,evidence),...mediaAssetPresenceIssues(reference.geometry,generated,evidence),...errors);
         // Literal DOM links are checked after rendering, including shared components. Same-site links
         // must point to the reconstructed host rather than silently sending users back to the source site.
         const known=new Set(evidence.pages.map(p=>p.route));
@@ -452,7 +455,7 @@ export async function evaluate(outDir:string,evidence:Evidence,directory:string,
             stateCheck.diff=join(directory,`${stem}-${state.id}.diff.png`);
             await page.screenshot({path:stateCheck.candidate,fullPage:true,animations:'disabled',scale:'css',timeout:15000});
             const stateGenerated=await geometry(page);
-            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
+            stateCheck.issues.push(...contentIssues(state.geometry,stateGenerated),...mediaIdentityIssues(state.geometry,stateGenerated,evidence),...carouselIssues(state.geometry,stateGenerated,evidence),...mediaGeometryIssues(state.geometry,stateGenerated,evidence),...mediaAssetPresenceIssues(state.geometry,stateGenerated,evidence));
             const stateMetrics=await compare(stateCheck.source,stateCheck.candidate,stateCheck.diff);Object.assign(stateCheck,stateMetrics);
             if(stateMetrics.score<threshold||stateMetrics.worstBand<bandThreshold)stateCheck.issues.push(...visualLayoutIssues(state.geometry,stateGenerated),...mediaPresentationIssues(state.geometry,stateGenerated,evidence));
             stateCheck.pass=stateCheck.issues.length===0&&stateMetrics.score>=threshold&&stateMetrics.worstBand>=bandThreshold;
