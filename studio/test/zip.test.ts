@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { deflateRawSync } from 'node:zlib';
-import { unzipSavedPage } from '../src/product/zip.ts';
+import { unzipSavedPage, unzipSavedPages } from '../src/product/zip.ts';
 
 type Entry={name:string;data:Uint8Array;method:0|8};
 function u16(n:number){return Uint8Array.from([n&255,(n>>>8)&255]);}
@@ -40,4 +40,39 @@ test('saved-page ZIP extraction rejects path traversal',async()=>{
   const enc=new TextEncoder(),bytes=zip([{name:'../evil.html',data:enc.encode('bad'),method:0}]);
   const file=new File([bytes],'bad.zip',{type:'application/zip'});
   await assert.rejects(()=>unzipSavedPage(file),/unsafe path/);
+});
+
+
+test('multiple SingleFile ZIPs are namespaced and mapped without filename collisions',async()=>{
+  const enc=new TextEncoder();
+  const home=new File([zip([
+    {name:'index.html',data:enc.encode('<!doctype html><link rel="canonical" href="https://example.com/">'),method:8},
+    {name:'style.css',data:enc.encode('body{margin:0}'),method:8},
+    {name:'images/logo.png',data:Uint8Array.from([1,2,3]),method:0},
+  ])],'home.zip',{type:'application/zip'});
+  const about=new File([zip([
+    {name:'index.html',data:enc.encode('<!doctype html><link rel="canonical" href="https://example.com/about/">'),method:8},
+    {name:'style.css',data:enc.encode('body{margin:1px}'),method:8},
+    {name:'images/logo.png',data:Uint8Array.from([4,5,6]),method:0},
+  ])],'about.zip',{type:'application/zip'});
+  const result=await unzipSavedPages([home,about]);
+  assert.equal(result.pages.length,2);
+  assert.deepEqual(result.pages.map(page=>page.route),['/','/about']);
+  assert.equal(new Set(result.files.map(file=>file.path)).size,result.files.length);
+  assert.ok(result.files.some(file=>file.path==='saved-pages/01-home/index.html'));
+  assert.ok(result.files.some(file=>file.path==='saved-pages/02-about/index.html'));
+  assert.ok(result.files.some(file=>file.path==='saved-pages/01-home/images/logo.png'));
+  assert.ok(result.files.some(file=>file.path==='saved-pages/02-about/images/logo.png'));
+  assert.ok(result.files.some(file=>file.path==='manifest.json'));
+});
+
+test('multi ZIP upload requires one page per ZIP and caps selection at twelve archives',async()=>{
+  const enc=new TextEncoder();
+  const twoPages=new File([zip([
+    {name:'one.html',data:enc.encode('<h1>One</h1>'),method:8},
+    {name:'two.html',data:enc.encode('<h1>Two</h1>'),method:8},
+  ])],'two-pages.zip',{type:'application/zip'});
+  await assert.rejects(()=>unzipSavedPages([twoPages]),/one SingleFile page ZIP per website page/);
+  const one=new File([zip([{name:'index.html',data:enc.encode('<h1>One</h1>'),method:8}])],'page.zip',{type:'application/zip'});
+  await assert.rejects(()=>unzipSavedPages(Array.from({length:13},()=>one)),/1 to 12/);
 });
