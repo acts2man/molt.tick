@@ -7,6 +7,7 @@ import { runReconstruction } from '../src/reconstruct/agent.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { availableAgentMinutes, productionRunBudget } from '../src/reconstruct/budgets.js';
+import { BUNDLE_CHUNK_BYTES, BUNDLE_MAX_FILE_BYTES, BUNDLE_MAX_FILES, BUNDLE_MAX_TOTAL_BYTES } from '../studio/server/contracts.ts';
 import { reserveOutputRepository, publishReservedOutputRepository, deleteReservedOutputRepository } from './publish-output.js';
 import { preflightNetlify, createNetlifySite, deployNetlifyDirectory, configureContinuousNetlifyDeploy, deleteNetlifySite, type NetlifySite } from './publish-netlify.js';
 import { finalStudioEvent } from './studio-report.js';
