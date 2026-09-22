@@ -16,7 +16,7 @@ import type { Attempt, Evaluation, Evidence, EvidencePage, FileChange, Model, Re
 
 export interface AgentOptions {
   url?:string; urls?:string[]; bundleDir?:string; workDir:string;
-  maxPages?:number; maxRepairs?:number; model?:Model; signal?:AbortSignal;
+  maxPages?:number; maxRepairs?:number; model?:Model; signal?:AbortSignal; evidence?:Evidence;
   onProgress?:(message:string)=>void|Promise<void>;
 }
 const ESSENTIAL_STYLE_KEYS=['display','position','top','left','right','bottom','z-index','width','height','min-height','max-width','box-sizing','flex-direction','flex-wrap','flex-basis','justify-content','align-items','gap','grid-template-columns','padding','margin','font-family','font-size','font-weight','font-style','line-height','letter-spacing','text-align','text-transform','color','background','background-image','background-size','background-position','border','border-radius','box-shadow','object-fit','object-position','transform','opacity','overflow','appearance','accent-color','filter','backdrop-filter','clip-path','text-shadow','white-space','word-break','aspect-ratio'] as const;
@@ -373,8 +373,10 @@ export async function runReconstruction(options:AgentOptions):Promise<Reconstruc
   await mkdir(options.workDir,{recursive:true});
   const run=await mkdtemp(join(options.workDir,'reconstruction-')),outDir=join(run,'site'),reportPath=join(run,'report.json');
   const progress=async(message:string)=>{await options.onProgress?.(message);};
-  await progress('Capturing source evidence at desktop, tablet and mobile sizes');
-  const evidence=await capture({url:options.url,urls:options.urls,bundleDir:options.bundleDir,directory:join(run,'source'),maxPages:options.maxPages,signal} satisfies CaptureOptions);
+  const evidence=options.evidence??await (async()=>{
+    await progress('Capturing source evidence at desktop, tablet and mobile sizes');
+    return capture({url:options.url,urls:options.urls,bundleDir:options.bundleDir,directory:join(run,'source'),maxPages:options.maxPages,signal} satisfies CaptureOptions);
+  })();
   const complexity=assessComplexity(evidence);
   await writeFile(join(run,'complexity.json'),JSON.stringify(complexity,null,2));
   await progress(`Source captured: ${complexity.pages.length} pages; planning complexity recorded (not a charge)`);
