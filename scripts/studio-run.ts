@@ -4,6 +4,7 @@ import { join, resolve, dirname, relative, extname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { PNG } from 'pngjs';
 import { runReconstruction } from '../src/reconstruct/agent.js';
+import { capture, readBundle } from '../src/reconstruct/capture.js';
 import { modelFromEnv } from '../src/reconstruct/provider.js';
 import type { Model } from '../src/reconstruct/types.js';
 import { availableAgentMinutes, productionRunBudget } from '../src/reconstruct/budgets.js';
@@ -28,6 +29,8 @@ function milestone(message:string):{progress:number;stage:string}|null{
   if(lower.includes('zero-cost delivery preflight passed'))return {progress:12,stage:'Preflight complete'};
   if(lower.includes('paid-model guard armed'))return {progress:14,stage:'Preparing model'};
   if(lower.includes('retrieving the saved-page bundle'))return {progress:16,stage:'Loading source files'};
+  if(lower.includes('validating this exact saved-page bundle'))return {progress:18,stage:'Validating uploaded pages'};
+  if(lower.includes('exact saved-page bundle passed capture'))return {progress:24,stage:'Uploaded pages verified'};
   if(lower.includes('capturing source evidence'))return {progress:20,stage:'Capturing website'};
   if(lower.startsWith('source captured:'))return {progress:30,stage:'Analyzing source'};
   if(lower.startsWith('reconstructing '))return {progress:38,stage:'Generating React'};
@@ -173,13 +176,33 @@ try{
       await writeFile(dest,Buffer.concat(chunks,received));
     }
   }
+  let prevalidatedEvidence:Awaited<ReturnType<typeof capture>>|undefined;
+  if(bundleDir){
+    await progress('Validating this exact saved-page bundle and route mapping before model usage.');
+    const bundle=await readBundle(bundleDir);
+    const expectedRoutes=new Set((job.pages.length?job.pages:bundle.pages.map(page=>page.route)).map(value=>{
+      const u=new URL(value,job.sourceUrl);return u.pathname.replace(/\/+$/,'')||'/';
+    }));
+    prevalidatedEvidence=await capture({
+      url:job.sourceUrl,
+      urls:job.pages.length?job.pages:undefined,
+      bundleDir,
+      directory:resolve('studio-work/source-preflight'),
+      maxPages:job.maxPages,
+      signal:AbortSignal.timeout(15*60_000)
+    });
+    const capturedRoutes=new Set(prevalidatedEvidence.pages.map(page=>page.route));
+    const missing=[...expectedRoutes].filter(route=>!capturedRoutes.has(route));
+    if(missing.length)throw new Error(`Exact saved-page preflight did not capture mapped routes: ${missing.join(', ')}`);
+    await progress(`Exact saved-page bundle passed capture for ${prevalidatedEvidence.pages.length} mapped routes; paid reconstruction may begin.`);
+  }
   const elapsedBeforeModel=Date.now()-runnerStartedAt;
   const availableMinutes=availableAgentMinutes(budget.agentMinutes,budget.runnerMinutes,budget.deliveryReserveMinutes,elapsedBeforeModel);
   if(availableMinutes<5)throw new Error(`Preflight/source preparation consumed too much of the runner envelope to safely start paid reconstruction while preserving the ${budget.deliveryReserveMinutes}-minute delivery reserve.`);
   process.env.MOLT_AGENT_MINUTES=String(availableMinutes);
   if(availableMinutes<budget.agentMinutes)await progress(`Runtime guard reduced reconstruction to ${availableMinutes} minutes so the ${budget.deliveryReserveMinutes}-minute delivery reserve remains protected.`);
   liveModel=modelFromEnv();
-  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir,url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
+  const result=await runReconstruction({model:liveModel,...(bundleDir?{bundleDir,url:job.sourceUrl,urls:job.pages.length?job.pages:undefined,evidence:prevalidatedEvidence}:{url:job.sourceUrl,urls:job.pages.length?job.pages:undefined}),workDir:resolve('studio-work/reconstruction'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,onProgress:message=>progress(message,{},false)});
   // Checkpoint the expensive work before any nonessential callback, preview, or export step.
   await cp(result.outDir,join(artifacts,'react-project'),{recursive:true,filter:source=>!source.split(/[\\/]/).some(s=>s==='node_modules'||s==='.git'||s==='dist')});
   await writeFile(join(artifacts,'report.json'),JSON.stringify(result,null,2));
