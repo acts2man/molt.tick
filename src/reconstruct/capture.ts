@@ -398,7 +398,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
     }
   };
   let local: Awaited<ReturnType<typeof serve>> | undefined;
-  let targets: Array<{route:string;url:string;fallbackUrl?:string;discovered?:boolean}> = [];
+  let targets: Array<{route:string;url:string;evidenceUrl?:string;liveUrl?:string;savedPrimary?:boolean;discovered?:boolean}> = [];
   const autoDiscovery=Boolean(options.url&&!options.urls?.length&&!options.bundleDir);
   if(options.bundleDir){
     const bundle=await readBundle(options.bundleDir);
@@ -412,16 +412,21 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
       local=await serve(resolve(options.bundleDir),aliases,true,true);
       const savedRoutes=new Set(bundle.pages.map(p=>p.route));
-      targets=requested.map(page=>{const route=routePath(page.pathname),fallbackUrl=savedRoutes.has(route)?local!.origin+route:undefined;if(!fallbackUrl&&bundle.pages.length)evidence.warnings.push(`${route}: no exact retained-page fallback mapping was found; saved routes are ${[...savedRoutes].join(', ')}.`);return{route,url:page.href,...(fallbackUrl?{fallbackUrl}:{})};});
+      targets=requested.map(page=>{
+        const route=routePath(page.pathname),savedPrimary=savedRoutes.has(route);
+        if(savedPrimary)return{route,url:local!.origin+route,evidenceUrl:page.href,liveUrl:page.href,savedPrimary:true};
+        evidence.warnings.push(`${route}: no uploaded saved page matched this route; this route must use live browser evidence.`);
+        return{route,url:page.href,evidenceUrl:page.href};
+      });
       await importSavedResources(options.bundleDir);
-      const supplemented=targets.filter(target=>savedRoutes.has(target.route)).length;
-      evidence.warnings.push('Hybrid evidence enabled: live rendering is the visual/interaction authority while saved files supplement exact local assets and font data.');
-      if(supplemented<targets.length)evidence.warnings.push(`Saved HTML/CSS supplements ${supplemented} of ${targets.length} selected routes; the remaining routes use live browser evidence without silently shrinking the requested page scope.`);
+      const savedPrimaryCount=targets.filter(target=>target.savedPrimary).length;
+      evidence.warnings.push(`Saved-page authority enabled: ${savedPrimaryCount} of ${targets.length} selected routes capture from the uploaded page snapshot first. Live browsing is optional enrichment and cannot abort those saved routes.`);
+      if(savedPrimaryCount<targets.length)evidence.warnings.push(`${targets.length-savedPrimaryCount} selected routes have no uploaded page and still depend on live browser evidence.`);
     }else{
       evidence.site=bundle.site;
       const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
       local=await serve(resolve(options.bundleDir),aliases,true);
-      targets=bundle.pages.map(p=>({route:p.route,url:local!.origin+p.route}));
+      targets=bundle.pages.map(p=>({route:p.route,url:local!.origin+p.route,evidenceUrl:new URL(p.route,bundle.site).href,savedPrimary:true}));
     }
   }else{
     const u=publicUrl(options.url!); await assertPublicUrl(u.href); evidence.site=u.origin;
@@ -456,13 +461,13 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       if(autoDiscovery&&evidence.pages.length>=maxPages)break;
       const warningStart=evidence.warnings.length,blockerStart=evidence.blockers.length;
       try{
-      if(stabilityEnabled){
+      if(stabilityEnabled&&!target.savedPrimary){
         const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         try{
           await restrictNetwork(ctx,local?.origin,false);let page=await ctx.newPage();const samples:string[]=[];
           for(let attempt=0;attempt<3;attempt++){
             options.signal.throwIfAborted();
-            const probe=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);page=probe.page;const response=probe.response;if(probe.usedFallback){evidence.warnings.push(`${target.route}: live source stability probe fell back to the retained saved page (${probe.liveError}).`);break;}if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
+            const response=await navigateRenderable(page,target.url);if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
             await settle(page,options.signal);samples.push(geometryFingerprint(await geometry(page)));
             if(samples.length>=2&&samples.at(-1)===samples.at(-2))break;
           }
@@ -472,7 +477,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         }catch(error){evidence.warnings.push(`${target.route}: source-stability probe could not complete (${(error as Error).message}); normal capture will still validate the route.`);}
         finally{await ctx.close().catch(()=>{});}
       }
-      const item:Evidence['pages'][number]={route:target.route,url:target.url,title:'',views:[]};
+      const item:Evidence['pages'][number]={route:target.route,url:target.evidenceUrl??target.url,title:'',views:[]};
       const slug=createHash('sha256').update(target.route).digest('hex').slice(0,12);
       await mkdir(join(options.directory,slug),{recursive:true});
       const pageViewports=[...views];
@@ -482,7 +487,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         const ctx=await engine.newContext({viewport,deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         const pending:Promise<void>[]=[];const assetErrors:string[]=[];
         try{
-          await restrictNetwork(ctx,local?.origin,Boolean(local&&!options.url));
+          await restrictNetwork(ctx,local?.origin,Boolean(target.savedPrimary||local&&!options.url));
           let page=await ctx.newPage();
           ctx.on('response',res=>{
             const type=res.request().resourceType();if(!['image','font','stylesheet'].includes(type)||!res.ok())return;
@@ -491,10 +496,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
               else await save(res.url(),body,mime);
             })().catch(e=>{assetErrors.push((e as Error).message);}));
           });
-          const navigation=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);
-          page=navigation.page;
-          const response=navigation.response,activeUrl=navigation.url;
-          if(navigation.usedFallback)evidence.warnings.push(`${target.route} ${viewport.name}: live source navigation failed (${navigation.liveError}); captured the retained saved-page bundle instead.`);
+          const response=await navigateRenderable(page,target.url),activeUrl=target.url;
           if(!response?.ok())throw new Error(`${target.route}: HTTP ${response?.status()}`);
           let motion:import('./types.js').MotionEvidence|undefined;
           if(viewport.name==='desktop'||viewport.name==='mobile'){
