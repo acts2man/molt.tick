@@ -36,7 +36,7 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf',
 };
 /** Loopback-only static server. Unknown routes do not silently render home. */
-export async function serve(root: string, aliases: Record<string, string> = {}, sourceMode = false) {
+export async function serve(root: string, aliases: Record<string, string> = {}, sourceMode = false, staticSnapshot = false) {
   const server = createServer(async (req, res) => {
     try {
       if (!['GET', 'HEAD'].includes(req.method ?? '')) { res.writeHead(405).end(); return; }
@@ -50,6 +50,15 @@ export async function serve(root: string, aliases: Record<string, string> = {}, 
         const directory = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '';
         const base = '/' + directory.split('/').map(encodeURIComponent).join('/');
         let html = body.toString('utf8').replace(/<base\b[^>]*>/gi, '');
+        if(staticSnapshot){
+          // Hybrid fallback is a visual evidence snapshot, not a second live execution environment.
+          // Strip executable/navigation primitives so a retained SingleFile page cannot redirect the
+          // fallback browser back to the unavailable public route.
+          html=html
+            .replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi,'')
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'')
+            .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,'');
+        }
         const tag = `<base href="${base}">`;
         html = /<head\b/i.test(html) ? html.replace(/<head\b[^>]*>/i, m => m + tag) : tag + html;
         body = Buffer.from(html);
