@@ -108,12 +108,29 @@ test('unverified model credential changes nothing',async()=>{const s=setup();s.s
 test('runner cannot change another workflow run',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,{...newJob({id:ID,url:'example.com'},'acts2man'),runId:999});const r=await handle(s.req('runner/'+ID),s.services);assert.equal(r.status,409);});
 test('runner data is not accepted without identity verification',async()=>{const s=setup();s.services.identifyRunner=async()=>{throw new Error('invalid identity');};const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'fake'}),s.services);assert.equal(r.status,500);assert.equal(s.map.size,3);});
 test('runner progress updates existing work and preserves the run identity',async()=>{const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'Capturing desktop'}),s.services);assert.equal(r.status,200);const job=s.map.get('jobs/acts2man/'+ID);assert.equal(job.runId,123);assert.equal(job.status,'running');assert.equal(job.events.length,1);});
-test('terminal runner events purge uploaded source bundles',async()=>{
+test('completed runner reports purge uploaded source bundles',async()=>{
  const s=setup(),prefix='bundles/acts2man/'+ID+'/';
  s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com',bundleId:ID},'acts2man'));
  s.map.set(prefix+'manifest',{ready:true});s.map.set(prefix+'files/example',new ArrayBuffer(4));
  const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'done',report:{status:'needs-work',evaluation:{pass:false,issues:[],views:[]},attempts:[],warnings:[],blockers:[]}}),s.services);
  assert.equal(r.status,200);assert.equal([...s.map.keys()].some(k=>k.startsWith(prefix)),false);
+});
+test('failed runner events retain the saved-page bundle for retry',async()=>{
+ const s=setup(),prefix='bundles/acts2man/'+ID+'/';
+ s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com',bundleId:ID},'acts2man'));
+ s.map.set(prefix+'manifest',{ready:true});s.map.set(prefix+'files/example',new ArrayBuffer(4));
+ const r=await handle(s.req('runner/'+ID+'/events','POST',{message:'boom',error:'synthetic failure'}),s.services);
+ assert.equal(r.status,200);assert.equal(s.map.get('jobs/acts2man/'+ID).status,'error');assert.equal([...s.map.keys()].some(k=>k.startsWith(prefix)),true);
+ const detail=await (await handle(s.req('jobs/'+ID),s.services)).json();assert.equal(detail.bundleReusable,true);
+});
+test('failed saved-page runs can retry with the retained bundle and no re-upload',async()=>{
+ const s=setup(),prefix='bundles/acts2man/'+ID+'/';
+ const original={...newJob({id:ID,url:'https://example.com',pages:'/\n/about',bundleId:ID,maxPages:2,maxRepairs:4,model:'gpt-5.6-sol',reasoningEffort:'medium',outputRepo:'example-com-react'},'acts2man'),status:'error'};
+ s.map.set('jobs/acts2man/'+ID,original);s.map.set(prefix+'manifest',{ready:true});
+ const response=await handle(s.req('jobs/'+ID+'/retry','POST',{}),s.services);assert.equal(response.status,202);
+ const retried=await response.json();assert.equal(retried.reusedBundle,true);assert.notEqual(retried.id,ID);assert.equal(retried.bundleId,ID);assert.equal(retried.status,'queued');assert.deepEqual(retried.pages,original.pages);
+ assert.equal(s.calls.filter(c=>c.p.includes('dispatches')).length,1);
+ assert.equal(s.map.has(prefix+'manifest'),true);
 });
 test('runner milestone progress is stored and never moves backward',async()=>{
  const s=setup();s.map.set('jobs/acts2man/'+ID,newJob({id:ID,url:'example.com'},'acts2man'));

@@ -177,7 +177,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         job.events=[...job.events,{at:now,message:job.message}].slice(-80);
         if(event.report){job.report=safeReport(event.report);job.status=(event.deploymentError||event.outputRepoError)?'needs-work':job.report.status;job.progress=100;job.progressStage='Complete';job.progressUpdatedAt=now;}else if(event.error){job.status='error';job.error=String(event.error).slice(0,4000);job.progressStage='Stopped';job.progressUpdatedAt=now;}else if(job.status!=='cancelling')job.status='running';
         await store.setJSON(key,job);
-        if((event.report||event.error)&&job.bundleId)await deletePrefix(store,bundleKey(OWNER,job.bundleId));
+        if(event.report&&job.bundleId)await deletePrefix(store,bundleKey(OWNER,job.bundleId));
         return json({saved:true});
       }
       throw new HttpError(404,'Runner route not found.');
@@ -328,7 +328,7 @@ export async function handle(req: Request, services: Services): Promise<Response
         let workflow:any=null,artifacts:any[]=[];
         if(job.runId&&token){
           try {workflow=await gh(token,`/repos/${REPOSITORY}/actions/runs/${job.runId}`);
-            if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();if(job.bundleId)await deletePrefix(store,bundleKey(owner,job.bundleId));}
+            if(ACTIVE.has(job.status)&&workflow.status==='completed') {job.status=workflow.conclusion==='cancelled'?'cancelled':'error';job.message=workflow.conclusion==='cancelled'?'Reconstruction cancelled':'The runner ended without a completed result. Open the run logs for details.';job.updatedAt=new Date().toISOString();}
             if(workflow.status==='completed'){
               if(!job.sourcePublished&&(job.status==='cancelled'||job.status==='error'))await cleanupUnusedReservations(job,gh,token,hostingIntegration?.token??null,services.cleanupNetlify??deleteNetlifySite);
               await store.setJSON(key,job);
@@ -340,7 +340,30 @@ export async function handle(req: Request, services: Services): Promise<Response
           const run=runs.workflow_runs.find((r:any)=>r.display_title.includes(id));
           if(run){job.runId=run.id;job.runUrl=run.html_url;await store.setJSON(key,job);}else if(Date.now()-Date.parse(job.createdAt)>600000){job.status='error';job.message='No runner started within ten minutes. Check GitHub Actions permissions and availability.';await store.setJSON(key,job);}
         }
-        return json({...job,artifacts,runnerConclusion:workflow?.conclusion??null});
+        let bundleReusable=false;
+        if(job.bundleId){const manifest=await store.get(`${bundleKey(owner,job.bundleId)}/manifest`,{type:'json'});bundleReusable=!!manifest?.ready;}
+        return json({...job,artifacts,runnerConclusion:workflow?.conclusion??null,bundleReusable});
+      }
+      if(method==='POST' && path[2]==='retry'){
+        if(ACTIVE.has(job.status))throw new HttpError(409,'This reconstruction is still active.');
+        if(!job.bundleId)throw new HttpError(409,'This run has no saved-page bundle to reuse.');
+        const manifest=await store.get(`${bundleKey(owner,job.bundleId)}/manifest`,{type:'json'});
+        if(!manifest?.ready)throw new HttpError(409,'The saved-page bundle is no longer available. Upload the pages again once, then future failures can reuse them.');
+        const recent=await jobs(store,owner);if(recent.some(j=>ACTIVE.has(j.status)))throw new HttpError(409,'Another reconstruction is already active. Finish or cancel it before retrying.');
+        if(integration?.record.deliveryVersion!==1||!integration.record.deliveryVerifiedAt)throw new HttpError(409,'Verify GitHub delivery permissions before retrying.');
+        const secrets=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/secrets?per_page=100`),names=secrets.secrets.map((s:any)=>s.name);
+        if(!names.includes('MOLT_AI_MODEL')||(!names.includes('OPENAI_API_KEY')&&!names.includes('ANTHROPIC_API_KEY')))throw new HttpError(409,'Finish the model connection before retrying.');
+        if(!names.includes('MOLT_GITHUB_EXPORT_TOKEN'))throw new HttpError(409,'Reconnect the GitHub owner workspace so Molt can create the output React repository.');
+        if(!hostingIntegration||!names.includes('MOLT_NETLIFY_AUTH_TOKEN')||!names.includes('MOLT_NETLIFY_TEAM_SLUG'))throw new HttpError(409,'Connect Netlify hosting before retrying.');
+        const retryJob=newJob({id:randomUUID(),url:job.sourceUrl,pages:job.pages.join('\n'),maxPages:job.maxPages,maxRepairs:job.maxRepairs,bundleId:job.bundleId,model:job.model,reasoningEffort:job.reasoningEffort,outputRepo:job.outputRepo},owner);
+        retryJob.message='Retrying with the retained saved-page bundle';
+        await store.setJSON(dataKey(owner,retryJob.id),retryJob);
+        try{
+          const dispatch=await gh(requiredGithub(),`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',body:JSON.stringify({ref:BRANCH,inputs:{job_id:retryJob.id}})});
+          const latest=await store.get(dataKey(owner,retryJob.id),{type:'json'}) as Job;
+          if(latest.status==='dispatching'){latest.status='queued';latest.message='Waiting for a GitHub Actions runner';if(dispatch?.workflow_run_id){latest.runId=dispatch.workflow_run_id;latest.runUrl=dispatch.html_url;}await store.setJSON(dataKey(owner,retryJob.id),latest);}
+          return json({...latest,reusedBundle:true},202);
+        }catch(e){retryJob.status='error';retryJob.error=(e as Error).message;retryJob.message='The retry runner could not be started';await store.setJSON(dataKey(owner,retryJob.id),retryJob);throw e;}
       }
       if(method==='POST' && path[2]==='archive'){
         if(ACTIVE.has(job.status))throw new HttpError(409,'Stop the active reconstruction before archiving it.');

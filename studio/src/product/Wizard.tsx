@@ -38,7 +38,21 @@ export function ReconstructionWizard({ready,connected,provider='openai',defaultM
  function next(){try{validate();setError('');setStep(n=>Math.min(2,n+1));}catch(e){setError((e as Error).message);}}
  async function submit(e:FormEvent){e.preventDefault();if(step<2){next();return;}if(!connected){onConnect();return;}if(!ready){onSettings();return;}if(!consent){setError('Confirm the scope and API usage before starting.');return;}setBusy(true);setError('');try{
    const{normalized,requested}=validate();const finalRepo=(outputRepo||suggestedRepo(normalized)).trim().toLowerCase();const fingerprint=JSON.stringify({normalized,requested,scope,mode,maxPages,repairs,complexity,model,reasoningEffort,outputRepo:finalRepo,mapping,files:files.map(f=>[f.path,f.file.size,f.file.lastModified])});if(attempt.current?.fingerprint!==fingerprint)attempt.current={fingerprint,id:crypto.randomUUID()};const run=attempt.current;
-   if(mode==='files'&&!run.bundleId){const manifest=new File([JSON.stringify({site:normalized,pages:mapping})],'bundle.json',{type:'application/json'});const upload=[...files,{file:manifest,path:'bundle.json'}];if(upload.length>BUNDLE_MAX_FILES||upload.reduce((n,f)=>n+f.file.size,0)>BUNDLE_MAX_TOTAL_BYTES)throw new Error('The final bundle exceeds the upload limit.');const b=await post('bundles',{files:upload.map(f=>({path:f.path,size:f.file.size}))});for(let i=0;i<upload.length;i++){const item=upload[i],parts=Math.max(1,Math.ceil(item.file.size/BUNDLE_CHUNK_BYTES));for(let part=0;part<parts;part++){setMessage(parts>1?`Uploading file ${i+1} of ${upload.length} · chunk ${part+1}/${parts}`:`Uploading file ${i+1} of ${upload.length}`);const start=part*BUNDLE_CHUNK_BYTES,end=Math.min(item.file.size,start+BUNDLE_CHUNK_BYTES),body=item.file.slice(start,end);await api(`bundles/${b.id}?file=${encodeURIComponent(item.path)}${parts>1?`&part=${part}`:''}`,{method:'PUT',body,headers:{'content-type':'application/octet-stream'}});}}await post(`bundles/${b.id}/complete`);run.bundleId=b.id;}
+   if(mode==='files'&&!run.bundleId){
+     const manifest=new File([JSON.stringify({site:normalized,pages:mapping})],'bundle.json',{type:'application/json'}),upload=[...files,{file:manifest,path:'bundle.json'}];
+     if(upload.length>BUNDLE_MAX_FILES||upload.reduce((n,f)=>n+f.file.size,0)>BUNDLE_MAX_TOTAL_BYTES)throw new Error('The final bundle exceeds the upload limit.');
+     const b=await post('bundles',{files:upload.map(f=>({path:f.path,size:f.file.size}))});
+     const tasks:Array<()=>Promise<void>>=[];
+     for(const item of upload){
+       const parts=Math.max(1,Math.ceil(item.file.size/BUNDLE_CHUNK_BYTES));
+       for(let part=0;part<parts;part++)tasks.push(async()=>{
+         const start=part*BUNDLE_CHUNK_BYTES,end=Math.min(item.file.size,start+BUNDLE_CHUNK_BYTES),body=item.file.slice(start,end);
+         await api(`bundles/${b.id}?file=${encodeURIComponent(item.path)}${parts>1?`&part=${part}`:''}`,{method:'PUT',body,headers:{'content-type':'application/octet-stream'}});
+       });
+     }
+     let next=0,done=0;const workers=Array.from({length:Math.min(6,tasks.length)},async()=>{for(;;){const index=next++;if(index>=tasks.length)return;await tasks[index]();done++;setMessage(`Uploading saved pages · ${done}/${tasks.length} chunks`);}});
+     await Promise.all(workers);await post(`bundles/${b.id}/complete`);run.bundleId=b.id;
+   }
    setMessage('Submitting the development test');const job=await post('jobs',{id:run.id,url:normalized,pages:requested.join('\n'),maxPages:mode==='files'?requested.length:scope==='home'?1:scope==='pages'?requested.length:maxPages,maxRepairs:repairs,bundleId:run.bundleId,complexity,model,reasoningEffort,outputRepo:finalRepo,developmentTest:true});attempt.current=null;onCreated(job.id);
  }catch(e){setError((e as Error).message);}finally{setBusy(false);setMessage('');}}
  return <section className="source-card" id="new-reconstruction"><div className="card-head"><div><span className="eyebrow">YOUR FIRST PAGE IS THE BEST PLACE TO START</span><h2>New reconstruction</h2></div><Icon name="layers" size={24}/></div><div className="wizard-stepper" aria-label="Reconstruction steps">{['Source','Scope','Review & start'].map((s,i)=><span key={s} className={i===step?'current':''} aria-current={i===step?'step':undefined}><b>{i+1}</b>{s}</span>)}</div><form onSubmit={submit}>
