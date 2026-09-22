@@ -7,7 +7,7 @@ import { improves, routePath, routeFile, publicUrl, publicIP, inside, integer, v
 import { validateChanges, apply, snapshot, restore } from '../src/reconstruct/workspace.js';
 import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
-import { readBundle, adaptiveViewports, geometryFingerprint, prioritizeDiscoveredLinks, skippableDiscoveredCaptureError } from '../src/reconstruct/capture.js';
+import { readBundle, adaptiveViewports, geometryFingerprint, prioritizeDiscoveredLinks, skippableDiscoveredCaptureError, navigateRenderable } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
@@ -19,6 +19,16 @@ import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, med
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
+
+test('capture navigation accepts DOM-ready pages even when full load never settles',async()=>{
+  const calls:any[]=[];
+  const page:any={
+    goto:async(_url:string,opts:any)=>{calls.push(['goto',opts]);return{ok:()=>true,status:()=>200};},
+    waitForLoadState:async(_state:string,opts:any)=>{calls.push(['wait',opts]);throw new Error('full load timed out');}
+  };
+  const response=await navigateRenderable(page,'https://example.com/gallery-2/');
+  assert.equal(response?.ok(),true);assert.equal(calls[0][1].waitUntil,'domcontentloaded');assert.equal(calls[0][1].timeout,30000);assert.equal(calls[1][1].timeout,5000);
+});
 
 test('route mapping prevents collisions across nested, dotted and punctuation routes',()=>assert.equal(new Set(['/a/b','/a.b','/a-b','/'].map(routeFile)).size,4));
 test('route validation rejects traversal, encoded traversal and protocol-relative routes',()=>{for(const s of ['//evil','/../outside','/%2e%2e/out','/a?x=1','/a\\b','/%2f%2fevil'])assert.throws(()=>routePath(s));});
