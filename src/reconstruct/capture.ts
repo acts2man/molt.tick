@@ -441,7 +441,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       if(stabilityEnabled){
         const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         try{
-          await restrictNetwork(ctx);const page=await ctx.newPage();const samples:string[]=[];
+          await restrictNetwork(ctx,local?.origin,false);const page=await ctx.newPage();const samples:string[]=[];
           for(let attempt=0;attempt<3;attempt++){
             options.signal.throwIfAborted();
             const probe=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);const response=probe.response;if(probe.usedFallback){evidence.warnings.push(`${target.route}: live source stability probe fell back to the retained saved page (${probe.liveError}).`);break;}if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
