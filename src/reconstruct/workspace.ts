@@ -69,7 +69,7 @@ export async function snapshot(root: string): Promise<FileChange[]> {
 export const digest = (files: FileChange[]) => createHash('sha256').update(JSON.stringify([...files].sort((a,b) => a.path.localeCompare(b.path)))).digest('hex');
 export async function apply(root: string, changes: FileChange[], allowedPages: Set<string>): Promise<void> {
   validateChanges(changes);
-  for (const f of changes) if (f.path.startsWith('src/pages/') && !allowedPages.has(f.path)) throw new Error('Model attempted to invent a route');
+  for (const f of changes) if (/^src\/pages\/[^/]+\.tsx$/i.test(f.path) && !allowedPages.has(f.path)) throw new Error(`Model attempted to invent a route: ${f.path}`);
   const current = await snapshot(root), merged = new Map(current.map(f => [f.path,f]));
   for (const f of changes) merged.set(f.path, f);
   if (merged.size > 80 || [...merged.values()].reduce((n,f)=>n+Buffer.byteLength(f.content),0)>2_000_000) throw new Error('Workspace budget exceeded');
