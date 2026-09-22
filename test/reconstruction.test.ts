@@ -38,16 +38,22 @@ test('static saved fallback strips scripts, meta refresh and inline event naviga
 
 test('hybrid saved-page fallback isolates external requests after live failure',async()=>{
   const routed:any[]=[];
-  const page:any={
+  const cleanPage:any={
     route:async(_pattern:string,handler:any)=>{routed.push(handler);},
-    goto:async(url:string)=>{
-      if(url.startsWith('https://'))throw new Error('page.goto: net::ERR_FAILED');
-      return{ok:()=>true,status:()=>200};
-    },
-    waitForLoadState:async()=>{}
+    goto:async()=>({ok:()=>true,status:()=>200}),
+    waitForLoadState:async()=>{},
+    close:async()=>{},
+    context:()=>context,
+  };
+  const context:any={newPage:async()=>cleanPage};
+  const page:any={
+    goto:async()=>{throw new Error('page.goto: net::ERR_FAILED');},
+    waitForLoadState:async()=>{},
+    close:async()=>{},
+    context:()=>context,
   };
   const result=await navigateRenderableWithFallback(page,'https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/');
-  assert.equal(result.usedFallback,true);assert.equal(routed.length,1);
+  assert.equal(result.usedFallback,true);assert.equal(result.page,cleanPage);assert.equal(routed.length,1);
   let continued=false,aborted=false;
   const local={request:()=>({url:()=> 'http://127.0.0.1:4321/image.jpg'}),continue:async()=>{continued=true;},abort:async()=>{aborted=true;}};
   await routed[0](local);assert.equal(continued,true);assert.equal(aborted,false);
@@ -56,15 +62,25 @@ test('hybrid saved-page fallback isolates external requests after live failure',
   await routed[0](external);assert.equal(continued,false);assert.equal(aborted,true);
 });
 
-test('hybrid navigation falls back to retained saved page when live navigation times out',async()=>{
+test('hybrid navigation falls back on a fresh page when live navigation times out',async()=>{
   const calls:string[]=[];
-  const page:any={
+  let oldClosed=false;
+  const cleanPage:any={
     route:async()=>{},
-    goto:async(url:string)=>{calls.push(url);if(url.startsWith('https://'))throw new Error('page.goto: Timeout 30000ms exceeded');return{ok:()=>true,status:()=>200};},
-    waitForLoadState:async()=>{}
+    goto:async(url:string)=>{calls.push(url);return{ok:()=>true,status:()=>200};},
+    waitForLoadState:async()=>{},
+    close:async()=>{},
+    context:()=>context,
+  };
+  const context:any={newPage:async()=>cleanPage};
+  const page:any={
+    goto:async(url:string)=>{calls.push(url);throw new Error('page.goto: Timeout 30000ms exceeded');},
+    waitForLoadState:async()=>{},
+    close:async()=>{oldClosed=true;},
+    context:()=>context,
   };
   const result=await navigateRenderableWithFallback(page,'https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/');
-  assert.equal(result.usedFallback,true);assert.match(result.liveError??'',/Timeout/);assert.equal(result.url,'http://127.0.0.1:4321/gallery-2/');assert.equal(result.response?.ok(),true);assert.deepEqual(calls,['https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/']);
+  assert.equal(result.usedFallback,true);assert.equal(result.page,cleanPage);assert.equal(oldClosed,true);assert.match(result.liveError??'',/Timeout/);assert.equal(result.url,'http://127.0.0.1:4321/gallery-2/');assert.equal(result.response?.ok(),true);assert.deepEqual(calls,['https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/']);
 });
 
 test('capture navigation accepts DOM-ready pages even when full load never settles',async()=>{
