@@ -115,16 +115,21 @@ async function isolateSavedFallback(page:Page,fallbackUrl:string):Promise<void>{
     await route.abort().catch(()=>{});
   });
 }
-export async function navigateRenderableWithFallback(page:Page,url:string,fallbackUrl?:string):Promise<{response:import('playwright-core').Response|null;url:string;usedFallback:boolean;liveError?:string}>{
+export async function navigateRenderableWithFallback(page:Page,url:string,fallbackUrl?:string):Promise<{page:Page;response:import('playwright-core').Response|null;url:string;usedFallback:boolean;liveError?:string}>{
   const fallback=async(liveError:string)=>{
     if(!fallbackUrl)throw new Error(liveError);
-    await isolateSavedFallback(page,fallbackUrl);
-    const response=await navigateRenderable(page,fallbackUrl);
-    return{response,url:fallbackUrl,usedFallback:true,liveError};
+    // A failed Chromium navigation can still commit chrome-error://chromewebdata/ after
+    // page.goto() rejects. Never race the retained fallback against that poisoned page.
+    const context=page.context();
+    await page.close().catch(()=>{});
+    const cleanPage=await context.newPage();
+    await isolateSavedFallback(cleanPage,fallbackUrl);
+    const response=await navigateRenderable(cleanPage,fallbackUrl);
+    return{page:cleanPage,response,url:fallbackUrl,usedFallback:true,liveError};
   };
   try{
     const response=await navigateRenderable(page,url);
-    if(response?.ok()||!fallbackUrl)return{response,url,usedFallback:false};
+    if(response?.ok()||!fallbackUrl)return{page,response,url,usedFallback:false};
     return await fallback(`HTTP ${response?.status()}`);
   }catch(error){
     if(!fallbackUrl)throw error;
@@ -454,10 +459,10 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       if(stabilityEnabled){
         const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         try{
-          await restrictNetwork(ctx,local?.origin,false);const page=await ctx.newPage();const samples:string[]=[];
+          await restrictNetwork(ctx,local?.origin,false);let page=await ctx.newPage();const samples:string[]=[];
           for(let attempt=0;attempt<3;attempt++){
             options.signal.throwIfAborted();
-            const probe=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);const response=probe.response;if(probe.usedFallback){evidence.warnings.push(`${target.route}: live source stability probe fell back to the retained saved page (${probe.liveError}).`);break;}if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
+            const probe=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);page=probe.page;const response=probe.response;if(probe.usedFallback){evidence.warnings.push(`${target.route}: live source stability probe fell back to the retained saved page (${probe.liveError}).`);break;}if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
             await settle(page,options.signal);samples.push(geometryFingerprint(await geometry(page)));
             if(samples.length>=2&&samples.at(-1)===samples.at(-2))break;
           }
@@ -478,8 +483,8 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         const pending:Promise<void>[]=[];const assetErrors:string[]=[];
         try{
           await restrictNetwork(ctx,local?.origin,Boolean(local&&!options.url));
-          const page=await ctx.newPage();
-          page.on('response',res=>{
+          let page=await ctx.newPage();
+          ctx.on('response',res=>{
             const type=res.request().resourceType();if(!['image','font','stylesheet'].includes(type)||!res.ok())return;
             pending.push((async()=>{const body=await res.body();const mime=res.headers()['content-type']??'';
               if(type==='stylesheet'){for(const face of body.toString('utf8').match(/@font-face\s*\{[^}]*\}/gi)??[])faces.add(absolutizeCss(face,res.url()));}
@@ -487,6 +492,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
             })().catch(e=>{assetErrors.push((e as Error).message);}));
           });
           const navigation=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);
+          page=navigation.page;
           const response=navigation.response,activeUrl=navigation.url;
           if(navigation.usedFallback)evidence.warnings.push(`${target.route} ${viewport.name}: live source navigation failed (${navigation.liveError}); captured the retained saved-page bundle instead.`);
           if(!response?.ok())throw new Error(`${target.route}: HTTP ${response?.status()}`);
