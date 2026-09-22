@@ -405,7 +405,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       const requested=options.urls?.length?options.urls.map(value=>new URL(value,live)):bundle.pages.map(p=>new URL(p.route,live.origin));
       for(const page of requested)if(page.origin!==live.origin||page.search)throw new Error('Hybrid page URLs must be same-origin and cannot contain query parameters');
       const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
-      local=await serve(resolve(options.bundleDir),aliases,true);
+      local=await serve(resolve(options.bundleDir),aliases,true,true);
       const savedRoutes=new Set(bundle.pages.map(p=>p.route));
       targets=requested.map(page=>{const route=routePath(page.pathname),fallbackUrl=savedRoutes.has(route)?local!.origin+route:undefined;if(!fallbackUrl&&bundle.pages.length)evidence.warnings.push(`${route}: no exact retained-page fallback mapping was found; saved routes are ${[...savedRoutes].join(', ')}.`);return{route,url:page.href,...(fallbackUrl?{fallbackUrl}:{})};});
       await importSavedResources(options.bundleDir);
