@@ -7,7 +7,7 @@ import { improves, routePath, routeFile, publicUrl, publicIP, inside, integer, v
 import { validateChanges, apply, snapshot, restore } from '../src/reconstruct/workspace.js';
 import { repairLoop } from '../src/reconstruct/loop.js';
 import { createModel, parseReply } from '../src/reconstruct/provider.js';
-import { readBundle, adaptiveViewports, geometryFingerprint, prioritizeDiscoveredLinks, skippableDiscoveredCaptureError, navigateRenderable } from '../src/reconstruct/capture.js';
+import { readBundle, adaptiveViewports, geometryFingerprint, prioritizeDiscoveredLinks, skippableDiscoveredCaptureError, navigateRenderable, navigateRenderableWithFallback } from '../src/reconstruct/capture.js';
 import { serve } from '../src/reconstruct/runtime.js';
 import { referenceImages, repairImages } from '../src/reconstruct/images.js';
 import { PNG } from 'pngjs';
@@ -19,6 +19,16 @@ import { spacingIssues, typographyIssues, contentIssues, internalLinkIssues, med
 const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{route:'/',viewport:'desktop',source:'source.png',score:n,worstBand:n,pass,issues:[]}]});
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
+
+test('hybrid navigation falls back to retained saved page when live navigation times out',async()=>{
+  const calls:string[]=[];
+  const page:any={
+    goto:async(url:string)=>{calls.push(url);if(url.startsWith('https://'))throw new Error('page.goto: Timeout 30000ms exceeded');return{ok:()=>true,status:()=>200};},
+    waitForLoadState:async()=>{}
+  };
+  const result=await navigateRenderableWithFallback(page,'https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/');
+  assert.equal(result.usedFallback,true);assert.match(result.liveError??'',/Timeout/);assert.equal(result.url,'http://127.0.0.1:4321/gallery-2/');assert.equal(result.response?.ok(),true);assert.deepEqual(calls,['https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/']);
+});
 
 test('capture navigation accepts DOM-ready pages even when full load never settles',async()=>{
   const calls:any[]=[];
