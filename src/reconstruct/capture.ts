@@ -454,7 +454,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         }catch(error){evidence.warnings.push(`${target.route}: source-stability probe could not complete (${(error as Error).message}); normal capture will still validate the route.`);}
         finally{await ctx.close().catch(()=>{});}
       }
-      const item:Evidence['pages'][number]={...target,title:'',views:[]};
+      const item:Evidence['pages'][number]={route:target.route,url:target.url,title:'',views:[]};
       const slug=createHash('sha256').update(target.route).digest('hex').slice(0,12);
       await mkdir(join(options.directory,slug),{recursive:true});
       const pageViewports=[...views];
