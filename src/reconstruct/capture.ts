@@ -97,6 +97,14 @@ const GEOMETRY = `(() => {
 export async function geometry(page: Page): Promise<Geometry> {
   return await page.evaluate(GEOMETRY) as Geometry;
 }
+export async function navigateRenderable(page:Page,url:string):Promise<import('playwright-core').Response|null>{
+  const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
+  // Full load is best-effort only. Third-party analytics, captcha, media, or CDN
+  // requests must not make an already-rendered source page fatal.
+  await page.waitForLoadState('load',{timeout:5000}).catch(()=>{});
+  return response;
+}
+
 
 const MOTION_FRAME = `(() => {
   const nodes=Array.from(document.querySelectorAll('body *')),index=new Map(nodes.map((node,i)=>[node,String(i)]));
@@ -395,7 +403,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       const ctx=await engine.newContext({viewport:views[0],serviceWorkers:'block',acceptDownloads:false});
       try{
         await restrictNetwork(ctx);const page=await ctx.newPage();
-        const resp=await page.goto(targets[0].url,{waitUntil:'load',timeout:30000});
+        const resp=await navigateRenderable(page,targets[0].url);
         if(!resp?.ok())throw new Error(`Source returned HTTP ${resp?.status()}`);
         const discovered=await page.evaluate(`Array.from(document.querySelectorAll('header a[href],nav a[href],main a[href],footer a[href]')).map((a,index)=>({href:a.href,region:a.closest('nav')?'nav':a.closest('header')?'header':a.closest('main')?'main':'footer',index}))`) as DiscoveredLink[];
         const sitemapUrls=await page.evaluate(`(async()=>{const origin=location.origin,queue=['/wp-sitemap.xml','/sitemap.xml','/wp-sitemap-posts-page-1.xml'].map(path=>origin+path),seen=new Set(),pages=[];while(queue.length&&seen.size<8&&pages.length<200){const url=queue.shift();if(!url||seen.has(url))continue;seen.add(url);try{const response=await fetch(url,{credentials:'omit'});if(!response.ok)continue;const text=await response.text(),doc=new DOMParser().parseFromString(text,'application/xml');for(const node of Array.from(doc.querySelectorAll('loc'))){const raw=String(node.textContent||'').trim();if(!raw)continue;const parsed=new URL(raw,origin);if(parsed.origin!==origin)continue;if(/\\.xml$/i.test(parsed.pathname)){if(queue.length<12)queue.push(parsed.href);}else pages.push(parsed.href);if(pages.length>=200)break;}}catch{}}return pages;})()`) as string[];
@@ -419,7 +427,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           await restrictNetwork(ctx);const page=await ctx.newPage();const samples:string[]=[];
           for(let attempt=0;attempt<3;attempt++){
             options.signal.throwIfAborted();
-            const response=await page.goto(target.url,{waitUntil:'load',timeout:30000});if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
+            const response=await navigateRenderable(page,target.url);if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
             await settle(page,options.signal);samples.push(geometryFingerprint(await geometry(page)));
             if(samples.length>=2&&samples.at(-1)===samples.at(-2))break;
           }
@@ -448,7 +456,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
               else await save(res.url(),body,mime);
             })().catch(e=>{assetErrors.push((e as Error).message);}));
           });
-          const response=await page.goto(target.url,{waitUntil:'load',timeout:30000});
+          const response=await navigateRenderable(page,target.url);
           if(!response?.ok())throw new Error(`${target.route}: HTTP ${response?.status()}`);
           let motion:import('./types.js').MotionEvidence|undefined;
           if(viewport.name==='desktop'||viewport.name==='mobile'){
@@ -478,7 +486,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
           const primedCarouselStates=await primeCarouselAssets(page,options.signal);
-          if(primedCarouselStates>1){const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});if(reset?.ok())await settle(page,options.signal);else evidence.warnings.push(`${target.route} ${viewport.name}: carousel asset priming could not restore the initial page state.`);}
+          if(primedCarouselStates>1){const reset=await navigateRenderable(page,target.url);if(reset?.ok())await settle(page,options.signal);else evidence.warnings.push(`${target.route} ${viewport.name}: carousel asset priming could not restore the initial page state.`);}
           const interactions:NonNullable<Evidence['pages'][number]['views'][number]['interactions']>=[];
           const triggers=await discoverInteractions(page);
           for(let index=0;index<triggers.length;index++){
@@ -493,7 +501,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
             interactions.push({id,trigger,screenshot:stateScreenshot,geometry:stateGeometry});
             await writeFile(join(options.directory,slug,`${viewport.name}-${id}.json`),JSON.stringify(stateGeometry,null,2));
             if(index<triggers.length-1){
-              const reset=await page.goto(target.url,{waitUntil:'load',timeout:30000});
+              const reset=await navigateRenderable(page,target.url);
               if(!reset?.ok()){evidence.warnings.push(`${target.route} ${viewport.name}: interaction-state reset returned HTTP ${reset?.status()}.`);break;}
               await page.mouse.move(0,0);await settle(page,options.signal);
             }
