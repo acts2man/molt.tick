@@ -574,6 +574,14 @@ test('model cannot edit engine-owned build or configuration files',()=>{for(cons
 test('model cannot inject source HTML or dynamic runtime',()=>{for(const code of ['export default()=> <div dangerouslySetInnerHTML={{__html:"a"}}/>','fetch("https://example.com")','eval("x")','import x from "node:fs"','import("./x")','export default()=> <iframe src="https://example.com"/>'])assert.throws(()=>validateChanges([change(code)]));});
 test('plain React state and semantic JSX are allowed',()=>assert.doesNotThrow(()=>validateChanges([change("import {useState} from 'react';export default function Page(){const [open,setOpen]=useState(false);return <button onClick={()=>setOpen(!open)}>{open?'Open':'Closed'}</button>}")])));
 test('change sets reject duplicates and excessive content',()=>{assert.throws(()=>validateChanges([change('a'),change('b')]));assert.throws(()=>validateChanges([change('a'.repeat(250001))]));assert.throws(()=>validateChanges([]));});
+test('page sibling CSS is allowed without being mistaken for an invented route',()=>temporary(async dir=>{
+  const page='src/pages/gallery-abc123.tsx',css='src/pages/gallery-abc123.css';
+  await assert.doesNotReject(apply(dir,[
+    change("import './gallery-abc123.css';export default()=> <main>Gallery</main>",page),
+    change(".gallery{display:block}",css)
+  ],new Set([page])));
+  await assert.rejects(apply(dir,[change('export default()=> <main>Wrong</main>','src/pages/unauthorized.tsx')],new Set([page])),/invent a route/i);
+}));
 test('workspace restoration removes rejected files',()=>temporary(async dir=>{await apply(dir,[change('export default()=> <h1>Before</h1>')],new Set(['src/pages/home.tsx']));const before=await snapshot(dir);await apply(dir,[change('export default()=> <h1>After</h1>'),change('export const value=1','src/components/Unexpected.ts')],new Set(['src/pages/home.tsx']));await restore(dir,before);assert.deepEqual(await snapshot(dir),before);}));
 
 async function loopHarness(scores:number[],replies:number[],maxRounds=3,controller=new AbortController(),minRounds=0){
