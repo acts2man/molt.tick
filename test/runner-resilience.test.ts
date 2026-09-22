@@ -10,6 +10,17 @@ test('studio runner imports every shared bundle limit it enforces',async()=>{
   for(const symbol of ['BUNDLE_MAX_FILES','BUNDLE_MAX_FILE_BYTES','BUNDLE_MAX_TOTAL_BYTES','BUNDLE_CHUNK_BYTES'])assert.match(source,new RegExp('\\b'+symbol+'\\b'));
 });
 
+test('runner prevalidates the exact saved bundle before creating the model client',async()=>{
+  const source=await readFile(new URL('../scripts/studio-run.ts',import.meta.url),'utf8');
+  const preflight=source.indexOf("Validating this exact saved-page bundle and route mapping before model usage.");
+  const captureCall=source.indexOf("prevalidatedEvidence=await capture(");
+  const model=source.indexOf("liveModel=modelFromEnv()");
+  const reuse=source.indexOf("evidence:prevalidatedEvidence");
+  assert.ok(preflight>=0&&captureCall>preflight,'exact bundle preflight must exist');
+  assert.ok(model>captureCall,'model client must be created only after exact bundle capture succeeds');
+  assert.ok(reuse>model,'reconstruction must reuse the prevalidated evidence instead of recapturing');
+});
+
 test('runner callback replaces a stale identity after 403 and succeeds',async()=>{
   const tokens:string[]=[];let calls=0;
   const response=await runnerFetch({
