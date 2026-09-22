@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {test} from 'node:test';
 import {runnerFetch} from '../scripts/runner-callback.js';
 import {compactStudioReport,finalStudioEvent} from '../scripts/studio-report.js';
+
+test('studio runner imports every shared bundle limit it enforces',async()=>{
+  const source=await readFile(new URL('../scripts/studio-run.ts',import.meta.url),'utf8');
+  assert.match(source,/import\s*\{[^}]*BUNDLE_CHUNK_BYTES[^}]*BUNDLE_MAX_FILE_BYTES[^}]*BUNDLE_MAX_FILES[^}]*BUNDLE_MAX_TOTAL_BYTES[^}]*\}\s*from\s*['"]\.\.\/studio\/server\/contracts\.ts['"]/s);
+  for(const symbol of ['BUNDLE_MAX_FILES','BUNDLE_MAX_FILE_BYTES','BUNDLE_MAX_TOTAL_BYTES','BUNDLE_CHUNK_BYTES'])assert.match(source,new RegExp('\\b'+symbol+'\\b'));
+});
 
 test('runner callback replaces a stale identity after 403 and succeeds',async()=>{
   const tokens:string[]=[];let calls=0;
