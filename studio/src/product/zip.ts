@@ -61,6 +61,24 @@ export async function unzipSavedPage(file:File):Promise<ExtractedZipFile[]>{
 }
 
 
+async function primaryHtml(extracted:ExtractedZipFile[]):Promise<ExtractedZipFile[]>{
+  const html=extracted.filter(item=>/\.html?$/i.test(item.path));
+  const manifest=extracted.find(item=>item.path==='manifest.json');
+  if(manifest){
+    try{
+      const data=JSON.parse(await manifest.file.text());
+      if(typeof data.indexFilename==='string'){
+        const declared=data.indexFilename.replace(/^\.\//,'').replace(/^\/+/, '');
+        const match=html.find(item=>item.path===declared);
+        if(match)return [match];
+      }
+    }catch{}
+  }
+  const nonFrame=html.filter(item=>!/(^|\/)frames\/\d+\//i.test(item.path)&&!/(^|\/)frames\//i.test(item.path));
+  if(nonFrame.length)return nonFrame;
+  return html;
+}
+
 function pageSlug(name:string,index:number):string{
   const base=name.replace(/\.zip$/i,'').trim().toLowerCase().replace(/https?:\/\//g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
   return (base||`page-${index+1}`).slice(0,70);
@@ -86,8 +104,8 @@ export async function unzipSavedPages(archives:File[]):Promise<{files:ExtractedZ
   const used=new Set<string>(),combined:ExtractedZipFile[]=[],pages:Array<{file:string;route:string}>=[],resources:Record<string,string>={};
   let originalUrl:string|undefined,total=0;
   for(const [index,archive] of archives.entries()){
-    const extracted=await unzipSavedPage(archive),html=extracted.filter(item=>/\.html?$/i.test(item.path));
-    if(html.length!==1)throw new Error(`${archive.name} contains ${html.length} HTML pages. Select one SingleFile page ZIP per website page.`);
+    const extracted=await unzipSavedPage(archive),html=await primaryHtml(extracted);
+    if(html.length!==1)throw new Error(`${archive.name} contains ${html.length} primary HTML pages. Embedded frame HTML is ignored for page counting; select one saved website page per ZIP.`);
     let slug=pageSlug(archive.name,index),suffix=2;while(used.has(slug))slug=`${pageSlug(archive.name,index)}-${suffix++}`;used.add(slug);
     const prefix=`saved-pages/${String(index+1).padStart(2,'0')}-${slug}/`;
     const pageItem=html[0],pageText=await pageItem.file.text();
