@@ -43,6 +43,7 @@ test('hybrid saved-page fallback isolates external requests after live failure',
 test('hybrid navigation falls back to retained saved page when live navigation times out',async()=>{
   const calls:string[]=[];
   const page:any={
+    route:async()=>{},
     goto:async(url:string)=>{calls.push(url);if(url.startsWith('https://'))throw new Error('page.goto: Timeout 30000ms exceeded');return{ok:()=>true,status:()=>200};},
     waitForLoadState:async()=>{}
   };
