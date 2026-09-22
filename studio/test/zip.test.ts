@@ -74,13 +74,30 @@ test('multiple SingleFile ZIPs are namespaced and mapped without filename collis
   assert.ok(result.files.some(file=>file.path==='manifest.json'));
 });
 
+test('SingleFile embedded frame HTML does not count as extra website pages',async()=>{
+  const enc=new TextEncoder();
+  const saved=new File([zip([
+    {name:'index.html',data:enc.encode('<!doctype html><link rel="canonical" href="https://example.com/contact/">'),method:8},
+    {name:'manifest.json',data:enc.encode(JSON.stringify({originalUrl:'https://example.com/contact/',indexFilename:'index.html',resources:{'frames/0/':'https://newassets.hcaptcha.com/captcha/frame'}})),method:8},
+    {name:'frames/0/index.html',data:enc.encode('<!doctype html><title>hCaptcha checkbox</title>'),method:8},
+    {name:'frames/0/manifest.json',data:enc.encode(JSON.stringify({originalUrl:'https://newassets.hcaptcha.com/captcha/frame',indexFilename:'index.html'})),method:8},
+    {name:'frames/1/index.html',data:enc.encode('<!doctype html><title>hCaptcha challenge</title>'),method:8},
+    {name:'frames/1/manifest.json',data:enc.encode(JSON.stringify({originalUrl:'https://newassets.hcaptcha.com/captcha/challenge',indexFilename:'index.html'})),method:8},
+  ])],'contact.zip',{type:'application/zip'});
+  const result=await unzipSavedPages([saved]);
+  assert.equal(result.pages.length,1);
+  assert.equal(result.pages[0].route,'/contact');
+  assert.ok(result.files.some(file=>file.path.includes('/frames/0/index.html')));
+  assert.ok(result.files.some(file=>file.path.includes('/frames/1/index.html')));
+});
+
 test('multi ZIP upload requires one page per ZIP and caps selection at twelve archives',async()=>{
   const enc=new TextEncoder();
   const twoPages=new File([zip([
     {name:'one.html',data:enc.encode('<h1>One</h1>'),method:8},
     {name:'two.html',data:enc.encode('<h1>Two</h1>'),method:8},
   ])],'two-pages.zip',{type:'application/zip'});
-  await assert.rejects(()=>unzipSavedPages([twoPages]),/one SingleFile page ZIP per website page/);
+  await assert.rejects(()=>unzipSavedPages([twoPages]),/one saved website page per ZIP/);
   const one=new File([zip([{name:'index.html',data:enc.encode('<h1>One</h1>'),method:8}])],'page.zip',{type:'application/zip'});
   await assert.rejects(()=>unzipSavedPages(Array.from({length:13},()=>one)),/1 to 12/);
 });
