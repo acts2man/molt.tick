@@ -30,29 +30,22 @@ jobs:
           fi
           echo "Waiting for Netlify production deploy for ${GITHUB_SHA}"
           for attempt in $(seq 1 90); do
-            payload="$(curl --fail --silent --show-error               --header "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}"               "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?per_page=20")"
-            result="$(PAYLOAD="${payload}" EXPECTED="${GITHUB_SHA}" node - <<'NODE'
-const rows=JSON.parse(process.env.PAYLOAD||'[]');
-const expected=process.env.EXPECTED;
-const deploy=rows.find(d=>String(d.commit_ref||'')===expected && String(d.context||'')==='production');
-if(!deploy){console.log('missing');process.exit(0);}
-console.log(String(deploy.state||'unknown'));
-if(deploy.state==='ready')process.exit(10);
-if(['error','failed','canceled','cancelled'].includes(String(deploy.state)))process.exit(20);
-NODE
-            )" || code=$?
-            code="${code:-0}"
-            if [ "${code}" -eq 10 ]; then
-              echo "Verified Netlify production is serving commit ${GITHUB_SHA}"
-              exit 0
-            fi
-            if [ "${code}" -eq 20 ]; then
-              echo "Netlify production deploy for ${GITHUB_SHA} entered terminal state: ${result}"
-              exit 1
-            fi
-            echo "Attempt ${attempt}/90: ${result}; waiting..."
-            unset code
-            sleep 10
+            payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?per_page=20")"
+            state="$(PAYLOAD="${payload}" EXPECTED="${GITHUB_SHA}" node -e "const rows=JSON.parse(process.env.PAYLOAD||'[]'); const d=rows.find(x=>String(x.commit_ref||'')===process.env.EXPECTED && String(x.context||'')==='production'); console.log(d?String(d.state||'unknown'):'missing');")"
+            case "${state}" in
+              ready)
+                echo "Verified Netlify production is serving commit ${GITHUB_SHA}"
+                exit 0
+                ;;
+              error|failed|canceled|cancelled)
+                echo "Netlify production deploy for ${GITHUB_SHA} entered terminal state: ${state}"
+                exit 1
+                ;;
+              *)
+                echo "Attempt ${attempt}/90: ${state}; waiting..."
+                sleep 10
+                ;;
+            esac
           done
           echo "Timed out waiting for Netlify production deploy for ${GITHUB_SHA}"
           exit 1
