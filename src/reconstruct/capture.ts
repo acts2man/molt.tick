@@ -105,6 +105,20 @@ export async function navigateRenderable(page:Page,url:string):Promise<import('p
   return response;
 }
 
+export async function navigateRenderableWithFallback(page:Page,url:string,fallbackUrl?:string):Promise<{response:import('playwright-core').Response|null;url:string;usedFallback:boolean;liveError?:string}>{
+  try{
+    const response=await navigateRenderable(page,url);
+    if(response?.ok()||!fallbackUrl)return{response,url,usedFallback:false};
+    const liveError=`HTTP ${response?.status()}`;
+    const fallback=await navigateRenderable(page,fallbackUrl);
+    return{response:fallback,url:fallbackUrl,usedFallback:true,liveError};
+  }catch(error){
+    if(!fallbackUrl)throw error;
+    const fallback=await navigateRenderable(page,fallbackUrl);
+    return{response:fallback,url:fallbackUrl,usedFallback:true,liveError:error instanceof Error?error.message:String(error)};
+  }
+}
+
 
 const MOTION_FRAME = `(() => {
   const nodes=Array.from(document.querySelectorAll('body *')),index=new Map(nodes.map((node,i)=>[node,String(i)]));
@@ -366,7 +380,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
     }
   };
   let local: Awaited<ReturnType<typeof serve>> | undefined;
-  let targets: Array<{route:string;url:string;discovered?:boolean}> = [];
+  let targets: Array<{route:string;url:string;fallbackUrl?:string;discovered?:boolean}> = [];
   const autoDiscovery=Boolean(options.url&&!options.urls?.length&&!options.bundleDir);
   if(options.bundleDir){
     const bundle=await readBundle(options.bundleDir);
@@ -377,9 +391,12 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       evidence.site=live.origin;
       const requested=options.urls?.length?options.urls.map(value=>new URL(value,live)):bundle.pages.map(p=>new URL(p.route,live.origin));
       for(const page of requested)if(page.origin!==live.origin||page.search)throw new Error('Hybrid page URLs must be same-origin and cannot contain query parameters');
-      targets=requested.map(page=>({route:routePath(page.pathname),url:page.href}));
+      const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
+      local=await serve(resolve(options.bundleDir),aliases,true);
+      const savedRoutes=new Set(bundle.pages.map(p=>p.route));
+      targets=requested.map(page=>{const route=routePath(page.pathname);return{route,url:page.href,...(savedRoutes.has(route)?{fallbackUrl:local!.origin+route}:{})};});
       await importSavedResources(options.bundleDir);
-      const savedRoutes=new Set(bundle.pages.map(p=>p.route)),supplemented=targets.filter(target=>savedRoutes.has(target.route)).length;
+      const supplemented=targets.filter(target=>savedRoutes.has(target.route)).length;
       evidence.warnings.push('Hybrid evidence enabled: live rendering is the visual/interaction authority while saved files supplement exact local assets and font data.');
       if(supplemented<targets.length)evidence.warnings.push(`Saved HTML/CSS supplements ${supplemented} of ${targets.length} selected routes; the remaining routes use live browser evidence without silently shrinking the requested page scope.`);
     }else{
@@ -414,7 +431,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       }finally{await ctx.close();}
     }
     if((!autoDiscovery&&targets.length>maxPages)||new Set(targets.map(t=>t.route)).size!==targets.length)throw new Error('Too many or duplicate requested routes');
-    const stabilityEnabled=(options.sourceStability??true)&&Boolean(options.url)&&!local;
+    const stabilityEnabled=(options.sourceStability??true)&&Boolean(options.url);
     const adaptiveEnabled=(options.adaptiveViewports??Boolean(options.url))&&options.viewports===undefined;
     const stabilityFingerprints=new Map<string,string>();
     for(const target of targets){
@@ -424,10 +441,10 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       if(stabilityEnabled){
         const ctx=await engine.newContext({viewport:views[0],deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         try{
-          await restrictNetwork(ctx);const page=await ctx.newPage();const samples:string[]=[];
+          await restrictNetwork(ctx,local?.origin,false);const page=await ctx.newPage();const samples:string[]=[];
           for(let attempt=0;attempt<3;attempt++){
             options.signal.throwIfAborted();
-            const response=await navigateRenderable(page,target.url);if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
+            const probe=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);const response=probe.response;if(probe.usedFallback){evidence.warnings.push(`${target.route}: live source stability probe fell back to the retained saved page (${probe.liveError}).`);break;}if(!response?.ok())throw new Error(`HTTP ${response?.status()}`);
             await settle(page,options.signal);samples.push(geometryFingerprint(await geometry(page)));
             if(samples.length>=2&&samples.at(-1)===samples.at(-2))break;
           }
@@ -437,7 +454,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         }catch(error){evidence.warnings.push(`${target.route}: source-stability probe could not complete (${(error as Error).message}); normal capture will still validate the route.`);}
         finally{await ctx.close().catch(()=>{});}
       }
-      const item:Evidence['pages'][number]={...target,title:'',views:[]};
+      const item:Evidence['pages'][number]={route:target.route,url:target.url,title:'',views:[]};
       const slug=createHash('sha256').update(target.route).digest('hex').slice(0,12);
       await mkdir(join(options.directory,slug),{recursive:true});
       const pageViewports=[...views];
@@ -447,7 +464,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
         const ctx=await engine.newContext({viewport,deviceScaleFactor:1,colorScheme:'light',locale:'en-US',serviceWorkers:'block',acceptDownloads:false});
         const pending:Promise<void>[]=[];const assetErrors:string[]=[];
         try{
-          await restrictNetwork(ctx,local?.origin,!!local);
+          await restrictNetwork(ctx,local?.origin,Boolean(local&&!options.url));
           const page=await ctx.newPage();
           page.on('response',res=>{
             const type=res.request().resourceType();if(!['image','font','stylesheet'].includes(type)||!res.ok())return;
@@ -456,7 +473,9 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
               else await save(res.url(),body,mime);
             })().catch(e=>{assetErrors.push((e as Error).message);}));
           });
-          const response=await navigateRenderable(page,target.url);
+          const navigation=await navigateRenderableWithFallback(page,target.url,target.fallbackUrl);
+          const response=navigation.response,activeUrl=navigation.url;
+          if(navigation.usedFallback)evidence.warnings.push(`${target.route} ${viewport.name}: live source navigation failed (${navigation.liveError}); captured the retained saved-page bundle instead.`);
           if(!response?.ok())throw new Error(`${target.route}: HTTP ${response?.status()}`);
           let motion:import('./types.js').MotionEvidence|undefined;
           if(viewport.name==='desktop'||viewport.name==='mobile'){
@@ -476,7 +495,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           }
           if(!g.text.trim()&&!g.elements.some(e=>e.src||e.svg))throw new Error('Source page is empty');
           if(g.text.length>120000)throw new Error('Page text exceeds reconstruction context budget');
-          for(const face of g.fontFaces)faces.add(absolutizeCss(face,target.url));
+          for(const face of g.fontFaces)faces.add(absolutizeCss(face,activeUrl));
           for(const e of g.elements){
             const urls=[...(e.src?[e.src]:[]),...urlsIn(e.style['background-image']??'')];
             for(const url of urls){if(!url.startsWith('data:'))continue;const m=/^data:([^;,]+)(;base64)?,([\s\S]*)$/.exec(url);if(m)await save(url,Buffer.from(m[2]?m[3]:decodeURIComponent(m[3]),m[2]?'base64':'utf8'),m[1]);}
@@ -486,7 +505,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
           if(g.embeds.length)evidence.blockers.push(`${target.route}: embedded media requires an approved integration (${g.embeds.join(', ')}).`);
           if(g.forms)evidence.blockers.push(`${target.route}: form submission needs a backend integration; acknowledging this does not implement it.`);
           const primedCarouselStates=await primeCarouselAssets(page,options.signal);
-          if(primedCarouselStates>1){const reset=await navigateRenderable(page,target.url);if(reset?.ok())await settle(page,options.signal);else evidence.warnings.push(`${target.route} ${viewport.name}: carousel asset priming could not restore the initial page state.`);}
+          if(primedCarouselStates>1){const reset=await navigateRenderable(page,activeUrl);if(reset?.ok())await settle(page,options.signal);else evidence.warnings.push(`${target.route} ${viewport.name}: carousel asset priming could not restore the initial page state.`);}
           const interactions:NonNullable<Evidence['pages'][number]['views'][number]['interactions']>=[];
           const triggers=await discoverInteractions(page);
           for(let index=0;index<triggers.length;index++){
@@ -501,7 +520,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
             interactions.push({id,trigger,screenshot:stateScreenshot,geometry:stateGeometry});
             await writeFile(join(options.directory,slug,`${viewport.name}-${id}.json`),JSON.stringify(stateGeometry,null,2));
             if(index<triggers.length-1){
-              const reset=await navigateRenderable(page,target.url);
+              const reset=await navigateRenderable(page,activeUrl);
               if(!reset?.ok()){evidence.warnings.push(`${target.route} ${viewport.name}: interaction-state reset returned HTTP ${reset?.status()}.`);break;}
               await page.mouse.move(0,0);await settle(page,options.signal);
             }
