@@ -105,17 +105,30 @@ export async function navigateRenderable(page:Page,url:string):Promise<import('p
   return response;
 }
 
+async function isolateSavedFallback(page:Page,fallbackUrl:string):Promise<void>{
+  const localOrigin=new URL(fallbackUrl).origin;
+  await page.route('**/*',async route=>{
+    try{
+      const target=new URL(route.request().url());
+      if(target.origin===localOrigin){await route.continue();return;}
+    }catch{}
+    await route.abort().catch(()=>{});
+  });
+}
 export async function navigateRenderableWithFallback(page:Page,url:string,fallbackUrl?:string):Promise<{response:import('playwright-core').Response|null;url:string;usedFallback:boolean;liveError?:string}>{
+  const fallback=async(liveError:string)=>{
+    if(!fallbackUrl)throw new Error(liveError);
+    await isolateSavedFallback(page,fallbackUrl);
+    const response=await navigateRenderable(page,fallbackUrl);
+    return{response,url:fallbackUrl,usedFallback:true,liveError};
+  };
   try{
     const response=await navigateRenderable(page,url);
     if(response?.ok()||!fallbackUrl)return{response,url,usedFallback:false};
-    const liveError=`HTTP ${response?.status()}`;
-    const fallback=await navigateRenderable(page,fallbackUrl);
-    return{response:fallback,url:fallbackUrl,usedFallback:true,liveError};
+    return await fallback(`HTTP ${response?.status()}`);
   }catch(error){
     if(!fallbackUrl)throw error;
-    const fallback=await navigateRenderable(page,fallbackUrl);
-    return{response:fallback,url:fallbackUrl,usedFallback:true,liveError:error instanceof Error?error.message:String(error)};
+    return await fallback(error instanceof Error?error.message:String(error));
   }
 }
 
@@ -394,7 +407,7 @@ export async function capture(options: CaptureOptions): Promise<Evidence> {
       const aliases=Object.fromEntries(bundle.pages.map(p=>[p.route,p.file]));
       local=await serve(resolve(options.bundleDir),aliases,true);
       const savedRoutes=new Set(bundle.pages.map(p=>p.route));
-      targets=requested.map(page=>{const route=routePath(page.pathname);return{route,url:page.href,...(savedRoutes.has(route)?{fallbackUrl:local!.origin+route}:{})};});
+      targets=requested.map(page=>{const route=routePath(page.pathname),fallbackUrl=savedRoutes.has(route)?local!.origin+route:undefined;if(!fallbackUrl&&bundle.pages.length)evidence.warnings.push(`${route}: no exact retained-page fallback mapping was found; saved routes are ${[...savedRoutes].join(', ')}.`);return{route,url:page.href,...(fallbackUrl?{fallbackUrl}:{})};});
       await importSavedResources(options.bundleDir);
       const supplemented=targets.filter(target=>savedRoutes.has(target.route)).length;
       evidence.warnings.push('Hybrid evidence enabled: live rendering is the visual/interaction authority while saved files supplement exact local assets and font data.');

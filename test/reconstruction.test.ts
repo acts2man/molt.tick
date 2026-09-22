@@ -20,9 +20,30 @@ const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{rout
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
 
+test('hybrid saved-page fallback isolates external requests after live failure',async()=>{
+  const routed:any[]=[];
+  const page:any={
+    route:async(_pattern:string,handler:any)=>{routed.push(handler);},
+    goto:async(url:string)=>{
+      if(url.startsWith('https://'))throw new Error('page.goto: net::ERR_FAILED');
+      return{ok:()=>true,status:()=>200};
+    },
+    waitForLoadState:async()=>{}
+  };
+  const result=await navigateRenderableWithFallback(page,'https://example.com/gallery-2/','http://127.0.0.1:4321/gallery-2/');
+  assert.equal(result.usedFallback,true);assert.equal(routed.length,1);
+  let continued=false,aborted=false;
+  const local={request:()=>({url:()=> 'http://127.0.0.1:4321/image.jpg'}),continue:async()=>{continued=true;},abort:async()=>{aborted=true;}};
+  await routed[0](local);assert.equal(continued,true);assert.equal(aborted,false);
+  continued=false;aborted=false;
+  const external={request:()=>({url:()=> 'https://example.com/redirect-me'}),continue:async()=>{continued=true;},abort:async()=>{aborted=true;}};
+  await routed[0](external);assert.equal(continued,false);assert.equal(aborted,true);
+});
+
 test('hybrid navigation falls back to retained saved page when live navigation times out',async()=>{
   const calls:string[]=[];
   const page:any={
+    route:async()=>{},
     goto:async(url:string)=>{calls.push(url);if(url.startsWith('https://'))throw new Error('page.goto: Timeout 30000ms exceeded');return{ok:()=>true,status:()=>200};},
     waitForLoadState:async()=>{}
   };
