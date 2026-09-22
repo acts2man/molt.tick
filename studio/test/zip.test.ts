@@ -97,7 +97,7 @@ test('multi ZIP upload requires one page per ZIP and caps selection at twelve ar
     {name:'one.html',data:enc.encode('<h1>One</h1>'),method:8},
     {name:'two.html',data:enc.encode('<h1>Two</h1>'),method:8},
   ])],'two-pages.zip',{type:'application/zip'});
-  await assert.rejects(()=>unzipSavedPages([twoPages]),/one SingleFile page ZIP per website page/);
+  await assert.rejects(()=>unzipSavedPages([twoPages]),/one saved website page per ZIP/);
   const one=new File([zip([{name:'index.html',data:enc.encode('<h1>One</h1>'),method:8}])],'page.zip',{type:'application/zip'});
   await assert.rejects(()=>unzipSavedPages(Array.from({length:13},()=>one)),/1 to 12/);
 });
