@@ -20,6 +20,22 @@ const score=(n:number|null,pass=false):Evaluation=>({pass,issues:[],views:[{rout
 const signal=()=>new AbortController().signal;
 async function temporary(fn:(dir:string)=>Promise<void>){const dir=await mkdtemp(join(tmpdir(),'molt-agent-test-'));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}}
 
+test('static saved fallback strips scripts, meta refresh and inline event navigation',async()=>{
+  await temporary(async dir=>{
+    await writeFile(join(dir,'gallery.html'),`<!doctype html><html><head><meta http-equiv="refresh" content="0;url=https://example.com/gallery-2/"><script>location.href='https://example.com/gallery-2/'</script></head><body onload="location.href='https://example.com/gallery-2/'"><h1>Gallery</h1><img src="photo.jpg"></body></html>`);
+    await writeFile(join(dir,'photo.jpg'),'x');
+    const local=await serve(dir,{'/gallery-2':'gallery.html'},true,true);
+    try{
+      const html=await (await fetch(local.origin+'/gallery-2')).text();
+      assert.doesNotMatch(html,/<script\b/i);
+      assert.doesNotMatch(html,/http-equiv\s*=\s*["']?refresh/i);
+      assert.doesNotMatch(html,/\sonload\s*=/i);
+      assert.match(html,/<h1>Gallery<\/h1>/);
+      assert.match(html,/<base href="\/">/);
+    }finally{await local.close();}
+  });
+});
+
 test('hybrid saved-page fallback isolates external requests after live failure',async()=>{
   const routed:any[]=[];
   const page:any={
